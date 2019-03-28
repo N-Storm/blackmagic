@@ -134,6 +134,7 @@ static void stm32f4_add_flash(target *t,
                               uint32_t addr, size_t length, size_t blocksize,
                               unsigned int base_sector, int split)
 {
+	if (length == 0) return;
 	struct stm32f4_flash *sf = calloc(1, sizeof(*sf));
 	struct target_flash *f = &sf->f;
 	f->start = addr;
@@ -183,9 +184,20 @@ char *stm32f4_get_chip_name(uint32_t idcode)
 	}
 }
 
+static void stm32f7_detach(target *t)
+{
+	target_mem_write32(t, DBGMCU_CR, t->target_storage);
+	cortexm_detach(t);
+}
+
 bool stm32f4_probe(target *t)
 {
-	uint32_t idcode = target_mem_read32(t, DBGMCU_IDCODE) & 0xFFF;
+	ADIv5_AP_t *ap = cortexm_ap(t);
+	uint32_t idcode;
+
+	idcode = (ap->dp->targetid >> 16) & 0xfff;
+	if (!idcode)
+		idcode = target_mem_read32(t, DBGMCU_IDCODE) & 0xFFF;
 
 	if (idcode == ID_STM32F20X) {
 		/* F405 revision A have a wrong IDCODE, use ARM_CPUID to make the
@@ -199,8 +211,8 @@ bool stm32f4_probe(target *t)
 	case ID_STM32F74X: /* F74x RM0385 Rev.4 */
 	case ID_STM32F76X: /* F76x F77x RM0410 */
 	case ID_STM32F72X: /* F72x F73x RM0431 */
-		target_mem_write32(t, DBGMCU_CR, DBG_SLEEP);
-		/* fallthrough */
+		t->detach = stm32f7_detach;
+		/* fall through */
 	case ID_STM32F40X:
 	case ID_STM32F42X: /* 427/437 */
 	case ID_STM32F46X: /* 469/479 */
@@ -280,6 +292,8 @@ static bool stm32f4_attach(target *t)
 	target_mem_map_free(t);
 	uint32_t flashsize = target_mem_read32(t, flashsize_base) & 0xffff;
 	if (is_f7) {
+		t->target_storage = target_mem_read32(t, DBGMCU_CR);
+		target_mem_write32(t, DBGMCU_CR, DBG_SLEEP);
 		target_add_ram(t, 0x00000000, 0x4000);  /* 16 k ITCM Ram */
 		target_add_ram(t, 0x20000000, 0x20000); /* 128 k DTCM Ram */
 		target_add_ram(t, 0x20020000, 0x60000); /* 384 k Ram */
@@ -320,15 +334,22 @@ static bool stm32f4_attach(target *t)
 		stm32f4_add_flash(t, 0x8020000, 0x20000, 0x20000, 4, split);
 		stm32f4_add_flash(t, 0x8040000, remains, 0x40000, 5, split);
 	} else {
-		uint32_t remains = banksize - 0x20000; /* 128 k in small sectors.*/
+		uint32_t remains = 0;
+		if (banksize > 0x20000)
+			remains = banksize - 0x20000; /* 128 k in small sectors.*/
 		if (is_f7) {
 			stm32f4_add_flash(t, ITCM_BASE, 0x10000,  0x4000,  0, split);
-			stm32f4_add_flash(t, 0x0210000, 0x10000, 0x10000,  4, split);
-			stm32f4_add_flash(t, 0x0220000, remains, 0x20000,  5, split);
+			if (banksize > 0x10000) {
+				/* STM32F730 has only 64 kiB flash! */
+				stm32f4_add_flash(t, 0x0210000, 0x10000, 0x10000,  4, split);
+				stm32f4_add_flash(t, 0x0220000, remains, 0x20000,  5, split);
+			}
 		}
 		stm32f4_add_flash(t, 0x8000000, 0x10000,  0x4000,  0, split);
-		stm32f4_add_flash(t, 0x8010000, 0x10000, 0x10000,  4, split);
-		stm32f4_add_flash(t, 0x8020000, remains, 0x20000,  5, split);
+		if (banksize > 0x10000) {
+			stm32f4_add_flash(t, 0x8010000, 0x10000, 0x10000,  4, split);
+			stm32f4_add_flash(t, 0x8020000, remains, 0x20000,  5, split);
+		}
 		if (use_dual_bank) {
 			if (is_f7) {
 				uint32_t bk1 = ITCM_BASE + banksize;

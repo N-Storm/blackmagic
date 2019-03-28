@@ -10,7 +10,7 @@ endif
 
 OPT_FLAGS ?= -O2
 
-CFLAGS += -Wall -Wextra -Werror -Wno-char-subscripts\
+CFLAGS += -Wall -Wextra -Werror -Wno-char-subscripts -Wno-cast-function-type \
 	$(OPT_FLAGS) -std=gnu99 -g3 -MD \
 	-I. -Iinclude -Iplatforms/common -I$(PLATFORM_DIR)
 LDFLAGS += $(OPT_FLAGS)
@@ -48,6 +48,7 @@ SRC =			\
 	morse.c		\
 	msp432.c	\
 	nrf51.c		\
+	nxpke04.c	\
 	platform.c	\
 	sam3x.c		\
 	sam4l.c	\

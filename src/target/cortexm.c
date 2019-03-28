@@ -31,6 +31,8 @@
 #include "target.h"
 #include "target_internal.h"
 #include "cortexm.h"
+#include "platform.h"
+#include "command.h"
 
 #include <unistd.h>
 
@@ -239,17 +241,10 @@ static void cortexm_priv_free(void *priv)
 
 static bool cortexm_forced_halt(target *t)
 {
-	uint32_t start_time = platform_time_ms();
+	target_halt_request(t);
 	platform_srst_set_val(false);
-	/* Wait until SRST is released.*/
-	while (platform_time_ms() < start_time + 2000) {
-		if (!platform_srst_get_val())
-			break;
-	}
-	if (platform_srst_get_val())
-		return false;
 	uint32_t dhcsr = 0;
-	start_time = platform_time_ms();
+	uint32_t start_time = platform_time_ms();
 	/* Try hard to halt the target. STM32F7 in  WFI
 	   needs multiple writes!*/
 	while (platform_time_ms() < start_time + cortexm_wait_timeout) {
@@ -264,7 +259,7 @@ static bool cortexm_forced_halt(target *t)
 	return true;
 }
 
-bool cortexm_probe(ADIv5_AP_t *ap)
+bool cortexm_probe(ADIv5_AP_t *ap, bool forced)
 {
 	target *t;
 
@@ -323,8 +318,14 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 		target_check_error(t);
 	}
 
-	if (!cortexm_forced_halt(t))
-		return false;
+	/* Only force halt if read ROM Table failed and there is no DPv2
+	 * targetid!
+	 * So long, only STM32L0 is expected to enter this cause.
+	 */
+	if (forced && !ap->dp->targetid)
+		if (!cortexm_forced_halt(t))
+			return false;
+
 #define PROBE(x) \
 	do { if ((x)(t)) {target_halt_resume(t, 0); return true;} else target_check_error(t); } while (0)
 
@@ -344,6 +345,7 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 	PROBE(kinetis_probe);
 	PROBE(efm32_probe);
 	PROBE(msp432_probe);
+	PROBE(ke04_probe);
 	PROBE(lpc17xx_probe);
 #undef PROBE
 
@@ -414,6 +416,8 @@ void cortexm_detach(target *t)
 
 	/* Disable debug */
 	target_mem_write32(t, CORTEXM_DHCSR, CORTEXM_DHCSR_DBGKEY);
+	/* Add some clock cycles to get the CPU running again.*/
+	target_mem_read32(t, 0);
 }
 
 enum { DB_DHCSR, DB_DCRSR, DB_DCRDR, DB_DEMCR };
@@ -532,6 +536,11 @@ static void cortexm_reset(target *t)
 
 	/* Reset DFSR flags */
 	target_mem_write32(t, CORTEXM_DFSR, CORTEXM_DFSR_RESETALL);
+
+	/* 1ms delay to ensure that things such as the stm32f1 HSI clock have started
+	 * up fully.
+	 */
+	platform_delay(1);
 }
 
 static void cortexm_halt_request(target *t)
@@ -866,7 +875,7 @@ static bool cortexm_vector_catch(target *t, int argc, char *argv[])
 	uint32_t tmp = 0;
 	unsigned i;
 
-	if ((argc < 3) || ((argv[1][0] != 'e') && (argv[1][0] != 'd'))) {
+	if (argc < 3) {
 		tc_printf(t, "usage: monitor vector_catch (enable|disable) "
 			     "(hard|int|bus|stat|chk|nocp|mm|reset)\n");
 	} else {
@@ -876,12 +885,16 @@ static bool cortexm_vector_catch(target *t, int argc, char *argv[])
 					tmp |= 1 << i;
 			}
 
-		if (argv[1][0] == 'e')
-			priv->demcr |= tmp;
-		else
-			priv->demcr &= ~tmp;
+		bool enable;
+		if (parse_enable_or_disable(argv[1], &enable)) {
+			if (enable) {
+				priv->demcr |= tmp;
+			} else {
+				priv->demcr &= ~tmp;
+			}
 
-		target_mem_write32(t, CORTEXM_DEMCR, priv->demcr);
+			target_mem_write32(t, CORTEXM_DEMCR, priv->demcr);
+		}
 	}
 
 	tc_printf(t, "Catching vectors: ");
