@@ -135,9 +135,9 @@ static inline uint32_t msp432_sector_unprotect(struct msp432_flash *mf, target_a
 
 /* Optional commands handlers */
 /* Erase all of main flash */
-static bool msp432_cmd_erase_main(target *t);
+static bool msp432_cmd_erase_main(target *t, int argc, const char **argv);
 /* Erase a single (4KB) sector */
-static bool msp432_cmd_sector_erase(target *t, int argc, char *argv[]);
+static bool msp432_cmd_sector_erase(target *t, int argc, const char **argv);
 
 /* Optional commands structure*/
 const struct command_s msp432_cmd_list[] = {
@@ -267,7 +267,10 @@ static int msp432_flash_erase(struct target_flash *f, target_addr addr, size_t l
 
 		/* update len and addr */
 		len -= f->blocksize;
-		addr += f->blocksize;
+		if (len > f->blocksize)
+			len -= f->blocksize;
+		else
+			len = 0;
 	}
 
 	return ret;
@@ -295,7 +298,7 @@ static int msp432_flash_write(struct target_flash *f, target_addr dest,
 	regs[1] = dest;              // Flash address to be write to in R1
 	regs[2] = len;               // Size of buffer to be flashed in R2
 
-	DEBUG("Writing 0x%04" PRIX32 " bytes at 0x%08" PRI_SIZET "\n", dest, len);
+	DEBUG("Writing 0x%04" PRIX32 " bytes at 0x%08zu\n", dest, len);
 	/* Call ROM */
 	msp432_call_ROM(t, mf->FlashCtl_programMemory, regs);
 
@@ -308,8 +311,10 @@ static int msp432_flash_write(struct target_flash *f, target_addr dest,
 }
 
 /* Optional commands handlers */
-static bool msp432_cmd_erase_main(target *t)
+static bool msp432_cmd_erase_main(target *t, int argc, const char **argv)
 {
+	(void)argc;
+	(void)argv;
 	/* The mass erase routine in ROM will also erase the Info Flash. */
 	/* Usually, this is not wanted, so go sector by sector...        */
 
@@ -327,7 +332,7 @@ static bool msp432_cmd_erase_main(target *t)
 	return ret;
 }
 
-static bool msp432_cmd_sector_erase(target *t, int argc, char *argv[])
+static bool msp432_cmd_sector_erase(target *t, int argc, const char **argv)
 {
 	if (argc < 2)
 		tc_printf(t, "usage: monitor sector_erase <addr>\n");

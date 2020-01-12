@@ -38,9 +38,9 @@
 #include "target_internal.h"
 #include "cortexm.h"
 
-static bool stm32l4_cmd_erase_mass(target *t);
-static bool stm32l4_cmd_erase_bank1(target *t);
-static bool stm32l4_cmd_erase_bank2(target *t);
+static bool stm32l4_cmd_erase_mass(target *t, int argc, const char **argv);
+static bool stm32l4_cmd_erase_bank1(target *t, int argc, const char **argv);
+static bool stm32l4_cmd_erase_bank2(target *t, int argc, const char **argv);
 static bool stm32l4_cmd_option(target *t, int argc, char *argv[]);
 
 const struct command_s stm32l4_cmd_list[] = {
@@ -425,8 +425,10 @@ static int stm32l4_flash_erase(struct target_flash *f, target_addr addr, size_t 
 		while(target_mem_read32(t, FLASH_SR) & FLASH_SR_BSY)
 			if(target_check_error(t))
 				return -1;
-
-		len  -= blocksize;
+		if (len > blocksize)
+			len  -= blocksize;
+		else
+			len = 0;
 		addr += blocksize;
 		page++;
 	}
@@ -484,18 +486,24 @@ static bool stm32l4_cmd_erase(target *t, uint32_t action)
 	return true;
 }
 
-static bool stm32l4_cmd_erase_mass(target *t)
+static bool stm32l4_cmd_erase_mass(target *t, int argc, const char **argv)
 {
+	(void)argc;
+	(void)argv;
 	return stm32l4_cmd_erase(t, FLASH_CR_MER1 | FLASH_CR_MER2);
 }
 
-static bool stm32l4_cmd_erase_bank1(target *t)
+static bool stm32l4_cmd_erase_bank1(target *t, int argc, const char **argv)
 {
+	(void)argc;
+	(void)argv;
 	return stm32l4_cmd_erase(t, FLASH_CR_MER1);
 }
 
-static bool stm32l4_cmd_erase_bank2(target *t)
+static bool stm32l4_cmd_erase_bank2(target *t, int argc, const char **argv)
 {
+	(void)argc;
+	(void)argv;
 	return stm32l4_cmd_erase(t, FLASH_CR_MER2);
 }
 

@@ -36,6 +36,8 @@
 #include <ctype.h>
 #include <sys/time.h>
 
+#include "cl_utils.h"
+
 #if !defined(timersub)
 /* This is a copy from GNU C Library (GNU LGPL 2.1), sys/time.h. */
 # define timersub(a, b, result)					\
@@ -84,6 +86,7 @@
 #define STLINK_SWD_AP_STICKY_ERROR     0x19
 #define STLINK_SWD_AP_STICKYORUN_ERROR 0x1a
 #define STLINK_BAD_AP_ERROR            0x1d
+#define STLINK_TOO_MANY_AP_ERROR       0x29
 #define STLINK_JTAG_UNKNOWN_CMD        0x42
 
 #define STLINK_CORE_RUNNING            0x80
@@ -218,6 +221,7 @@ typedef struct {
 	uint8_t      ver_swim;
 	uint8_t      ver_bridge;
 	uint16_t     block_size;
+	bool         ap_error;
 	libusb_device_handle *handle;
 	struct libusb_transfer* req_trans;
 	struct libusb_transfer* rep_trans;
@@ -228,7 +232,7 @@ stlink Stlink;
 static void exit_function(void)
 {
 	libusb_exit(NULL);
-	DEBUG_STLINK("Cleanup\n");
+	DEBUG("\nCleanup\n");
 }
 
 /* SIGTERM handler. */
@@ -245,6 +249,46 @@ struct trans_ctx {
 };
 
 int debug_level = 0;
+bool has_attached = false;
+
+static int LIBUSB_CALL hotplug_callback_attach(
+	libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event,
+	void *user_data)
+{
+	(void)ctx;
+	(void)dev;
+	(void)event;
+	(void)user_data;
+	has_attached = true;
+	return 1; /* deregister Callback*/
+}
+
+int device_detached = 0;
+static int LIBUSB_CALL hotplug_callback_detach(
+	libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event,
+	void *user_data)
+{
+	(void)ctx;
+	(void)dev;
+	(void)event;
+	(void)user_data;
+	device_detached = 1;
+	return 1;  /* deregister Callback*/
+}
+
+void stlink_check_detach(int state)
+{
+	if (state == 1) {
+		/* Check for hotplug events */
+		struct timeval tv = {0,0};
+		libusb_handle_events_timeout_completed(
+			Stlink.libusb_ctx, &tv, &device_detached);
+		if (device_detached) {
+			DEBUG("Dongle was detached\n");
+			exit(0);
+		}
+	}
+}
 
 static void LIBUSB_CALL on_trans_done(struct libusb_transfer * trans)
 {
@@ -319,6 +363,7 @@ static int send_recv(uint8_t *txbuf, size_t txsize,
 					 uint8_t *rxbuf, size_t rxsize)
 {
 	int res = 0;
+	stlink_check_detach(1);
 	if( txsize) {
 		int txlen = txsize;
 		libusb_fill_bulk_transfer(Stlink.req_trans, Stlink.handle,
@@ -355,7 +400,7 @@ static int send_recv(uint8_t *txbuf, size_t txsize,
 		if (res >0) {
 			int i;
 			uint8_t *p = rxbuf;
-			DEBUG_USB(" Rec (%" PRI_SIZET "/%d)", rxsize, res);
+			DEBUG_USB(" Rec (%zu/%d)", rxsize, res);
 			for (i = 0; i < res && i < 32 ; i++) {
 				if ( i && ((i & 7) == 0))
 					DEBUG_USB(".");
@@ -422,6 +467,7 @@ static int stlink_usb_error_check(uint8_t *data, bool verbose)
 			 * Change in error status when reading outside RAM.
 			 * This fix allows CDT plugin to visualize memory.
 			 */
+			Stlink.ap_error = true;
 			if (verbose)
 				DEBUG("STLINK_SWD_AP_FAULT\n");
 			return STLINK_ERROR_DP_FAULT;
@@ -440,6 +486,7 @@ static int stlink_usb_error_check(uint8_t *data, bool verbose)
 		case STLINK_SWD_DP_ERROR:
 			if (verbose)
 				DEBUG("STLINK_SWD_DP_ERROR\n");
+			raise_exception(EXCEPTION_ERROR, "STLINK_SWD_DP_ERROR");
 			return STLINK_ERROR_FAIL;
 		case STLINK_SWD_DP_PARITY_ERROR:
 			if (verbose)
@@ -459,6 +506,11 @@ static int stlink_usb_error_check(uint8_t *data, bool verbose)
 			return STLINK_ERROR_FAIL;
 		case STLINK_BAD_AP_ERROR:
 			/* ADIV5 probe 256 APs, most of them are non exisitant.*/
+			return STLINK_ERROR_FAIL;
+		case STLINK_TOO_MANY_AP_ERROR:
+			/* TI TM4C duplicates AP. Error happens at AP9.*/
+			if (verbose)
+				DEBUG("STLINK_TOO_MANY_AP_ERROR\n");
 			return STLINK_ERROR_FAIL;
 		case STLINK_JTAG_UNKNOWN_CMD :
 			if (verbose)
@@ -487,8 +539,7 @@ static int send_recv_retry(uint8_t *txbuf, size_t txsize,
 		gettimeofday(&now, NULL);
 		timersub(&now, &start, &diff);
 		if ((diff.tv_sec >= 1) || (res != STLINK_ERROR_WAIT)) {
-			DEBUG_STLINK("Failed: ");
-			stlink_usb_error_check(rxbuf, true);
+			DEBUG("write_retry failed. ");
 			return res;
 		}
 	}
@@ -503,22 +554,15 @@ static int read_retry(uint8_t *txbuf, size_t txsize,
 	struct timeval diff;
 	gettimeofday(&start, NULL);
 	int res;
-	uint8_t cmd[16] = {
-		STLINK_DEBUG_COMMAND,
-		STLINK_DEBUG_APIV2_GETLASTRWSTATUS2
-	};
-	uint8_t data[12];
 	while(1) {
 		send_recv(txbuf, txsize, rxbuf, rxsize);
-		send_recv(cmd, 16, data, 12);
-		res = stlink_usb_error_check(data, false);
+		res = stlink_usb_get_rw_status();
 		if (res == STLINK_ERROR_OK)
 			return res;
 		gettimeofday(&now, NULL);
 		timersub(&now, &start, &diff);
 		if ((diff.tv_sec >= 1) || (res != STLINK_ERROR_WAIT)) {
-			DEBUG_STLINK("Failed: ");
-			stlink_usb_error_check(data, true);
+			DEBUG("read_retry failed. ");
 			return res;
 		}
 	}
@@ -533,23 +577,15 @@ static int write_retry(uint8_t *cmdbuf, size_t cmdsize,
 	struct timeval diff;
 	gettimeofday(&start, NULL);
 	int res;
-	uint8_t cmd[16] = {
-		STLINK_DEBUG_COMMAND,
-		STLINK_DEBUG_APIV2_GETLASTRWSTATUS2
-	};
-	uint8_t data[12];
 	while(1) {
 		send_recv(cmdbuf, cmdsize, NULL, 0);
 		send_recv(txbuf, txsize, NULL, 0);
-		send_recv(cmd, 16, data, 12);
-		res = stlink_usb_error_check(data, false);
+		res = stlink_usb_get_rw_status();
 		if (res == STLINK_ERROR_OK)
 			return res;
 		gettimeofday(&now, NULL);
 		timersub(&now, &start, &diff);
 		if ((diff.tv_sec >= 1) || (res != STLINK_ERROR_WAIT)) {
-			DEBUG_STLINK("failed");
-			stlink_usb_error_check(data, true);
 			return res;
 		}
 	}
@@ -622,9 +658,9 @@ void stlink_leave_state(void)
 		DEBUG("Leaving DEBUG Mode\n");
 		send_recv(dbg_cmd, 16, NULL, 0);
 	} else if (data[0] == STLINK_DEV_BOOTLOADER_MODE) {
-		DEBUG("BOOTLOADER Mode\n");
+		DEBUG("Leaving BOOTLOADER Mode\n");
 	} else if (data[0] == STLINK_DEV_MASS_MODE) {
-		DEBUG("MASS Mode\n");
+		DEBUG("Leaving MASS Mode\n");
 	} else {
 		DEBUG("Unknown Mode %02x\n", data[0]);
 	}
@@ -653,52 +689,37 @@ static void stlink_resetsys(void)
 	send_recv(cmd, 16, data, 2);
 }
 
-void stlink_help(char **argv)
-{
-	DEBUG("Blackmagic Debug Probe on STM StlinkV2 and 3\n\n");
-	DEBUG("Usage: %s [options]\n", argv[0]);
-	DEBUG("\t-v[1|2]\t\t: Increasing verbosity\n");
-	DEBUG("\t-s \"string\"\t: Use Stlink with (partial) "
-		  "serial number \"string\"\n");
-	DEBUG("\t-h\t\t: This help.\n");
-	exit(0);
-}
-
 void stlink_init(int argc, char **argv)
 {
+	BMP_CL_OPTIONS_t cl_opts = {0};
+	cl_opts.opt_idstring = "Blackmagic Debug Probe on StlinkV2/3";
+	cl_init(&cl_opts, argc, argv);
 	libusb_device **devs, *dev;
 	int r;
+	int ret = -1;
 	atexit(exit_function);
 	signal(SIGTERM, sigterm_handler);
 	signal(SIGINT, sigterm_handler);
 	libusb_init(&Stlink.libusb_ctx);
-	char *serial = NULL;
-	int c;
-	while((c = getopt(argc, argv, "s:v:h")) != -1) {
-		switch(c) {
-		case 's':
-			serial = optarg;
-			break;
-		case 'v':
-			if (optarg)
-				debug_level = atoi(optarg);
-			break;
-		case 'h':
-			stlink_help(argv);
-			break;
-		}
-	}
 	r = libusb_init(NULL);
 	if (r < 0)
 		DEBUG("Failed: %s", libusb_strerror(r));
-	ssize_t cnt = libusb_get_device_list(NULL, &devs);
+	bool hotplug = true;
+	if (!libusb_has_capability (LIBUSB_CAP_HAS_HOTPLUG)) {
+		printf("Hotplug capabilites are not supported on this platform\n");
+		hotplug = false;
+	}
+	ssize_t cnt;
+  rescan:
+	has_attached = 0;
+	memset(&Stlink, 0, sizeof(Stlink));
+	cnt = libusb_get_device_list(NULL, &devs);
 	if (cnt < 0) {
-		libusb_exit(NULL);
 		DEBUG("Failed: %s", libusb_strerror(r));
 		goto error;
 	}
 	int i = 0;
-	bool multiple_devices = false;
+	int nr_stlinks = 0;
 	while ((dev = devs[i++]) != NULL) {
 		struct libusb_device_descriptor desc;
 		int r = libusb_get_device_descriptor(dev, &desc);
@@ -714,10 +735,8 @@ void stlink_init(int argc, char **argv)
 				DEBUG("STLINKV1 not supported\n");
 				continue;
 			}
-			if (Stlink.handle) {
-				libusb_close(Stlink.handle);
-				multiple_devices = (serial)? false : true;
-			}
+			Stlink.vid = desc.idVendor;
+			Stlink.pid = desc.idProduct;
 			r = libusb_open(dev, &Stlink.handle);
 			if (r == LIBUSB_SUCCESS) {
 				uint8_t data[32];
@@ -749,46 +768,81 @@ void stlink_init(int argc, char **argv)
 					else
 						snprintf(s, 3, "%02x", *p & 0xff);
 				}
-				if (serial && (!strncmp(Stlink.serial, serial, strlen(serial))))
+				if (cl_opts.opt_serial && (!strncmp(Stlink.serial, cl_opts.opt_serial,
+													strlen(cl_opts.opt_serial))))
 					DEBUG("Found ");
-				if (!serial || (!strncmp(Stlink.serial, serial, strlen(serial)))) {
-					if (desc.idProduct == PRODUCT_ID_STLINKV2) {
-						DEBUG("STLINKV20 serial %s\n", Stlink.serial);
-						Stlink.ver_hw = 20;
-						Stlink.ep_tx = 2;
-					} else if (desc.idProduct == PRODUCT_ID_STLINKV21) {
-						DEBUG("STLINKV21 serial %s\n", Stlink.serial);
-						Stlink.ver_hw = 21;
-						Stlink.ep_tx = 1;
-					} else if (desc.idProduct == PRODUCT_ID_STLINKV21_MSD) {
-						DEBUG("STLINKV21_MSD serial %s\n", Stlink.serial);
-						Stlink.ver_hw = 21;
-						Stlink.ep_tx = 1;
-					} else if (desc.idProduct == PRODUCT_ID_STLINKV3E) {
-						DEBUG("STLINKV3E serial %s\n", Stlink.serial);
-						Stlink.ver_hw = 30;
-						Stlink.ep_tx = 1;
-					} else if (desc.idProduct == PRODUCT_ID_STLINKV3) {
-						DEBUG("STLINKV3  serial %s\n", Stlink.serial);
-						Stlink.ver_hw = 30;
-						Stlink.ep_tx = 1;
+				if (desc.idProduct == PRODUCT_ID_STLINKV2) {
+					DEBUG("STLINKV20 serial %s\n", Stlink.serial);
+					Stlink.ver_hw = 20;
+					Stlink.ep_tx = 2;
+				} else if (desc.idProduct == PRODUCT_ID_STLINKV21) {
+					DEBUG("STLINKV21 serial %s\n", Stlink.serial);
+					Stlink.ver_hw = 21;
+					Stlink.ep_tx = 1;
+				} else if (desc.idProduct == PRODUCT_ID_STLINKV21_MSD) {
+					DEBUG("STLINKV21_MSD serial %s\n", Stlink.serial);
+					Stlink.ver_hw = 21;
+					Stlink.ep_tx = 1;
+				} else if (desc.idProduct == PRODUCT_ID_STLINKV3E) {
+					DEBUG("STLINKV3E serial %s\n", Stlink.serial);
+					Stlink.ver_hw = 30;
+					Stlink.ep_tx = 1;
+				} else if (desc.idProduct == PRODUCT_ID_STLINKV3) {
+					DEBUG("STLINKV3  serial %s\n", Stlink.serial);
+					Stlink.ver_hw = 30;
+					Stlink.ep_tx = 1;
+				} else {
+					DEBUG("Unknown STLINK variant, serial %s\n", Stlink.serial);
+				}
+				nr_stlinks++;
+				if (cl_opts.opt_serial) {
+					if (!strncmp(Stlink.serial, cl_opts.opt_serial,
+								 strlen(cl_opts.opt_serial))) {
+						break;
 					} else {
-						DEBUG("Unknown STLINK variant, serial %s\n", Stlink.serial);
+						libusb_close(Stlink.handle);
+						Stlink.handle = 0;
 					}
 				}
-				if (serial && (!strncmp(Stlink.serial, serial, strlen(serial))))
-					break;
 			} else {
 				DEBUG("Open failed %s\n", libusb_strerror(r));
 			}
 		}
 	}
-	if (multiple_devices) {
-		DEBUG("Multiple Stlinks. Please specify serial number\n");
-		goto error_1;
-	}
+	libusb_free_device_list(devs, 1);
 	if (!Stlink.handle) {
-		DEBUG("No Stlink device found!\n");
+		if (nr_stlinks && cl_opts.opt_serial) {
+			DEBUG("No Stlink with given serial number %s\n",  cl_opts.opt_serial);
+		} else if (nr_stlinks > 1) {
+			DEBUG("Multiple Stlinks. Please specify serial number\n");
+			goto error;
+		} else {
+			DEBUG("No Stlink device found!\n");
+		}
+		if (hotplug && !cl_opts.opt_no_wait) {
+			libusb_hotplug_callback_handle hp;
+			int rc = libusb_hotplug_register_callback
+				(NULL, LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED, 0,
+				 VENDOR_ID_STLINK, LIBUSB_HOTPLUG_MATCH_ANY,
+				 LIBUSB_HOTPLUG_MATCH_ANY,
+				 hotplug_callback_attach, NULL, &hp);
+			if (LIBUSB_SUCCESS != rc) {
+				DEBUG("Error registering attach callback\n");
+				goto error;
+			}
+			DEBUG("Waiting for %sST device%s%s to attach\n",
+				  (cl_opts.opt_serial)? "" : "some ",
+				  (cl_opts.opt_serial)? " with serial ": "",
+				  (cl_opts.opt_serial)? cl_opts.opt_serial: "");
+			DEBUG("Terminate with ^C\n");
+			while (has_attached == 0) {
+				rc = libusb_handle_events (NULL);
+                if (rc < 0)
+					printf("libusb_handle_events() failed: %s\n",
+						   libusb_error_name(rc));
+			}
+			goto rescan;
+		}
 		goto error;
 	}
 	int config;
@@ -812,25 +866,52 @@ void stlink_init(int argc, char **argv)
 		DEBUG("libusb_claim_interface failed %s\n", libusb_strerror(r));
 		goto error_1;
 	}
+	if (hotplug) { /* Allow gracefully exit when stlink is unplugged*/
+		libusb_hotplug_callback_handle hp;
+		int rc = libusb_hotplug_register_callback
+			(NULL, LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT, 0, Stlink.vid, Stlink.pid,
+			 LIBUSB_HOTPLUG_MATCH_ANY, hotplug_callback_detach, NULL, &hp);
+		if (LIBUSB_SUCCESS != rc) {
+			DEBUG("Error registering detach callback\n");
+			goto error;
+		}
+	}
 	Stlink.req_trans = libusb_alloc_transfer(0);
 	Stlink.rep_trans = libusb_alloc_transfer(0);
 	stlink_version();
-	if (Stlink.ver_stlink < 3 && Stlink.ver_jtag < 32) {
-		DEBUG("Please update Firmware\n");
-		goto error_1;
-	} else if (Stlink.ver_stlink == 3 && Stlink.ver_jtag < 3) {
+	if ((Stlink.ver_stlink < 3 && Stlink.ver_jtag < 32) ||
+		(Stlink.ver_stlink == 3 && Stlink.ver_jtag < 3)) {
+		/* Maybe the adapter is in some strange state. Try to reset */
+        int result = libusb_reset_device(Stlink.handle);
+		DEBUG("Trying reset\n");
+		if (result == LIBUSB_ERROR_BUSY) { /* Try again */
+			platform_delay(50);
+			result = libusb_reset_device(Stlink.handle);
+		}
+        if (result != LIBUSB_SUCCESS) {
+			DEBUG("libusb_reset_device failed\n");
+			goto error_1;
+		}
+		stlink_version();
+    }
+	if ((Stlink.ver_stlink < 3 && Stlink.ver_jtag < 32) ||
+		(Stlink.ver_stlink == 3 && Stlink.ver_jtag < 3)) {
 		DEBUG("Please update Firmware\n");
 		goto error_1;
 	}
-	stlink_resetsys();
 	stlink_leave_state();
-	assert(gdb_if_init() == 0);
-	return;
+	stlink_resetsys();
+	if (cl_opts.opt_mode != BMP_MODE_DEBUG) {
+		ret = cl_execute(&cl_opts);
+	} else {
+		assert(gdb_if_init() == 0);
+		return;
+	}
   error_1:
 	libusb_close(Stlink.handle);
   error:
-	libusb_free_device_list(devs, 1);
-	exit(-1);
+	libusb_exit(Stlink.libusb_ctx);
+	exit(ret);
 }
 
 void stlink_srst_set_val(bool assert)
@@ -900,14 +981,8 @@ int stlink_enter_debug_swd(void)
 					  STLINK_DEBUG_ENTER_SWD_NO_RESET};
 	uint8_t data[2];
 	DEBUG("Enter SWD\n");
-	if (send_recv_retry(cmd, 16, data, 2) != STLINK_ERROR_OK)
-		return -1;
-	uint8_t cmd1[16] = {STLINK_DEBUG_COMMAND,
-						STLINK_DEBUG_READCOREID};
-	uint8_t data1[4];
-	send_recv(cmd1, 16, data1, 4);
-	stlink_usb_error_check(data, false);
-	return 0;
+	send_recv(cmd, 16, data, 2);
+	return stlink_usb_error_check(data, true);
 }
 
 int stlink_enter_debug_jtag(void)
@@ -985,7 +1060,10 @@ uint32_t stlink_dp_error(ADIv5_DP_t *dp)
 
 	adiv5_dp_write(dp, ADIV5_DP_ABORT, clr);
 	dp->fault = 0;
-
+	if (err)
+		DEBUG("stlink_dp_error %d\n", err);
+	err |= Stlink.ap_error;
+	Stlink.ap_error = false;
 	return err;
 }
 
@@ -1078,7 +1156,13 @@ bool adiv5_ap_setup(int ap)
 	uint8_t data[2];
 	send_recv_retry(cmd, 16, data, 2);
 	DEBUG_STLINK("Open AP %d\n", ap);
-	stlink_usb_error_check(data, true);
+	int res = stlink_usb_error_check(data, true);
+	if (res) {
+		if (Stlink.ver_hw == 30) {
+			DEBUG("STLINKV3 only connects to STM8/32!\n");
+		}
+		return false;
+	}
 	return true;
 }
 
@@ -1107,6 +1191,9 @@ int stlink_usb_get_rw_status(void)
 
 void stlink_readmem(ADIv5_AP_t *ap, void *dest, uint32_t src, size_t len)
 {
+	if (len == 0)
+		return;
+	size_t read_len = len;
 	uint8_t type;
 	char *CMD;
 	if (src & 1 || len & 1) {
@@ -1116,6 +1203,8 @@ void stlink_readmem(ADIv5_AP_t *ap, void *dest, uint32_t src, size_t len)
 			DEBUG(" Too large!\n");
 			return;
 		}
+		if (len == 1)
+			read_len ++; /* Fix read length as in openocd*/
 	} else if (src & 3 || len & 3) {
 		CMD = "READMEM_16BIT";
 		type = STLINK_DEBUG_APIV2_READMEM_16BIT;
@@ -1124,7 +1213,7 @@ void stlink_readmem(ADIv5_AP_t *ap, void *dest, uint32_t src, size_t len)
 		type = STLINK_DEBUG_READMEM_32BIT;
 
 	}
-	DEBUG_STLINK("%s len %" PRI_SIZET " addr 0x%08" PRIx32 " AP %d : ",
+	DEBUG_STLINK("%s len %zu addr 0x%08" PRIx32 " AP %d : ",
 				 CMD, len, src, ap->apsel);
 	uint8_t cmd[16] = {
 		STLINK_DEBUG_COMMAND,
@@ -1132,12 +1221,21 @@ void stlink_readmem(ADIv5_AP_t *ap, void *dest, uint32_t src, size_t len)
 		src & 0xff, (src >>  8) & 0xff, (src >> 16) & 0xff,
 		(src >> 24) & 0xff,
 		len & 0xff, len >> 8, ap->apsel};
-	int res = read_retry(cmd, 16, dest, len);
+	int res = read_retry(cmd, 16, dest, read_len);
 	if (res == STLINK_ERROR_OK) {
 		uint8_t *p = (uint8_t*)dest;
 		for (size_t i = 0; i < len ; i++) {
 			DEBUG_STLINK("%02x", *p++);
 		}
+	} else {
+		/* FIXME: What is the right measure when failing?
+		 *
+		 * E.g. TM4C129 gets here when NRF probe reads 0x10000010
+		 * Approach taken:
+		 * Fill the memory with some fixed pattern so hopefully
+		 * the caller notices the error*/
+		DEBUG("stlink_readmem failed\n");
+		memset(dest, 0xff, len);
 	}
 	DEBUG_STLINK("\n");
 }
@@ -1145,7 +1243,7 @@ void stlink_readmem(ADIv5_AP_t *ap, void *dest, uint32_t src, size_t len)
 void stlink_writemem8(ADIv5_AP_t *ap, uint32_t addr, size_t len,
 					  uint8_t *buffer)
 {
-	DEBUG_STLINK("Mem Write8 AP %d len %" PRI_SIZET " addr 0x%08" PRIx32 ": ",
+	DEBUG_STLINK("Mem Write8 AP %d len %zu addr 0x%08" PRIx32 ": ",
 				 ap->apsel, len, addr);
 	for (size_t t = 0; t < len; t++) {
 		DEBUG_STLINK("%02x", buffer[t]);
@@ -1174,7 +1272,7 @@ void stlink_writemem8(ADIv5_AP_t *ap, uint32_t addr, size_t len,
 void stlink_writemem16(ADIv5_AP_t *ap, uint32_t addr, size_t len,
 					   uint16_t *buffer)
 {
-	DEBUG_STLINK("Mem Write16 AP %d len %" PRI_SIZET " addr 0x%08" PRIx32 ": ",
+	DEBUG_STLINK("Mem Write16 AP %d len %zu addr 0x%08" PRIx32 ": ",
 				 ap->apsel, len, addr);
 	for (size_t t = 0; t < len; t+=2) {
 		DEBUG_STLINK("%04x", buffer[t]);
@@ -1194,7 +1292,7 @@ void stlink_writemem16(ADIv5_AP_t *ap, uint32_t addr, size_t len,
 void stlink_writemem32(ADIv5_AP_t *ap, uint32_t addr, size_t len,
 					   uint32_t *buffer)
 {
-	DEBUG_STLINK("Mem Write32 AP %d len %" PRI_SIZET " addr 0x%08" PRIx32 ": ",
+	DEBUG_STLINK("Mem Write32 AP %d len %zu addr 0x%08" PRIx32 ": ",
 				 ap->apsel, len, addr);
 	for (size_t t = 0; t < len; t+=4) {
 		DEBUG_STLINK("%04x", buffer[t]);
@@ -1209,37 +1307,40 @@ void stlink_writemem32(ADIv5_AP_t *ap, uint32_t addr, size_t len,
 	write_retry(cmd, 16, (void*)buffer, len);
 }
 
-void stlink_regs_read(void *data)
+void stlink_regs_read(ADIv5_AP_t *ap, void *data)
 {
-	uint8_t cmd[16] = {STLINK_DEBUG_COMMAND, STLINK_DEBUG_APIV2_READALLREGS};
+	uint8_t cmd[16] = {STLINK_DEBUG_COMMAND, STLINK_DEBUG_APIV2_READALLREGS,
+					   ap->apsel};
 	uint8_t res[88];
-	DEBUG_STLINK("Read all core registers\n");
+	DEBUG_STLINK("AP %d: Read all core registers\n", ap->apsel);
 	send_recv(cmd, 16, res, 88);
 	stlink_usb_error_check(res, true);
 	memcpy(data, res + 4, 84);
 }
 
-uint32_t stlink_reg_read(int num)
+uint32_t stlink_reg_read(ADIv5_AP_t *ap, int num)
 {
-	uint8_t cmd[16] = {STLINK_DEBUG_COMMAND, STLINK_DEBUG_APIV2_READREG, num};
+	uint8_t cmd[16] = {STLINK_DEBUG_COMMAND, STLINK_DEBUG_APIV2_READREG, num,
+					   ap->apsel};
 	uint8_t res[8];
 	send_recv(cmd, 16, res, 8);
 	stlink_usb_error_check(res, true);
 	uint32_t ret = res[0] | res[1] << 8 | res[2] << 16 | res[3] << 24;
-	DEBUG_STLINK("Read reg %02" PRId32 " val 0x%08" PRIx32 "\n", num, ret);
+	DEBUG_STLINK("AP %d: Read reg %02" PRId32 " val 0x%08" PRIx32 "\n",
+				 ap->apsel, num, ret);
 	return ret;
 }
 
-void stlink_reg_write(int num, uint32_t val)
+void stlink_reg_write(ADIv5_AP_t *ap, int num, uint32_t val)
 {
 	uint8_t cmd[16] = {
 		STLINK_DEBUG_COMMAND, STLINK_DEBUG_APIV2_WRITEREG, num,
 		val & 0xff, (val >>  8) & 0xff, (val >> 16) & 0xff,
-		(val >> 24) & 0xff
-	};
+		(val >> 24) & 0xff, ap->apsel};
 	uint8_t res[2];
 	send_recv(cmd, 16, res, 2);
-	DEBUG_STLINK("Write reg %02" PRId32 " val 0x%08" PRIx32 "\n", num, val);
+	DEBUG_STLINK("AP %d: Write reg %02" PRId32 " val 0x%08" PRIx32 "\n",
+				 ap->apsel, num, val);
 	stlink_usb_error_check(res, true);
 }
 
@@ -1253,6 +1354,8 @@ void
 adiv5_mem_write_sized(ADIv5_AP_t *ap, uint32_t dest, const void *src,
 					  size_t len, enum align align)
 {
+	if (len == 0)
+		return;
 	switch(align) {
 	case ALIGN_BYTE: stlink_writemem8(ap, dest, len, (uint8_t *) src);
 		break;
