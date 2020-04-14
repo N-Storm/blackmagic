@@ -1,9 +1,11 @@
 /*
  * This file is part of the Black Magic Debug project.
  *
+ * Copyright (C) 2020 Uwe Bonnes (bon@elektron.ikp.physik.tu-darmstadt.de)
+ * Base on code:
  * Copyright (C) 2011  Black Sphere Technologies Ltd.
  * Written by Gareth McMullin <gareth@blacksphere.co.nz>
- * Additions by Dave Marples <dave@marples.net>
+ * and others.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,37 +21,35 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef __PLATFORM_H
-#define __PLATFORM_H
+/* This file deduplicates codes used in several pc-hosted platforms
+ */
 
-#include "timing.h"
+#include <stdint.h>
+#include <unistd.h>
+#include <sys/time.h>
 
-#ifndef _WIN32
-#	include <alloca.h>
-#else
-#	ifndef alloca
-#		define alloca __builtin_alloca
-#	endif
+#if defined(_WIN32) && !defined(__MINGW32__)
+#warning "This vasprintf() is dubious!"
+int vasprintf(char **strp, const char *fmt, va_list ap)
+{
+	int size = 128, ret = 0;
+
+	*strp = malloc(size);
+	while(*strp && ((ret = vsnprintf(*strp, size, fmt, ap)) == size))
+		*strp = realloc(*strp, size <<= 1);
+
+	return ret;
+}
 #endif
 
-#define PLATFORM_HAS_DEBUG
-#define PLATFORM_HAS_POWER_SWITCH
-#define PLATFORM_MAX_MSG_SIZE (256)
-#define PLATFORM_IDENT "PC-HOSTED"
-#define BOARD_IDENT PLATFORM_IDENT
-#define SET_RUN_STATE(state)
-#define SET_IDLE_STATE(state)
-#define SET_ERROR_STATE(state)
-
-/* Allow 100mS for responses to reach us */
-#define RESP_TIMEOUT (100)
-
-void platform_buffer_flush(void);
-int platform_buffer_write(const uint8_t *data, int size);
-int platform_buffer_read(uint8_t *data, int size);
-static inline int platform_hwversion(void)
+void platform_delay(uint32_t ms)
 {
-  return 0;
+	usleep(ms * 1000);
 }
 
-#endif
+uint32_t platform_time_ms(void)
+{
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
+}

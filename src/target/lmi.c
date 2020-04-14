@@ -100,11 +100,18 @@ bool lmi_probe(target *t)
 		lmi_add_flash(t, 0x10000);
 		t->target_options |= CORTEXM_TOPT_INHIBIT_SRST;
 		return true;
+
+	case 0x101F:    /* TM4C1294NCPDT */
+		t->driver = lmi_driver_str;
+		target_add_ram(t, 0x20000000, 0x40000);
+		lmi_add_flash(t, 0x100000);
+		t->target_options |= CORTEXM_TOPT_INHIBIT_SRST;
+		return true;
 	}
 	return false;
 }
 
-int lmi_flash_erase(struct target_flash *f, target_addr addr, size_t len)
+static int lmi_flash_erase(struct target_flash *f, target_addr addr, size_t len)
 {
 	target  *t = f->t;
 
@@ -128,7 +135,7 @@ int lmi_flash_erase(struct target_flash *f, target_addr addr, size_t len)
 	return 0;
 }
 
-int lmi_flash_write(struct target_flash *f,
+static int lmi_flash_write(struct target_flash *f,
                     target_addr dest, const void *src, size_t len)
 {
 	target  *t = f->t;

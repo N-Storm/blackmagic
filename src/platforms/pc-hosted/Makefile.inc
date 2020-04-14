@@ -1,14 +1,15 @@
 TARGET=blackmagic_hosted
 SYS = $(shell $(CC) -dumpmachine)
-CFLAGS += -DPC_HOSTED -DNO_LIBOPENCM3 -DENABLE_DEBUG -I
-CFLAGS += $(shell pkg-config --cflags libftdi1)
+CFLAGS += -DPC_HOSTED -DNO_LIBOPENCM3 -DENABLE_DEBUG
 CFLAGS +=-I ./target -I./platforms/pc
-LDFLAGS += $(shell pkg-config --libs libftdi1)
 ifneq (, $(findstring mingw, $(SYS)))
-LDFLAGS +=  -lusb-1.0 -lws2_32
-CFLAGS += -Wno-cast-function-type
+SRC += 	 serial_win.c
+LDFLAGS +=  -lws2_32
 else ifneq (, $(findstring cygwin, $(SYS)))
-LDFLAGS +=  -lusb-1.0 -lws2_32
+SRC += 	 serial_win.c
+LDFLAGS +=  -lws2_32
+else
+SRC += serial_unix.c
 endif
 VPATH += platforms/pc
-SRC += 	cl_utils.c timing.c
+SRC += 	cl_utils.c timing.c utils.c
