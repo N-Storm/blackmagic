@@ -401,6 +401,25 @@ enum target_halt_reason target_halt_poll(target *t, target_addr *watch)
 
 void target_halt_resume(target *t, bool step) { t->halt_resume(t, step); }
 
+/* Command line for semihosting get_cmdline */
+void target_set_cmdline(target *t, char *cmdline) {
+	uint32_t len_dst;
+	len_dst = sizeof(t->cmdline)-1;
+	strncpy(t->cmdline, cmdline, len_dst -1);
+	t->cmdline[strlen(t->cmdline)]='\0';
+	DEBUG("cmdline: >%s<\n", t->cmdline);
+	}
+
+/* Set heapinfo for semihosting */
+void target_set_heapinfo(target *t, target_addr heap_base, target_addr heap_limit,
+	target_addr stack_base, target_addr stack_limit) {
+	if (t == NULL) return;
+	t->heapinfo[0] = heap_base;
+	t->heapinfo[1] = heap_limit;
+	t->heapinfo[2] = stack_base;
+	t->heapinfo[3] = stack_limit;
+}
+
 /* Break-/watchpoint functions */
 int target_breakwatch_set(target *t,
                           enum target_breakwatch type, target_addr addr, size_t len)
