@@ -319,6 +319,10 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 
 	case 0xc27:
 		t->core = "M7";
+		if ((((cpuid >> 20) & 0xf) == 0) && (((cpuid >> 0) & 0xf) < 2)) {
+			DEBUG_WARN("Silicon bug: Single stepping will enter pending "
+					   "exception handler with this M7 core revision!\n");
+		}
 		break;
 
 	case 0xc60:
@@ -379,6 +383,10 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 	switch (ap->ap_designer) {
 	case AP_DESIGNER_FREESCALE:
 		PROBE(kinetis_probe);
+		if (ap->ap_partno == 0x88c) {
+			t->driver = "MIMXRT10xx(no flash)";
+			target_halt_resume(t, 0);
+		}
 		break;
 	case AP_DESIGNER_STM:
 		PROBE(stm32f1_probe);
@@ -386,6 +394,10 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 		PROBE(stm32h7_probe);
 		PROBE(stm32l0_probe);
 		PROBE(stm32l4_probe);
+		if (ap->ap_partno == 0x472) {
+			t->driver = "STM32L552(no flash)";
+			target_halt_resume(t, 0);
+		}
 		break;
 	case AP_DESIGNER_CYPRESS:
 		DEBUG_WARN("Unhandled Cypress device\n");
@@ -401,12 +413,6 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 		PROBE(samd_probe);
 		PROBE(samx5x_probe);
 		break;
-	case AP_DESIGNER_ARM:
-		if (ap->ap_partno == 0x4c3)  /* Care for STM32F1 clones */
-			PROBE(stm32f1_probe);
-		PROBE(sam3x_probe);
-		PROBE(lpc11xx_probe); /* LPC24C11 */
-		break;
 	case AP_DESIGNER_ENERGY_MICRO:
 		PROBE(efm32_probe);
 		break;
@@ -417,21 +423,34 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 		PROBE(lpc11xx_probe); /* LPC845 */
 		break;
 	default:
+		if (ap->ap_designer != AP_DESIGNER_ARM) {
+			/* Report unexpected designers */
 #if PC_HOSTED == 0
-        gdb_outf("Please report Designer %3x and Partno %3x and the probed "
-				 "device\n", ap->ap_designer, ap->ap_partno);
+				gdb_outf("Please report Designer %3x and Partno %3x and the "
+						 "probed device\n", ap->ap_designer, ap->ap_partno);
 #else
-		DEBUG_WARN("Please report Designer %3x and Partno %3x and the probed "
-				 "device\n", ap->ap_designer, ap->ap_partno);
+				DEBUG_WARN("Please report Designer %3x and Partno %3x and the "
+						   "probed device\n", ap->ap_designer, ap->ap_partno);
 #endif
-		PROBE(lpc11xx_probe); /* Let's get feedback if LPC11 is also Specular*/
+		}
+		if (ap->ap_partno == 0x4c3)  /* Cortex-M3 ROM */
+			PROBE(stm32f1_probe); /* Care for STM32F1 clones */
+		else if (ap->ap_partno == 0x471)  { /* Cortex-M0 ROM */
+			PROBE(lpc11xx_probe); /* LPC24C11 */
+			PROBE(lpc43xx_probe);
+		}
+		else if (ap->ap_partno == 0x4c4) /* Cortex-M4 ROM */
+			PROBE(lpc43xx_probe);
+		/* Info on PIDR of these parts wanted! */
+		PROBE(sam3x_probe);
 		PROBE(lpc15xx_probe);
-		PROBE(lpc43xx_probe);
 		PROBE(lmi_probe);
 		PROBE(ke04_probe);
 		PROBE(lpc17xx_probe);
 	}
 #undef PROBE
+	/* Restart the CortexM we stopped for Romtable scan. Allow pure debug.*/
+	target_halt_resume(t, 0);
 	return true;
 }
 

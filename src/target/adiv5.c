@@ -201,8 +201,10 @@ static const struct {
 	{0x471, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("Cortex-M0  ROM",  "(Cortex-M0 ROM)")},
 	{0x490, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("Cortex-A15 GIC", "(Generic Interrupt Controller)")},
 	{0x4c0, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("Cortex-M0+ ROM",  "(Cortex-M0+ ROM)")},
+	{0x4c3, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("Cortex-M3 ROM",  "(Cortex-M3 ROM)")},
 	{0x4c4, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("Cortex-M4 ROM",  "(Cortex-M4 ROM)")},
-	{0x4c7, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("Cortex-M7 PPB",  "(Private Peripheral Bus ROM Table)")},
+	{0x4c7, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("Cortex-M7 PPB",  "(Cortex-M7 Private Peripheral Bus ROM Table)")},
+	{0x4c8, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("Cortex-M7 ROM",  "(Cortex-M7 ROM)")},
 	{0x906, 0x14, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("CoreSight CTI",  "(Cross Trigger)")},
 	{0x907, 0x21, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("CoreSight ETB",  "(Trace Buffer)")},
 	{0x908, 0x12, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("CoreSight CSTF", "(Trace Funnel)")},
@@ -218,7 +220,7 @@ static const struct {
 	{0x924, 0x13, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("Cortex-M3 ETM",  "(Embedded Trace)")},
 	{0x925, 0x13, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("Cortex-M4 ETM",  "(Embedded Trace)")},
 	{0x930, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("Cortex-R4 ETM",  "(Embedded Trace)")},
-	{0x932, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("CoreSight MTB-M0+",  "(Simple Execution Trace)")},
+	{0x932, 0x31, 0x0a31, aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("CoreSight MTB-M0+",  "(Simple Execution Trace)")},
 	{0x941, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("CoreSight TPIU-Lite", "(Trace Port Interface Unit)")},
 	{0x950, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("CoreSight Component", "(unidentified Cortex-A9 component)")},
 	{0x955, 0x00, 0,      aa_nosupport, cidc_unknown, PIDR_PN_BIT_STRINGS("CoreSight Component", "(unidentified Cortex-A5 component)")},
@@ -261,13 +263,10 @@ static const struct {
 
 extern bool cortexa_probe(ADIv5_AP_t *apb, uint32_t debug_base);
 
-static void adiv5_dp_ref(ADIv5_DP_t *dp)
-{
-	dp->refcnt++;
-}
-
 void adiv5_ap_ref(ADIv5_AP_t *ap)
 {
+	if (ap->refcnt == 0)
+		ap->dp->refcnt++;
 	ap->refcnt++;
 }
 
@@ -402,6 +401,7 @@ static bool cortexm_prepare(ADIv5_AP_t *ap)
 	return true;
 }
 
+/* Return true if we find a debuggable device.*/
 static bool adiv5_component_probe(ADIv5_AP_t *ap, uint32_t addr, int recursion, int num_entry)
 {
 	(void) num_entry;
@@ -409,6 +409,15 @@ static bool adiv5_component_probe(ADIv5_AP_t *ap, uint32_t addr, int recursion, 
 	if (addr == 0) /* No rom table on this AP */
 		return false;
 	uint32_t cidr = adiv5_ap_read_id(ap, addr + CIDR0_OFFSET);
+	if ((cidr & ~CID_CLASS_MASK) != CID_PREAMBLE) {
+		/* Maybe caused by a not halted CortexM */
+		if ((ap->idr & 0xf) == ARM_AP_TYPE_AHB) {
+			if (!cortexm_prepare(ap))
+				return false; /* Halting failed! */
+			/* CPU now halted, read cidr again. */
+			cidr = adiv5_ap_read_id(ap, addr + CIDR0_OFFSET);
+		}
+	}
 	bool res = false;
 #if defined(ENABLE_DEBUG)
 	char indent[recursion + 1];
@@ -454,6 +463,10 @@ static bool adiv5_component_probe(ADIv5_AP_t *ap, uint32_t addr, int recursion, 
 		if (recursion == 0) {
 			ap->ap_designer = designer;
 			ap->ap_partno   = partno;
+			if ((ap->ap_designer == AP_DESIGNER_ATMEL) && (ap->ap_partno == 0xcd0)) {
+				cortexm_probe(ap);
+				return true;
+			}
 		}
 		for (int i = 0; i < 960; i++) {
 			adiv5_dp_error(ap->dp);
@@ -473,7 +486,7 @@ static bool adiv5_component_probe(ADIv5_AP_t *ap, uint32_t addr, int recursion, 
 			}
 
 			/* Probe recursively */
-			adiv5_component_probe(
+			res = adiv5_component_probe(
 				ap, addr + (entry & ADIV5_ROM_ROMENTRY_OFFSET),
 				recursion + 1, i);
 		}
@@ -528,15 +541,14 @@ static bool adiv5_component_probe(ADIv5_AP_t *ap, uint32_t addr, int recursion, 
 							   cidc_debug_strings[cid_class],
 							   cidc_debug_strings[pidr_pn_bits[i].cidc]);
 				}
-				res = true;
 				switch (pidr_pn_bits[i].arch) {
 				case aa_cortexm:
 					DEBUG_INFO("%s-> cortexm_probe\n", indent + 1);
-					cortexm_probe(ap);
+					res = cortexm_probe(ap);
 					break;
 				case aa_cortexa:
 					DEBUG_INFO("\n -> cortexa_probe\n");
-					cortexa_probe(ap, addr);
+					res = cortexa_probe(ap, addr);
 					break;
 				default:
 					DEBUG_INFO("\n");
@@ -583,7 +595,6 @@ ADIv5_AP_t *adiv5_new_ap(ADIv5_DP_t *dp, uint8_t apsel)
 	}
 
 	memcpy(ap, &tmpap, sizeof(*ap));
-	adiv5_dp_ref(dp);
 
 	ap->csw = adiv5_ap_read(ap, ADIV5_AP_CSW) &
 		~(ADIV5_AP_CSW_SIZE_MASK | ADIV5_AP_CSW_ADDRINC_MASK);
@@ -598,25 +609,6 @@ ADIv5_AP_t *adiv5_new_ap(ADIv5_DP_t *dp, uint8_t apsel)
 	DEBUG_INFO("AP %3d: IDR=%08"PRIx32" CFG=%08"PRIx32" BASE=%08" PRIx32
 			   " CSW=%08"PRIx32"\n", apsel, ap->idr, cfg, ap->base, ap->csw);
 #endif
-	if (!apsel && ((ap->idr & 0xf) == ARM_AP_TYPE_AHB)) {
-		/* Test for protected Atmel devices. Access outside DSU fails.
-		 * For protected device, continue with Rom Table anyways.
-		 */
-		adiv5_dp_error(ap->dp);
-		adiv5_mem_read32(ap, CORTEXM_DHCSR);
-		if ( adiv5_dp_error(ap->dp) & ADIV5_DP_CTRLSTAT_STICKYERR) {
-			uint32_t err = adiv5_dp_error(ap->dp);
-			if (err & ADIV5_DP_CTRLSTAT_STICKYERR) {
-				DEBUG_WARN("...\nHit error on DHCSR read. Suspect protected Atmel "
-						   "part, skipping to PIDR check.\n");
-			}
-		} else {
-			if (!cortexm_prepare(ap)) {
-				free(ap);
-				return NULL;
-			}
-		}
-	}
 	adiv5_ap_ref(ap);
 	return ap;
 }
@@ -624,7 +616,6 @@ ADIv5_AP_t *adiv5_new_ap(ADIv5_DP_t *dp, uint8_t apsel)
 void adiv5_dp_init(ADIv5_DP_t *dp)
 {
 	volatile uint32_t ctrlstat = 0;
-	adiv5_dp_ref(dp);
 #if PC_HOSTED  == 1
 	platform_adiv5_dp_defaults(dp);
 	if (!dp->ap_write)
@@ -697,6 +688,7 @@ void adiv5_dp_init(ADIv5_DP_t *dp)
 		}
 	}
 
+	bool res = false;
 	uint32_t dp_idcode = adiv5_dp_read(dp, ADIV5_DP_IDCODE);
 	if ((dp_idcode & ADIV5_DP_VERSION_MASK) == ADIV5_DPv2) {
 		/* Read TargetID. Can be done with device in WFI, sleep or reset!*/
@@ -733,7 +725,7 @@ void adiv5_dp_init(ADIv5_DP_t *dp)
 			if (dp->ap_cleanup)
 				dp->ap_cleanup(i);
 #endif
-			free(ap);
+			adiv5_ap_unref(ap);
 			/* FIXME: Should we expect valid APs behind duplicate ones? */
 			return;
 		}
@@ -752,9 +744,14 @@ void adiv5_dp_init(ADIv5_DP_t *dp)
 		 */
 
 		/* The rest should only be added after checking ROM table */
-		adiv5_component_probe(ap, ap->base, 0, 0);
+		res = adiv5_component_probe(ap, ap->base, 0, 0);
+		if (!res)
+			adiv5_ap_unref(ap);
 	}
-	adiv5_dp_unref(dp);
+	/* We halted at least CortexM for Romtable scan.
+	 * Release the devices now. Attach() will halt them again.*/
+	for (target *t = target_list; t; t = t->next)
+		target_halt_resume(t, false);
 }
 
 #define ALIGNOF(x) (((x) & 3) == 0 ? ALIGN_WORD : \

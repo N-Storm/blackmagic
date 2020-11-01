@@ -352,7 +352,6 @@ int platform_adiv5_swdp_scan(void)
 			if (target_list)
 				return 1;
 		}
-		free(dp);
 		break;
 	}
 	case BMP_TYPE_CMSIS_DAP:
@@ -364,7 +363,6 @@ int platform_adiv5_swdp_scan(void)
 			if (target_list)
 				return 1;
 		}
-		free(dp);
 		break;
 	}
 	case BMP_TYPE_JLINK:
@@ -390,6 +388,12 @@ int platform_swdptap_init(void)
 		return -1;
 	}
 	return -1;
+}
+
+void platform_add_jtag_dev(int i, const jtag_dev_t *jtag_dev)
+{
+	if (info.bmp_type == BMP_TYPE_BMP)
+		remote_add_jtag_dev(i, jtag_dev);
 }
 
 int platform_jtag_scan(const uint8_t *lrlens)
