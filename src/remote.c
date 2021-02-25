@@ -24,6 +24,7 @@
 #include "swdptap.h"
 #include "jtagtap.h"
 #include "gdb_if.h"
+#include "platform.h"
 #include "version.h"
 #include "exception.h"
 #include <stdarg.h>
@@ -268,6 +269,7 @@ void remotePacketProcessGEN(uint8_t i, char *packet)
 
 {
 	(void)i;
+    uint32_t freq;
 	switch (packet[1]) {
     case REMOTE_VOLTAGE:
 		_respondS(REMOTE_RESP_OK,platform_target_voltage());
@@ -280,6 +282,14 @@ void remotePacketProcessGEN(uint8_t i, char *packet)
 
     case REMOTE_SRST_GET:
 		_respond(REMOTE_RESP_OK,platform_srst_get_val());
+		break;
+    case REMOTE_FREQ_SET:
+		platform_max_frequency_set( remotehston(8, packet + 2));
+		_respond(REMOTE_RESP_OK, 0);
+		break;
+    case REMOTE_FREQ_GET:
+		freq = platform_max_frequency_get();
+		_respond_buf(REMOTE_RESP_OK, (uint8_t*)&freq, 4);
 		break;
 
     case REMOTE_PWR_SET:
@@ -299,11 +309,11 @@ void remotePacketProcessGEN(uint8_t i, char *packet)
 #endif
 		break;
 
-#if !defined(BOARD_IDENT) && defined(PLATFORM_IDENT)
-# define BOARD_IDENT() PLATFORM_IDENT
+#if !defined(BOARD_IDENT) && defined(BOARD_IDENT)
+# define PLATFORM_IDENT() BOARD_IDENT
 #endif
 	case REMOTE_START:
-		_respondS(REMOTE_RESP_OK, BOARD_IDENT " " FIRMWARE_VERSION);
+		_respondS(REMOTE_RESP_OK, PLATFORM_IDENT ""  FIRMWARE_VERSION);
 		break;
 
     default:

@@ -27,10 +27,9 @@
 #include "gpio.h"
 #include "timing.h"
 #include "timing_stm32.h"
-#include "version.h"
 
 #include <libopencm3/cm3/common.h>
-#include <libopencm3/stm32/f1/memorymap.h>
+#include <libopencm3/stm32/memorymap.h>
 #include <libopencm3/usb/usbd.h>
 
 #ifdef ENABLE_DEBUG
@@ -40,11 +39,7 @@ extern bool debug_bmp;
 int usbuart_debug_write(const char *buf, size_t len);
 #endif
 
-#define BOARD_IDENT       "Black Magic Probe (STLINK), (Firmware " FIRMWARE_VERSION ")"
-#define BOARD_IDENT_DFU   "Black Magic (Upgrade) for STLink/Discovery, (Firmware " FIRMWARE_VERSION ")"
-#define BOARD_IDENT_UPD   "Black Magic (DFU Upgrade) for STLink/Discovery, (Firmware " FIRMWARE_VERSION ")"
-#define DFU_IDENT         "Black Magic Firmware Upgrade (STLINK)"
-#define UPD_IFACE_STRING  "@Internal Flash   /0x08000000/8*001Kg"
+#define PLATFORM_IDENT   "(STLINK/V2) "
 
 /* Hardware definitions... */
 #define TDI_PORT	GPIOA
@@ -78,7 +73,7 @@ int usbuart_debug_write(const char *buf, size_t len);
 # define SWD_CR_MULT (1 << ((14 - 8) << 2))
 
 #define TMS_SET_MODE() \
-	gpio_set_mode(TMS_PORT, GPIO_MODE_OUTPUT_50_MHZ, \
+	gpio_set_mode(TMS_PORT, GPIO_MODE_OUTPUT_2_MHZ, \
 	              GPIO_CNF_OUTPUT_PUSHPULL, TMS_PIN);
 #define SWDIO_MODE_FLOAT() 	do { \
 	uint32_t cr = SWD_CR; \

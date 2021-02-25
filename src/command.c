@@ -3,6 +3,8 @@
  *
  * Copyright (C) 2011  Black Sphere Technologies Ltd.
  * Written by Gareth McMullin <gareth@blacksphere.co.nz>
+ * Copyright (C) 2021 Uwe Bonnes
+ *                            (bon@elektron.ikp.physik.tu-darmstadt.de)
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,6 +29,7 @@
 #include "command.h"
 #include "gdb_packet.h"
 #include "target.h"
+#include "target_internal.h"
 #include "morse.h"
 #include "version.h"
 #include "serialno.h"
@@ -37,18 +40,12 @@
 
 typedef bool (*cmd_handler)(target *t, int argc, const char **argv);
 
-struct command_s {
-	const char *cmd;
-	cmd_handler handler;
-
-	const char *help;
-};
-
 static bool cmd_version(target *t, int argc, char **argv);
 static bool cmd_help(target *t, int argc, char **argv);
 
 static bool cmd_jtag_scan(target *t, int argc, char **argv);
 static bool cmd_swdp_scan(target *t, int argc, char **argv);
+static bool cmd_frequency(target *t, int argc, char **argv);
 static bool cmd_targets(target *t, int argc, char **argv);
 static bool cmd_morse(target *t, int argc, char **argv);
 static bool cmd_halt_timeout(target *t, int argc, const char **argv);
@@ -70,6 +67,7 @@ const struct command_s cmd_list[] = {
 	{"help", (cmd_handler)cmd_help, "Display help for monitor commands"},
 	{"jtag_scan", (cmd_handler)cmd_jtag_scan, "Scan JTAG chain for devices" },
 	{"swdp_scan", (cmd_handler)cmd_swdp_scan, "Scan SW-DP for devices" },
+	{"frequency", (cmd_handler)cmd_frequency, "set minimum high and low times" },
 	{"targets", (cmd_handler)cmd_targets, "Display list of available targets" },
 	{"morse", (cmd_handler)cmd_morse, "Display morse error message" },
 	{"halt_timeout", (cmd_handler)cmd_halt_timeout, "Timeout (ms) to wait until Cortex-M is halted: (Default 2000)" },
@@ -96,7 +94,7 @@ bool connect_assert_srst;
 #if defined(PLATFORM_HAS_DEBUG) && (PC_HOSTED == 0)
 bool debug_bmp;
 #endif
-long cortexm_wait_timeout = 2000; /* Timeout to wait for Cortex to react on halt command. */
+unsigned cortexm_wait_timeout = 2000; /* Timeout to wait for Cortex to react on halt command. */
 
 int command_process(target *t, char *cmd)
 {
@@ -131,16 +129,20 @@ int command_process(target *t, char *cmd)
 	return target_command(t, argc, argv);
 }
 
+#define BOARD_IDENT "Black Magic Probe" PLATFORM_IDENT FIRMWARE_VERSION
+
 bool cmd_version(target *t, int argc, char **argv)
 {
 	(void)t;
 	(void)argc;
 	(void)argv;
+	gdb_out(BOARD_IDENT);
 #if PC_HOSTED == 1
-	gdb_outf("Black Magic Probe, PC-Hosted for " PLATFORM_IDENT()
-			 ", Version " FIRMWARE_VERSION "\n");
+	char ident[256];
+	gdb_ident(ident, sizeof(ident));
+	gdb_outf("\n for %s\n", ident);
 #else
-	gdb_outf("Black Magic Probe (Firmware " FIRMWARE_VERSION ") (Hardware Version %d)\n", platform_hwversion());
+	gdb_outf(", Hardware Version %d\n", platform_hwversion());
 #endif
 	gdb_out("Copyright (C) 2015  Black Sphere Technologies Ltd.\n");
 	gdb_out("License GPLv3+: GNU GPL version 3 or later "
@@ -155,10 +157,11 @@ bool cmd_help(target *t, int argc, char **argv)
 	(void)argv;
 	const struct command_s *c;
 
-	gdb_out("General commands:\n");
-	for(c = cmd_list; c->cmd; c++)
-		gdb_outf("\t%s -- %s\n", c->cmd, c->help);
-
+	if (!t || t->tc->destroy_callback) {
+		gdb_out("General commands:\n");
+		for(c = cmd_list; c->cmd; c++)
+			gdb_outf("\t%s -- %s\n", c->cmd, c->help);
+	}
 	if (!t)
 		return -1;
 
@@ -216,8 +219,9 @@ static bool cmd_jtag_scan(target *t, int argc, char **argv)
 bool cmd_swdp_scan(target *t, int argc, char **argv)
 {
 	(void)t;
-	(void)argc;
-	(void)argv;
+	volatile uint32_t targetid = 0;
+	if (argc > 1)
+		targetid  = strtol(argv[1], NULL, 0);
 	if (platform_target_voltage())
 		gdb_outf("Target voltage: %s\n", platform_target_voltage());
 
@@ -228,9 +232,9 @@ bool cmd_swdp_scan(target *t, int argc, char **argv)
 	volatile struct exception e;
 	TRY_CATCH (e, EXCEPTION_ALL) {
 #if PC_HOSTED == 1
-		devs = platform_adiv5_swdp_scan();
+		devs = platform_adiv5_swdp_scan(targetid);
 #else
-		devs = adiv5_swdp_scan();
+		devs = adiv5_swdp_scan(targetid);
 #endif
 		}
 	switch (e.type) {
@@ -250,6 +254,31 @@ bool cmd_swdp_scan(target *t, int argc, char **argv)
 
 	cmd_targets(NULL, 0, NULL);
 	morse(NULL, false);
+	return true;
+
+}
+
+bool cmd_frequency(target *t, int argc, char **argv)
+{
+	(void)t;
+	if (argc == 2) {
+		char *p;
+		uint32_t frequency = strtol(argv[1], &p, 10);
+		switch(*p) {
+		case 'k':
+			frequency *= 1000;
+			break;
+		case 'M':
+			frequency *= 1000*1000;
+			break;
+		}
+		platform_max_frequency_set(frequency);
+	}
+	uint32_t freq = platform_max_frequency_get();
+	if (freq == FREQ_FIXED)
+		gdb_outf("SWJ freq fixed\n");
+	else
+		gdb_outf("Max SWJ freq %08" PRIx32 "\n", freq);
 	return true;
 
 }

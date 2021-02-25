@@ -27,59 +27,47 @@
 #include "general.h"
 #include "platform.h"
 
-uint32_t app_address = 0x08000000;
-static uint16_t led_upgrade;
-static uint32_t led2_state = 0;
-extern uint32_t _stack;
-static uint32_t rev;
+uint32_t app_address = 0x08004000;
+extern char _ebss[];
 
 void dfu_detach(void)
 {
-	platform_request_boot();
-	scb_reset_core();
+	scb_reset_system();
 }
 
 int main(void)
 {
-	rev = detect_rev();
-	rcc_clock_setup_in_hse_8mhz_out_72mhz();
-	if (rev == 0)
-		led_upgrade = GPIO8;
-	else
-		led_upgrade = GPIO9;
+	volatile uint32_t *magic = (uint32_t *)_ebss;
+	rcc_periph_clock_enable(RCC_GPIOA);
+	if (gpio_get(GPIOA, GPIO0) ||
+	   ((magic[0] == BOOTMAGIC0) && (magic[1] == BOOTMAGIC1))) {
+		magic[0] = 0;
+		magic[1] = 0;
+	} else {
+		dfu_jump_app_if_valid();
+	}
+	rcc_clock_setup_pll(&rcc_hse_8mhz_3v3[RCC_CLOCK_3V3_168MHZ]);
 
-	systick_set_clocksource(STK_CSR_CLKSOURCE_AHB_DIV8);
-	systick_set_reload(900000);
+	/* Assert blue LED as indicator we are in the bootloader */
+	rcc_periph_clock_enable(RCC_GPIOD);
+	gpio_mode_setup(LED_PORT, GPIO_MODE_OUTPUT,
+					GPIO_PUPD_NONE, LED_BOOTLOADER);
+	gpio_set(LED_PORT, LED_BOOTLOADER);
 
-	dfu_protect(UPD_MODE);
+	/* Enable peripherals */
+	rcc_periph_clock_enable(RCC_OTGFS);
 
-	systick_interrupt_enable();
-	systick_counter_enable();
+	/* Set up USB Pins and alternate function*/
+	gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO11 | GPIO12);
+	gpio_set_af(GPIOA, GPIO_AF10, GPIO11 | GPIO12);
 
-	if (rev > 1) /* Reconnect USB */
-		gpio_set(GPIOA, GPIO15);
-	dfu_init(&st_usbfs_v1_usb_driver, UPD_MODE);
-
+ 	dfu_protect(false);
+	dfu_init(&USB_DRIVER);
 	dfu_main();
+
 }
 
 void dfu_event(void)
 {
 }
 
-void sys_tick_handler(void)
-{
-	if (rev == 0) {
-		gpio_toggle(GPIOA, led_upgrade);
-	} else {
-		if (led2_state & 1) {
-			gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ,
-				GPIO_CNF_OUTPUT_PUSHPULL, led_upgrade);
-			gpio_set(GPIOA, led_upgrade);
-		} else {
-			gpio_set_mode(GPIOA, GPIO_MODE_INPUT,
-				GPIO_CNF_INPUT_ANALOG, led_upgrade);
-		}
-		led2_state++;
-	}
-}

@@ -1,7 +1,7 @@
 /*
  * This file is part of the Black Magic Debug project.
  *
- * Copyright (C) 2020 Uwe Bonnes (bon@elektron.ikp.physik.tu-darmstadt.de)
+ * Copyright (C) 2020- 2021 Uwe Bonnes (bon@elektron.ikp.physik.tu-darmstadt.de)
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,39 +32,27 @@
 #include <signal.h>
 
 #include "bmp_remote.h"
+#include "bmp_hosted.h"
 #include "stlinkv2.h"
 #include "ftdi_bmp.h"
 #include "jlink.h"
 #include "cmsis_dap.h"
-
-#define VENDOR_ID_STLINK         0x0483
-#define PRODUCT_ID_STLINK_MASK   0xffe0
-#define PRODUCT_ID_STLINK_GROUP  0x3740
-#define PRODUCT_ID_STLINKV1      0x3744
-#define PRODUCT_ID_STLINKV2      0x3748
-#define PRODUCT_ID_STLINKV21     0x374b
-#define PRODUCT_ID_STLINKV21_MSD 0x3752
-#define PRODUCT_ID_STLINKV3      0x374f
-#define PRODUCT_ID_STLINKV3E     0x374e
-
-#define VENDOR_ID_SEGGER         0x1366
+#include "cl_utils.h"
 
 bmp_info_t info;
 
 swd_proc_t swd_proc;
 jtag_proc_t jtag_proc;
 
+void gdb_ident(char *p, int count)
+{
+	snprintf(p, count, "%s (%s), %s", info.manufacturer, info.product,
+			 info.version);
+}
+
 static void exit_function(void)
 {
-	if(info.usb_link) {
-		libusb_free_transfer(info.usb_link->req_trans);
-		libusb_free_transfer(info.usb_link->rep_trans);
-		if (info.usb_link->ul_libusb_device_handle) {
-			libusb_release_interface (
-				info.usb_link->ul_libusb_device_handle, 0);
-			libusb_close(info.usb_link->ul_libusb_device_handle);
-		}
-	}
+	libusb_exit_function(&info);
 	switch (info.bmp_type) {
 	case BMP_TYPE_CMSIS_DAP:
 		dap_exit_function();
@@ -82,230 +70,25 @@ static void sigterm_handler(int sig)
 	exit(0);
 }
 
-static int find_debuggers(	BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
-{
-	libusb_device **devs;
-	int n_devs = libusb_get_device_list(info->libusb_ctx, &devs);
-    if (n_devs < 0) {
-        DEBUG_WARN( "WARN:libusb_get_device_list() failed");
-		return -1;
-	}
-	bool report = false;
-	int found_debuggers;
-	struct libusb_device_descriptor desc;
-	char serial[64];
-	char manufacturer[128];
-	char product[128];
-	bmp_type_t type = BMP_TYPE_NONE;
-	bool access_problems = false;
-	char *active_cable = NULL;
-	bool ftdi_unknown = false;
-  rescan:
-	found_debuggers = 0;
-	for (int i = 0;  devs[i]; i++) {
-		libusb_device *dev =  devs[i];
-		int res = libusb_get_device_descriptor(dev, &desc);
-		if (res < 0) {
-            DEBUG_WARN( "WARN: libusb_get_device_descriptor() failed: %s",
-					libusb_strerror(res));
-			libusb_free_device_list(devs, 1);
-			continue;
-		}
-		libusb_device_handle *handle;
-		res = libusb_open(dev, &handle);
-		if (res != LIBUSB_SUCCESS) {
-			if (!access_problems) {
-				DEBUG_INFO("INFO: Open USB %04x:%04x failed\n",
-						   desc.idVendor, desc.idProduct);
-				access_problems = true;
-			}
-			continue;
-		}
-		res = libusb_get_string_descriptor_ascii(
-			handle, desc.iSerialNumber, (uint8_t*)serial,
-			sizeof(serial));
-		if (res <= 0) {
-			/* This can fail for many devices. Continue silent!*/
-			libusb_close(handle);
-			continue;
-		}
-		if (cl_opts->opt_serial && !strstr(serial, cl_opts->opt_serial)) {
-			libusb_close(handle);
-			continue;
-		}
-		res = libusb_get_string_descriptor_ascii(
-			handle, desc.iManufacturer, (uint8_t*)manufacturer,
-			sizeof(manufacturer));
-		if (res > 0) {
-			res = libusb_get_string_descriptor_ascii(
-				handle, desc.iProduct, (uint8_t*)product,
-				sizeof(product));
-			if (res <= 0) {
-				DEBUG_WARN( "WARN:"
-						"libusb_get_string_descriptor_ascii "
-						"for ident_string failed: %s\n",
-						libusb_strerror(res));
-				libusb_close(handle);
-				continue;
-			}
-		}
-		libusb_close(handle);
-		if (cl_opts->opt_ident_string) {
-			char *match_manu = NULL;
-			char *match_product = NULL;
-			match_manu = strstr(manufacturer,	cl_opts->opt_ident_string);
-			match_product = strstr(product, cl_opts->opt_ident_string);
-			if (!match_manu && !match_product) {
-				continue;
-			}
-		}
-		/* Either serial and/or ident_string match or are not given.
-		 * Check type.*/
-		if (desc.idVendor == VENDOR_ID_BMP) {
-			if (desc.idProduct == PRODUCT_ID_BMP) {
-				type = BMP_TYPE_BMP;
-			} else if (desc.idProduct == PRODUCT_ID_BMP_BL) {
-				DEBUG_WARN("BMP in botloader mode found. Restart or reflash!\n");
-				continue;
-			}
-		} else if ((strstr(manufacturer, "CMSIS")) || (strstr(product, "CMSIS"))) {
-			type = BMP_TYPE_CMSIS_DAP;
-		} else if (desc.idVendor ==  VENDOR_ID_STLINK) {
-			if ((desc.idProduct == PRODUCT_ID_STLINKV2) ||
-				(desc.idProduct == PRODUCT_ID_STLINKV21) ||
-				(desc.idProduct == PRODUCT_ID_STLINKV21_MSD) ||
-				(desc.idProduct == PRODUCT_ID_STLINKV3) ||
-				(desc.idProduct == PRODUCT_ID_STLINKV3E)) {
-				type = BMP_TYPE_STLINKV2;
-			} else {
-				if (desc.idProduct == PRODUCT_ID_STLINKV1)
-					DEBUG_WARN( "INFO: STLINKV1 not supported\n");
-				continue;
-			}
-		} else if (desc.idVendor ==  VENDOR_ID_SEGGER) {
-			type = BMP_TYPE_JLINK;
-		} else {
-			cable_desc_t *cable = &cable_desc[0];
-			for (; cable->name; cable++) {
-				bool found = false;
-				if ((cable->vendor != desc.idVendor) || (cable->product != desc.idProduct))
-					continue; /* VID/PID do not match*/
-				if (cl_opts->opt_cable) {
-					if (strcmp(cable->name, cl_opts->opt_cable))
-						continue; /* cable names do not match*/
-					else
-						found = true;
-				}
-				if (cable->description) {
-					if (strcmp(cable->description, product))
-						continue; /* discriptions do not match*/
-					else
-						found = true;
-				} else { /* VID/PID fits, but no cl_opts->opt_cable and no description*/
-					if ((cable->vendor == 0x0403) && /* FTDI*/
-						((cable->product == 0x6010) || /* FT2232C/D/H*/
-						 (cable->product == 0x6011) || /* FT4232H Quad HS USB-UART/FIFO IC */
-						 (cable->product == 0x6014))) {  /* FT232H Single HS USB-UART/FIFO IC */
-						ftdi_unknown = true;
-						continue; /* Cable name is needed */
-					}
-				}
-				if (found) {
-					active_cable = cable->name;
-					type = BMP_TYPE_LIBFTDI;
-					break;
-				}
-			}
-			if (!cable->name)
-				continue;
-		}
-		if (report) {
-			DEBUG_WARN("%2d: %s, %s, %s\n", found_debuggers + 1,
-				   serial,
-				   manufacturer,product);
-		}
-		info->vid = desc.idVendor;
-		info->pid = desc.idProduct;
-		info->bmp_type = type;
-		strncpy(info->serial, serial, sizeof(info->serial));
-		strncpy(info->product, product, sizeof(info->product));
-		strncpy(info->manufacturer, manufacturer, sizeof(info->manufacturer));
-		if (cl_opts->opt_position &&
-			(cl_opts->opt_position == (found_debuggers + 1))) {
-			found_debuggers = 1;
-			break;
-		} else {
-			found_debuggers++;
-		}
-	}
-	if ((found_debuggers == 0) && ftdi_unknown)
-		DEBUG_WARN("Generic FTDI MPSSE VID/PID found. Please specify exact type with \"-c <cable>\" !\n");
-	if ((found_debuggers == 1) && !cl_opts->opt_cable && (type == BMP_TYPE_LIBFTDI))
-		cl_opts->opt_cable = active_cable;
-	if (!found_debuggers && cl_opts->opt_list_only)
-		DEBUG_WARN("No usable debugger found\n");
-	if ((found_debuggers > 1) ||
-		((found_debuggers == 1) && (cl_opts->opt_list_only))) {
-		if (!report) {
-			if (found_debuggers > 1)
-				DEBUG_WARN("%d debuggers found!\nSelect with -P <pos>, "
-						   "-s <(partial)serial no.> "
-						   "and/or -S <(partial)description>\n",
-						   found_debuggers);
-			report = true;
-			goto rescan;
-		} else {
-			if (found_debuggers > 0)
-				access_problems = false;
-			found_debuggers = 0;
-		}
-	}
-	if (!found_debuggers && access_problems)
-		DEBUG_WARN(
-			"No debugger found. Please check access rights to USB devices!\n");
-	libusb_free_device_list(devs, 1);
-	return (found_debuggers == 1) ? 0 : -1;
-}
-
 static	BMP_CL_OPTIONS_t cl_opts;
 
 void platform_init(int argc, char **argv)
 {
-	cl_opts.opt_idstring = "Blackmagic PC-Hosted";
 	cl_init(&cl_opts, argc, argv);
 	atexit(exit_function);
 	signal(SIGTERM, sigterm_handler);
 	signal(SIGINT, sigterm_handler);
-	int res = libusb_init(&info.libusb_ctx);
-	if (res) {
-		DEBUG_WARN( "Fatal: Failed to get USB context: %s\n",
-				libusb_strerror(res));
-		exit(-1);
-	}
 	if (cl_opts.opt_device) {
 		info.bmp_type = BMP_TYPE_BMP;
-	} else if (cl_opts.opt_cable) {
-		if ((!strcmp(cl_opts.opt_cable, "list")) ||
-			(!strcmp(cl_opts.opt_cable, "l"))) {
-			cable_desc_t *cable = &cable_desc[0];
-			DEBUG_WARN("Available cables:\n");
-			for (; cable->name; cable++) {
-				DEBUG_WARN("\t%s\n", cable->name);
-			}
-			exit(0);
-		}
-		info.bmp_type = BMP_TYPE_LIBFTDI;
 	} else if (find_debuggers(&cl_opts, &info)) {
 		exit(-1);
 	}
-	DEBUG_WARN("Using %04x:%04x %s %s %s\n", info.vid, info.pid, info.serial,
-		   info.manufacturer,
-		   info.product);
+	bmp_ident(&info);
 	switch (info.bmp_type) {
 	case BMP_TYPE_BMP:
 		if (serial_open(&cl_opts, info.serial))
 			exit(-1);
-		remote_init(true);
+		remote_init();
 		break;
 	case BMP_TYPE_STLINKV2:
 		if (stlink_init( &info))
@@ -336,18 +119,24 @@ void platform_init(int argc, char **argv)
 	exit(ret);
 }
 
-int platform_adiv5_swdp_scan(void)
+int platform_adiv5_swdp_scan(uint32_t targetid)
 {
+	info.is_jtag = false;
+	platform_max_frequency_set(cl_opts.opt_max_swj_frequency);
+	if (targetid && (info.bmp_type != BMP_TYPE_BMP))
+		DEBUG_WARN("Ignoring TARGETID for now!\n");
 	switch (info.bmp_type) {
 	case BMP_TYPE_BMP:
 	case BMP_TYPE_LIBFTDI:
-		return adiv5_swdp_scan();
+		return adiv5_swdp_scan(targetid);
 		break;
 	case BMP_TYPE_STLINKV2:
 	{
 		target_list_free();
 		ADIv5_DP_t *dp = (void*)calloc(1, sizeof(*dp));
-		if (!stlink_enter_debug_swd(&info, dp)) {
+		if (stlink_enter_debug_swd(&info, dp)) {
+			free(dp);
+		} else {
 			adiv5_dp_init(dp);
 			if (target_list)
 				return 1;
@@ -358,7 +147,9 @@ int platform_adiv5_swdp_scan(void)
 	{
 		target_list_free();
 		ADIv5_DP_t *dp = (void*)calloc(1, sizeof(*dp));
-		if (!dap_enter_debug_swd(dp)) {
+		if (dap_enter_debug_swd(dp)) {
+			free(dp);
+		} else {
 			adiv5_dp_init(dp);
 			if (target_list)
 				return 1;
@@ -398,6 +189,8 @@ void platform_add_jtag_dev(int i, const jtag_dev_t *jtag_dev)
 
 int platform_jtag_scan(const uint8_t *lrlens)
 {
+	info.is_jtag = true;
+	platform_max_frequency_set(cl_opts.opt_max_swj_frequency);
 	switch (info.bmp_type) {
 	case BMP_TYPE_BMP:
 	case BMP_TYPE_LIBFTDI:
@@ -529,6 +322,75 @@ bool platform_srst_get_val(void)
 		break;
 	}
 	return false;
+}
+
+void platform_max_frequency_set(uint32_t freq)
+{
+	if (!freq)
+		return;
+	switch (info.bmp_type) {
+	case BMP_TYPE_BMP:
+		remote_max_frequency_set(freq);
+		break;
+	case BMP_TYPE_CMSIS_DAP:
+		dap_swj_clock(freq);
+		break;
+	case BMP_TYPE_LIBFTDI:
+		libftdi_max_frequency_set(freq);
+		break;
+	case BMP_TYPE_STLINKV2:
+		stlink_max_frequency_set(&info, freq);
+		break;
+	case BMP_TYPE_JLINK:
+		jlink_max_frequency_set(&info, freq);
+		break;
+	default:
+		DEBUG_WARN("Setting max SWJ frequency not yet implemented\n");
+		break;
+	}
+	uint32_t max_freq = platform_max_frequency_get();
+	if (max_freq == FREQ_FIXED)
+		DEBUG_INFO("Device has fixed frequency for %s\n",
+				   (info.is_jtag) ? "JTAG" : "SWD" );
+	else
+		DEBUG_INFO("Speed set to %7.4f MHz for %s\n",
+				   platform_max_frequency_get() / 1000000.0,
+				   (info.is_jtag) ? "JTAG" : "SWD" );
+}
+
+uint32_t platform_max_frequency_get(void)
+{
+	switch (info.bmp_type) {
+	case BMP_TYPE_BMP:
+		return remote_max_frequency_get();
+	case BMP_TYPE_CMSIS_DAP:
+		return dap_swj_clock(0);
+		break;
+	case BMP_TYPE_LIBFTDI:
+		return libftdi_max_frequency_get();
+	case BMP_TYPE_STLINKV2:
+		return stlink_max_frequency_get(&info);
+	case BMP_TYPE_JLINK:
+		return jlink_max_frequency_get(&info);
+	default:
+		DEBUG_WARN("Reading max SWJ frequency not yet implemented\n");
+		break;
+	}
+	return false;
+}
+
+void platform_target_set_power(bool power)
+{
+	switch (info.bmp_type) {
+	case BMP_TYPE_BMP:
+		if (remote_target_set_power(power))
+			DEBUG_INFO("Powering up device!\n");
+		else
+			DEBUG_WARN("Powering up device unimplemented or failed\n");
+	   break;
+	default:
+		break;
+	}
 }
 
 void platform_buffer_flush(void)

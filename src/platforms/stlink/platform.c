@@ -52,7 +52,7 @@ void platform_init(void)
 	void initialise_monitor_handles(void);
 	initialise_monitor_handles();
 #endif
-	rcc_clock_setup_in_hse_8mhz_out_72mhz();
+	rcc_clock_setup_pll(&rcc_hse_configs[RCC_CLOCK_HSE8_72MHZ]);
 	if (rev == 0) {
 		led_idle_run = GPIO8;
 		srst_pin = SRST_PIN_V1;
@@ -61,11 +61,11 @@ void platform_init(void)
 		srst_pin = SRST_PIN_V2;
 	}
 	/* Setup GPIO ports */
-	gpio_set_mode(TMS_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+	gpio_set_mode(TMS_PORT, GPIO_MODE_OUTPUT_2_MHZ,
 	              GPIO_CNF_INPUT_FLOAT, TMS_PIN);
-	gpio_set_mode(TCK_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+	gpio_set_mode(TCK_PORT, GPIO_MODE_OUTPUT_2_MHZ,
 	              GPIO_CNF_OUTPUT_PUSHPULL, TCK_PIN);
-	gpio_set_mode(TDI_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+	gpio_set_mode(TDI_PORT, GPIO_MODE_OUTPUT_2_MHZ,
 	              GPIO_CNF_OUTPUT_PUSHPULL, TDI_PIN);
 
 	platform_srst_set_val(false);
@@ -90,7 +90,7 @@ void platform_init(void)
 void platform_srst_set_val(bool assert)
 {
 	if (assert) {
-		gpio_set_mode(SRST_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+		gpio_set_mode(SRST_PORT, GPIO_MODE_OUTPUT_2_MHZ,
 		              GPIO_CNF_OUTPUT_OPENDRAIN, srst_pin);
 		gpio_clear(SRST_PORT, srst_pin);
 	} else {

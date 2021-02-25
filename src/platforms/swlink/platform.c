@@ -27,13 +27,13 @@
 #include "cdcacm.h"
 #include "usbuart.h"
 
-#include <libopencm3/stm32/f1/rcc.h>
+#include <libopencm3/stm32/rcc.h>
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/cm3/scs.h>
 #include <libopencm3/cm3/nvic.h>
 #include <libopencm3/stm32/usart.h>
 #include <libopencm3/usb/usbd.h>
-#include <libopencm3/stm32/f1/adc.h>
+#include <libopencm3/stm32/adc.h>
 
 uint32_t led_error_port;
 uint16_t led_error_pin;
@@ -54,8 +54,7 @@ void platform_init(void)
 	void initialise_monitor_handles(void);
 	initialise_monitor_handles();
 #endif
-	rcc_clock_setup_in_hse_8mhz_out_72mhz();
-
+	rcc_clock_setup_pll(&rcc_hse_configs[RCC_CLOCK_HSE8_72MHZ]);
 	rev =  detect_rev();
 	/* Enable peripherals */
 	rcc_periph_clock_enable(RCC_AFIO);
@@ -67,11 +66,11 @@ void platform_init(void)
 	data |= AFIO_MAPR_SWJ_CFG_JTAG_OFF_SW_OFF;
 	AFIO_MAPR = data;
 	/* Setup JTAG GPIO ports */
-	gpio_set_mode(TMS_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+	gpio_set_mode(TMS_PORT, GPIO_MODE_OUTPUT_2_MHZ,
 			GPIO_CNF_INPUT_FLOAT, TMS_PIN);
-	gpio_set_mode(TCK_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+	gpio_set_mode(TCK_PORT, GPIO_MODE_OUTPUT_2_MHZ,
 			GPIO_CNF_OUTPUT_PUSHPULL, TCK_PIN);
-	gpio_set_mode(TDI_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+	gpio_set_mode(TDI_PORT, GPIO_MODE_OUTPUT_2_MHZ,
 			GPIO_CNF_OUTPUT_PUSHPULL, TDI_PIN);
 
 	gpio_set_mode(TDO_PORT, GPIO_MODE_INPUT,
@@ -118,7 +117,7 @@ void platform_srst_set_val(bool assert)
 {
 	/* We reuse JSRST as SRST.*/
 	if (assert) {
-		gpio_set_mode(JRST_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+		gpio_set_mode(JRST_PORT, GPIO_MODE_OUTPUT_2_MHZ,
 		              GPIO_CNF_OUTPUT_OPENDRAIN, JRST_PIN);
 		/* Wait until requested value is active.*/
 		while (gpio_get(JRST_PORT, JRST_PIN))

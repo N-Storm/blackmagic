@@ -297,42 +297,41 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 	 * that is, the actual values are found in the Technical Reference Manual
 	 * for each Cortex-M core.
 	 */
-	uint32_t cpuid = target_mem_read32(t, CORTEXM_CPUID);
-	uint16_t partno = (cpuid >> 4) & 0xfff;
-
-	switch (partno) {
-	case 0xd21:
+	t->cpuid = target_mem_read32(t, CORTEXM_CPUID);
+	uint32_t cpuid_partno = t->cpuid & CPUID_PARTNO_MASK;
+	switch (cpuid_partno) {
+	case CORTEX_M33:
 		t->core = "M33";
 		break;
-
-	case 0xd20:
+	case CORTEX_M23:
 		t->core = "M23";
 		break;
-
-	case 0xc23:
+	case CORTEX_M3:
 		t->core = "M3";
 		break;
-
-	case 0xc24:
+	case CORTEX_M4:
 		t->core = "M4";
 		break;
-
-	case 0xc27:
+	case CORTEX_M7:
 		t->core = "M7";
-		if ((((cpuid >> 20) & 0xf) == 0) && (((cpuid >> 0) & 0xf) < 2)) {
+		if (((t->cpuid & CPUID_REVISION_MASK) == 0) &&
+			(t->cpuid & CPUID_PATCH_MASK) < 2) {
 			DEBUG_WARN("Silicon bug: Single stepping will enter pending "
 					   "exception handler with this M7 core revision!\n");
 		}
 		break;
-
-	case 0xc60:
+	case CORTEX_M0P:
 		t->core = "M0+";
 		break;
-
-	case 0xc20:
+	case CORTEX_M0:
 		t->core = "M0";
 		break;
+	default:
+		DEBUG_WARN("Unexpected CortexM CPUID partno %04x\n", cpuid_partno);
 	}
+	DEBUG_INFO("CPUID 0x%08" PRIx32 " (%s var %x rev %x)\n", t->cpuid,
+			   t->core, (t->cpuid & CPUID_REVISION_MASK) >> 20,
+			   t->cpuid & CPUID_PATCH_MASK);
 
 	t->attach = cortexm_attach;
 	t->detach = cortexm_detach;
@@ -388,6 +387,12 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 			target_halt_resume(t, 0);
 		}
 		break;
+	case AP_DESIGNER_CS:
+		PROBE(stm32f1_probe);
+		break;
+	case AP_DESIGNER_GIGADEVICE:
+		PROBE(gd32f1_probe);
+		break;
 	case AP_DESIGNER_STM:
 		PROBE(stm32f1_probe);
 		PROBE(stm32f4_probe);
@@ -433,17 +438,31 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 						   "probed device\n", ap->ap_designer, ap->ap_partno);
 #endif
 		}
-		if (ap->ap_partno == 0x4c3)  /* Cortex-M3 ROM */
+		if (ap->ap_partno == 0x4c3)  { /* Cortex-M3 ROM */
 			PROBE(stm32f1_probe); /* Care for STM32F1 clones */
-		else if (ap->ap_partno == 0x471)  { /* Cortex-M0 ROM */
+			PROBE(lpc15xx_probe); /* Thanks to JojoS for testing */
+		} else if (ap->ap_partno == 0x471)  { /* Cortex-M0 ROM */
 			PROBE(lpc11xx_probe); /* LPC24C11 */
 			PROBE(lpc43xx_probe);
-		}
-		else if (ap->ap_partno == 0x4c4) /* Cortex-M4 ROM */
+		} else if (ap->ap_partno == 0x4c4) { /* Cortex-M4 ROM */
+			/* The LPC546xx and LPC43xx parts present with the same AP ROM Part
+			Number, so we need to probe both. Unfortunately, when probing for
+			the LPC43xx when the target is actually an LPC546xx, the memory
+			location checked is illegal for the LPC546xx and puts the chip into
+			Lockup, requiring a RST pulse to recover. Instead, make sure to
+			probe for the LPC546xx first, which experimentally doesn't harm
+			LPC43xx detection. */
+			PROBE(lpc546xx_probe);
+
 			PROBE(lpc43xx_probe);
+			PROBE(kinetis_probe); /* Older K-series */
+		} else if (ap->ap_partno == 0x4cb) { /* Cortex-M23 ROM */
+			PROBE(gd32f1_probe); /* GD32E23x uses GD32F1 peripherals */
+		} else if (ap->ap_partno == 0x4c0) { /* Cortex-M0+ ROM */
+			PROBE(lpc11xx_probe); /* some of the LPC8xx series, like LPC802 */
+		}
 		/* Info on PIDR of these parts wanted! */
 		PROBE(sam3x_probe);
-		PROBE(lpc15xx_probe);
 		PROBE(lmi_probe);
 		PROBE(ke04_probe);
 		PROBE(lpc17xx_probe);
@@ -534,8 +553,6 @@ void cortexm_detach(target *t)
 	target_mem_write32(t, CORTEXM_DEMCR, ap->ap_cortexm_demcr);
 	/* Disable debug */
 	target_mem_write32(t, CORTEXM_DHCSR, CORTEXM_DHCSR_DBGKEY);
-	/* Add some clock cycles to get the CPU running again.*/
-	target_mem_read32(t, 0);
 }
 
 enum { DB_DHCSR, DB_DCRSR, DB_DCRDR, DB_DEMCR };

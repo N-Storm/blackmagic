@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2011  Black Sphere Technologies Ltd.
  * Written by Gareth McMullin <gareth@blacksphere.co.nz>
+ * Copyright (C) 2020- 2021 Uwe Bonnes (bon@elektron.ikp.physik.tu-darmstadt.de)
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,10 +34,10 @@
 #define SWDP_ACK_WAIT  0x02
 #define SWDP_ACK_FAULT 0x04
 
-int adiv5_swdp_scan(void)
+int adiv5_swdp_scan(uint32_t targetid)
 {
 	uint32_t ack;
-
+	(void) targetid;
 	target_list_free();
 #if PC_HOSTED == 1
 	if (platform_swdptap_init()) {
@@ -167,19 +168,17 @@ uint32_t firmware_swdp_low_access(ADIv5_DP_t *dp, uint8_t RnW,
 			raise_exception(EXCEPTION_ERROR, "SWDP Parity error");
 	} else {
 		swd_proc.swdptap_seq_out_parity(value, 32);
-		/* RM0377 Rev. 8 Chapter 27.5.4 for STM32L0x1 states:
-		 * Because of the asynchronous clock domains SWCLK and HCLK,
-		 * two extra SWCLK cycles are needed after a write transaction
-		 * (after the parity bit) to make the write effective
-		 * internally. These cycles should be applied while driving
-		 * the line low (IDLE state)
-		 * This is particularly important when writing the CTRL/STAT
-		 * for a power-up request. If the next transaction (requiring
-		 * a power-up) occurs immediately, it will fail.
+		/* ARM Debug Interface Architecture Specification ADIv5.0 to ADIv5.2
+		 * tells to clock the data through SW-DP to either :
+		 * - immediate start a new transaction
+		 * - continue to drive idle cycles
+		 * - or clock at least 8 idle cycles
+		 *
+		 * Implement last option to favour correctness over
+		 *   slight speed decrease
 		 */
-		swd_proc.swdptap_seq_out(0, 2);
+		swd_proc.swdptap_seq_out(0, 8);
 	}
-
 	return response;
 }
 

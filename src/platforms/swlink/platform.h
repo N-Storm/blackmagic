@@ -28,7 +28,6 @@
 #include "gpio.h"
 #include "timing.h"
 #include "timing_stm32.h"
-#include "version.h"
 
 #ifdef ENABLE_DEBUG
 # define PLATFORM_HAS_DEBUG
@@ -37,11 +36,7 @@ extern bool debug_bmp;
 int usbuart_debug_write(const char *buf, size_t len);
 #endif
 
-#define BOARD_IDENT			"Black Magic Probe (SWLINK), (Firmware " FIRMWARE_VERSION ")"
-#define BOARD_IDENT_DFU		"Black Magic (Upgrade), SWLINK, (Firmware " FIRMWARE_VERSION ")"
-#define BOARD_IDENT_UPD		"Black Magic (DFU Upgrade), SWLINK, (Firmware " FIRMWARE_VERSION ")"
-#define DFU_IDENT			"Black Magic Firmware Upgrade (SWLINK)"
-#define UPD_IFACE_STRING	"@Internal Flash   /0x08000000/8*001Kg"
+#define PLATFORM_IDENT		"(SWLINK) "
 
 /* Hardware definitions... */
 #define TMS_PORT	GPIOA
@@ -72,7 +67,7 @@ int usbuart_debug_write(const char *buf, size_t len);
 # define SWD_CR_MULT (1 << ((13 - 8) << 2))
 
 #define TMS_SET_MODE() \
-	gpio_set_mode(TMS_PORT, GPIO_MODE_OUTPUT_50_MHZ, \
+	gpio_set_mode(TMS_PORT, GPIO_MODE_OUTPUT_2_MHZ, \
 	              GPIO_CNF_OUTPUT_PUSHPULL, TMS_PIN);
 #define SWDIO_MODE_FLOAT() 	do { \
 	uint32_t cr = SWD_CR; \

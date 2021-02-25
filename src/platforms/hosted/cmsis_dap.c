@@ -34,6 +34,7 @@
 #include <hidapi.h>
 #include <wchar.h>
 
+#include "bmp_hosted.h"
 #include "dap.h"
 #include "cmsis_dap.h"
 
@@ -55,18 +56,18 @@ int dap_init(bmp_info_t *info)
 	if (hid_init())
 		return -1;
 	int size = strlen(info->serial);
-	wchar_t serial[size + 1], *wc = serial;
+	wchar_t serial[64] = {0}, *wc = serial;
 	for (int i = 0; i < size; i++)
 		*wc++ = info->serial[i];
 	*wc = 0;
-	/* Blacklist devices that do not wirk with 513 byte report length
+	/* Blacklist devices that do not work with 513 byte report length
 	 * FIXME: Find a solution to decipher from the device.
 	 */
 	if ((info->vid == 0x1fc9) && (info->pid == 0x0132)) {
 		DEBUG_WARN("Blacklist\n");
 		report_size = 64 + 1;
 	}
-	handle = hid_open(info->vid, info->pid, serial);
+	handle = hid_open(info->vid, info->pid,  (serial[0]) ? serial : NULL);
 	if (!handle)
 		return -1;
 	dap_disconnect();
@@ -270,7 +271,6 @@ int dap_enter_debug_swd(ADIv5_DP_t *dp)
 	if (!(dap_caps & DAP_CAP_SWD))
 		return -1;
 	mode =  DAP_CAP_SWD;
-	dap_swj_clock(2000000);
 	dap_transfer_configure(2, 128, 128);
 	dap_swd_configure(0);
 	dap_connect(false);
@@ -339,7 +339,6 @@ int cmsis_dap_jtagtap_init(jtag_proc_t *jtag_proc)
 	mode =  DAP_CAP_JTAG;
 	dap_disconnect();
 	dap_connect(true);
-	dap_swj_clock(2000000);
 	jtag_proc->jtagtap_reset       = cmsis_dap_jtagtap_reset;
 	jtag_proc->jtagtap_next        = cmsis_dap_jtagtap_next;
 	jtag_proc->jtagtap_tms_seq     = cmsis_dap_jtagtap_tms_seq;

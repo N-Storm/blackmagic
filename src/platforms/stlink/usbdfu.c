@@ -63,9 +63,9 @@ int main(void)
 
 	if(((GPIOA_CRL & 0x40) == 0x40) && stlink_test_nrst())
 		dfu_jump_app_if_valid();
-	dfu_protect(DFU_MODE);
+	dfu_protect(false);
 
-	rcc_clock_setup_in_hse_8mhz_out_72mhz();
+	rcc_clock_setup_pll(&rcc_hse_configs[RCC_CLOCK_HSE8_72MHZ]);
 	systick_set_clocksource(STK_CSR_CLKSOURCE_AHB_DIV8);
 	systick_set_reload(900000);
 
@@ -75,7 +75,7 @@ int main(void)
 
 	if (rev > 1)
 		gpio_set(GPIOA, GPIO15);
-	dfu_init(&st_usbfs_v1_usb_driver, DFU_MODE);
+	dfu_init(&st_usbfs_v1_usb_driver);
 
 	dfu_main();
 }

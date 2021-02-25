@@ -29,14 +29,16 @@
 int platform_buffer_write(const uint8_t *data, int size);
 int platform_buffer_read(uint8_t *data, int size);
 
-int remote_init(bool verbose);
+int remote_init(void);
 int remote_swdptap_init(swd_proc_t *swd_proc);
 int remote_jtagtap_init(jtag_proc_t *jtag_proc);
 bool remote_target_get_power(void);
 const char *remote_target_voltage(void);
-void remote_target_set_power(bool power);
+bool remote_target_set_power(bool power);
 void remote_srst_set_val(bool assert);
 bool remote_srst_get_val(void);
+void remote_max_frequency_set(uint32_t freq);
+uint32_t remote_max_frequency_get(void);
 const char *platform_target_voltage(void);
 void remote_adiv5_dp_defaults(ADIv5_DP_t *dp);
 void remote_add_jtag_dev(int i, const jtag_dev_t *jtag_dev);

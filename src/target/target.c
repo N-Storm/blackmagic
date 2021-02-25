@@ -69,13 +69,13 @@ target *target_new(void)
 	return t;
 }
 
-bool target_foreach(void (*cb)(int, target *t, void *context), void *context)
+int target_foreach(void (*cb)(int, target *t, void *context), void *context)
 {
 	int i = 1;
 	target *t = target_list;
 	for (; t; t = t->next, i++)
 		cb(i, t, context);
-	return target_list != NULL;
+	return i;
 }
 
 void target_mem_map_free(target *t)
@@ -100,7 +100,7 @@ void target_list_free(void)
 
 	while(target_list) {
 		target *t = target_list->next;
-		if (target_list->tc)
+		if (target_list->tc && target_list->tc->destroy_callback)
 			target_list->tc->destroy_callback(target_list->tc, target_list);
 		if (target_list->priv)
 			target_list->priv_free(target_list->priv);
