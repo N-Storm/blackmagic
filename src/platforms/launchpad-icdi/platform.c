@@ -25,9 +25,6 @@
 #include <libopencm3/cm3/systick.h>
 #include <libopencm3/lm4f/usb.h>
 
-#define SYSTICKHZ	100
-#define SYSTICKMS	(1000 / SYSTICKHZ)
-
 #define PLL_DIV_80MHZ	5
 #define PLL_DIV_25MHZ	16
 
@@ -120,7 +117,7 @@ const char *platform_target_voltage(void)
 	return NULL;
 }
 
-char *serial_no_read(char *s, int max)
+char *serial_no_read(char *s)
 {
 	/* FIXME: Store a unique serial number somewhere and retreive here */
 	uint32_t unique_id = SERIAL_NO;
@@ -130,10 +127,10 @@ char *serial_no_read(char *s, int max)
         for(i = 0; i < 8; i++) {
                 s[7-i] = ((unique_id >> (4*i)) & 0xF) + '0';
         }
-        for(i = 0; i < max - 1; i++)
+        for(i = 0; i < DFU_SERIAL_LENGTH - 1; i++)
                 if(s[i] > '9')
                         s[i] += 'A' - '9' - 1;
-	s[max] = 0;
+	s[DFU_SERIAL_LENGTH - 1] = 0;
 
 	return s;
 }

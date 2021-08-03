@@ -19,7 +19,6 @@
  */
 
 #include "general.h"
-#include "target.h"
 #include "target_internal.h"
 
 #include <stdarg.h>
@@ -54,7 +53,6 @@ target *target_new(void)
 
 	t->attach = (void*)nop_function;
 	t->detach = (void*)nop_function;
-	t->check_error = (void*)nop_function;
 	t->mem_read = (void*)nop_function;
 	t->mem_write = (void*)nop_function;
 	t->reg_read = (void*)nop_function;
@@ -65,6 +63,8 @@ target *target_new(void)
 	t->halt_request = (void*)nop_function;
 	t->halt_poll = (void*)nop_function;
 	t->halt_resume = (void*)nop_function;
+
+	t->target_storage = NULL;
 
 	return t;
 }
@@ -109,6 +109,7 @@ void target_list_free(void)
 			free(target_list->commands);
 			target_list->commands = tc;
 		}
+		free(target_list->target_storage);
 		target_mem_map_free(target_list);
 		while (target_list->bw_list) {
 			void * next = target_list->bw_list->next;
@@ -275,7 +276,7 @@ int target_flash_done(target *t)
 		if (tmp)
 			return tmp;
 		if (f->done) {
-			int tmp = f->done(f);
+			tmp = f->done(f);
 			if (tmp)
 				return tmp;
 		}
@@ -340,12 +341,17 @@ void target_detach(target *t)
 	t->detach(t);
 	t->attached = false;
 #if PC_HOSTED == 1
-# include "platform.h"
 	platform_buffer_flush();
 #endif
 }
 
-bool target_check_error(target *t) { return t->check_error(t); }
+bool target_check_error(target *t) {
+	if (t)
+		return t->check_error(t);
+	else
+		return false;
+}
+
 bool target_attached(target *t) { return t->attached; }
 
 /* Memory access functions */
@@ -576,6 +582,7 @@ void tc_printf(target *t, const char *fmt, ...)
 
 	va_start(ap, fmt);
 	t->tc->printf(t->tc, fmt, ap);
+	fflush(stdout);
 	va_end(ap);
 }
 

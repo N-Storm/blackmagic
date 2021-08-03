@@ -21,7 +21,6 @@
  */
 
 #include "general.h"
-#include "swdptap.h"
 #include "jtagtap.h"
 #include "target.h"
 #include "target_internal.h"
@@ -41,7 +40,6 @@
 
 bmp_info_t info;
 
-swd_proc_t swd_proc;
 jtag_proc_t jtag_proc;
 
 void gdb_ident(char *p, int count)
@@ -54,7 +52,8 @@ static void exit_function(void)
 {
 	libusb_exit_function(&info);
 	switch (info.bmp_type) {
-	case BMP_TYPE_CMSIS_DAP:
+	case BMP_TYPE_CMSIS_DAP_V1:
+	case BMP_TYPE_CMSIS_DAP_V2:
 		dap_exit_function();
 		break;
 	default:
@@ -94,7 +93,8 @@ void platform_init(int argc, char **argv)
 		if (stlink_init( &info))
 			exit(-1);
 		break;
-	case BMP_TYPE_CMSIS_DAP:
+	case BMP_TYPE_CMSIS_DAP_V1:
+	case BMP_TYPE_CMSIS_DAP_V2:
 		if (dap_init( &info))
 			exit(-1);
 		break;
@@ -123,11 +123,11 @@ int platform_adiv5_swdp_scan(uint32_t targetid)
 {
 	info.is_jtag = false;
 	platform_max_frequency_set(cl_opts.opt_max_swj_frequency);
-	if (targetid && (info.bmp_type != BMP_TYPE_BMP))
-		DEBUG_WARN("Ignoring TARGETID for now!\n");
 	switch (info.bmp_type) {
 	case BMP_TYPE_BMP:
 	case BMP_TYPE_LIBFTDI:
+	case BMP_TYPE_CMSIS_DAP_V1:
+	case BMP_TYPE_CMSIS_DAP_V2:
 		return adiv5_swdp_scan(targetid);
 		break;
 	case BMP_TYPE_STLINKV2:
@@ -135,19 +135,6 @@ int platform_adiv5_swdp_scan(uint32_t targetid)
 		target_list_free();
 		ADIv5_DP_t *dp = (void*)calloc(1, sizeof(*dp));
 		if (stlink_enter_debug_swd(&info, dp)) {
-			free(dp);
-		} else {
-			adiv5_dp_init(dp);
-			if (target_list)
-				return 1;
-		}
-		break;
-	}
-	case BMP_TYPE_CMSIS_DAP:
-	{
-		target_list_free();
-		ADIv5_DP_t *dp = (void*)calloc(1, sizeof(*dp));
-		if (dap_enter_debug_swd(dp)) {
 			free(dp);
 		} else {
 			adiv5_dp_init(dp);
@@ -164,17 +151,19 @@ int platform_adiv5_swdp_scan(uint32_t targetid)
 	return 0;
 }
 
-int platform_swdptap_init(void)
+int swdptap_init(ADIv5_DP_t *dp)
 {
 	switch (info.bmp_type) {
 	case BMP_TYPE_BMP:
-		return remote_swdptap_init(&swd_proc);
+		return remote_swdptap_init(dp);
+	case BMP_TYPE_CMSIS_DAP_V1:
+	case BMP_TYPE_CMSIS_DAP_V2:
+		return dap_swdptap_init(dp);
 	case BMP_TYPE_STLINKV2:
-	case BMP_TYPE_CMSIS_DAP:
 	case BMP_TYPE_JLINK:
 		return 0;
 	case BMP_TYPE_LIBFTDI:
-		return libftdi_swdptap_init(&swd_proc);
+		return libftdi_swdptap_init(dp);
 	default:
 		return -1;
 	}
@@ -195,7 +184,8 @@ int platform_jtag_scan(const uint8_t *lrlens)
 	case BMP_TYPE_BMP:
 	case BMP_TYPE_LIBFTDI:
 	case BMP_TYPE_JLINK:
-	case BMP_TYPE_CMSIS_DAP:
+	case BMP_TYPE_CMSIS_DAP_V1:
+	case BMP_TYPE_CMSIS_DAP_V2:
 		return jtag_scan(lrlens);
 	case BMP_TYPE_STLINKV2:
 		return jtag_scan_stlinkv2(&info, lrlens);
@@ -216,7 +206,8 @@ int platform_jtagtap_init(void)
 		return libftdi_jtagtap_init(&jtag_proc);
 	case BMP_TYPE_JLINK:
 		return jlink_jtagtap_init(&info, &jtag_proc);
-	case BMP_TYPE_CMSIS_DAP:
+	case BMP_TYPE_CMSIS_DAP_V1:
+	case BMP_TYPE_CMSIS_DAP_V2:
 		return cmsis_dap_jtagtap_init(&jtag_proc);
 	default:
 		return -1;
@@ -235,7 +226,8 @@ void platform_adiv5_dp_defaults(ADIv5_DP_t *dp)
 		return remote_adiv5_dp_defaults(dp);
 	case BMP_TYPE_STLINKV2:
 		return stlink_adiv5_dp_defaults(dp);
-	case BMP_TYPE_CMSIS_DAP:
+	case BMP_TYPE_CMSIS_DAP_V1:
+	case BMP_TYPE_CMSIS_DAP_V2:
 		return dap_adiv5_dp_defaults(dp);
 	default:
 		break;
@@ -251,7 +243,8 @@ int platform_jtag_dp_init(ADIv5_DP_t *dp)
 		return 0;
 	case BMP_TYPE_STLINKV2:
 		return stlink_jtag_dp_init(dp);
-	case BMP_TYPE_CMSIS_DAP:
+	case BMP_TYPE_CMSIS_DAP_V1:
+	case BMP_TYPE_CMSIS_DAP_V2:
 		return dap_jtag_dp_init(dp);
 	default:
 		return 0;
@@ -270,8 +263,10 @@ char *platform_ident(void)
 		return "STLINKV2";
 	  case BMP_TYPE_LIBFTDI:
 		return "LIBFTDI";
-	  case BMP_TYPE_CMSIS_DAP:
-		return "CMSIS_DAP";
+	  case BMP_TYPE_CMSIS_DAP_V1:
+		return "CMSIS_DAP_V1";
+	  case BMP_TYPE_CMSIS_DAP_V2:
+		return "CMSIS_DAP_V2";
 	  case BMP_TYPE_JLINK:
 		return "JLINK";
 	}
@@ -332,7 +327,8 @@ void platform_max_frequency_set(uint32_t freq)
 	case BMP_TYPE_BMP:
 		remote_max_frequency_set(freq);
 		break;
-	case BMP_TYPE_CMSIS_DAP:
+	case BMP_TYPE_CMSIS_DAP_V1:
+	case BMP_TYPE_CMSIS_DAP_V2:
 		dap_swj_clock(freq);
 		break;
 	case BMP_TYPE_LIBFTDI:
@@ -363,7 +359,8 @@ uint32_t platform_max_frequency_get(void)
 	switch (info.bmp_type) {
 	case BMP_TYPE_BMP:
 		return remote_max_frequency_get();
-	case BMP_TYPE_CMSIS_DAP:
+	case BMP_TYPE_CMSIS_DAP_V1:
+	case BMP_TYPE_CMSIS_DAP_V2:
 		return dap_swj_clock(0);
 		break;
 	case BMP_TYPE_LIBFTDI:

@@ -41,7 +41,6 @@
 #include <libopencm3/usb/cdc.h>
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/usb/dfu.h>
-#include <stdlib.h>
 
 #define DFU_IF_NO 4
 
@@ -52,7 +51,7 @@ static int cdcacm_gdb_dtr = 1;
 
 static void cdcacm_set_modem_state(usbd_device *dev, int iface, bool dsr, bool dcd);
 
-static const struct usb_device_descriptor dev = {
+static const struct usb_device_descriptor dev_desc = {
 	.bLength = USB_DT_DEVICE_SIZE,
 	.bDescriptorType = USB_DT_DEVICE,
 	.bcdUSB = 0x0200,
@@ -394,12 +393,7 @@ static const struct usb_config_descriptor config = {
 
 	.interface = ifaces,
 };
-
-#if defined(DUSE_ST_SERIAL)
-char serial_no[13];
-#else
-static char serial_no[9];
-#endif
+static char serial_no[DFU_SERIAL_LENGTH];
 
 #define BOARD_IDENT "Black Magic Probe " PLATFORM_IDENT FIRMWARE_VERSION
 #define DFU_IDENT   "Black Magic Firmware Upgrade " PLATFORM_IDENT FIRMWARE_VERSION
@@ -424,7 +418,9 @@ static void dfu_detach_complete(usbd_device *dev, struct usb_setup_data *req)
 	platform_request_boot();
 
 	/* Reset core to enter bootloader */
+#if defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7EM__)
 	scb_reset_core();
+#endif
 }
 
 static enum usbd_request_return_codes  cdcacm_control_request(usbd_device *dev,
@@ -555,9 +551,9 @@ void cdcacm_init(void)
 {
 	void exti15_10_isr(void);
 
-	serial_no_read(serial_no, sizeof(serial_no));
+	serial_no_read(serial_no);
 
-	usbdev = usbd_init(&USB_DRIVER, &dev, &config, usb_strings,
+	usbdev = usbd_init(&USB_DRIVER, &dev_desc, &config, usb_strings,
 			    sizeof(usb_strings)/sizeof(char *),
 			    usbd_control_buffer, sizeof(usbd_control_buffer));
 

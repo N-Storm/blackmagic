@@ -19,18 +19,18 @@
 
 /* Find all known serial connected debuggers */
 
+#include "general.h"
 #include <dirent.h>
 #include <errno.h>
-#include <stdio.h>
-#include "general.h"
-#include "platform.h"
 #include "bmp_hosted.h"
 #include "version.h"
 
 void bmp_ident(bmp_info_t *info)
 {
-	(void) info;
+	if (!info)
+		return;
 	DEBUG_INFO("BMP hosted (BMP Only) %s\n", FIRMWARE_VERSION);
+	DEBUG_INFO("Using:\n %s %s %s\n", info->manufacturer, info->version, info->serial);
 }
 
 void libusb_exit_function(bmp_info_t *info) {(void)info;};
@@ -154,6 +154,10 @@ print_probes_info:
 }
 
 #else
+/* Old ID: Black_Sphere_Technologies_Black_Magic_Probe_BFE4D6EC-if00
+ * Recent: Black_Sphere_Technologies_Black_Magic_Probe_v1.7.1-212-g212292ab_7BAE7AB8-if00
+ * usb-Black_Sphere_Technologies_Black_Magic_Probe__SWLINK__v1.7.1-155-gf55ad67b-dirty_DECB8811-if00
+ */
 #define BMP_IDSTRING "usb-Black_Sphere_Technologies_Black_Magic_Probe"
 #define DEVICE_BY_ID "/dev/serial/by-id/"
 
@@ -172,38 +176,45 @@ static int scan_linux_id(char *name, char *type, char *version, char  *serial)
 		DEBUG_WARN("Unexpected end\n");
 		return -1;
 	}
-	char *p = strchr(name, '_');
-	if (!p) {
-		DEBUG_WARN("type not found\n");
-		return -1;
+	char *p = name;
+	char *delims[4] = {0,0,0,0};
+	int underscores = 0;
+	while (*p) {
+		if (*p == '_') {
+			while (p[1] == '_')
+				p++; /* remove multiple underscores */
+			if (underscores > 2)
+				return -1;
+			delims[underscores] = p;
+			underscores ++;
+		}
+		p++;
 	}
-	strncpy(type, name, p - name);
-	name = p;
-	while (*name != 'v')
-		name++;
-	if (!*name) {
-		DEBUG_WARN("Unexpected end after type\n");
-		return -1;
+	if (underscores == 0) { /* Old BMP native */
+		int res;
+		res = sscanf(name, "%8s-if00", serial);
+		if (res != 1)
+			return -1;
+		strcpy(type, "Native");
+		strcpy(version, "Unknown");
+	} else if (underscores == 2) {
+		strncpy(type, name, delims[0] - name - 1);
+		strncpy(version, delims[0] + 1, delims[1] - delims[0] - 1);
+		int res = sscanf(delims[1] + 1, "%8s-if00", serial);
+		if (!res)
+			return -1;
+	} else {
+		int res = sscanf(delims[0] + 1, "%8s-if00", serial);
+		if (!res)
+			return -1;
+		if (name[0] == 'v') {
+			strcpy(type, "Unknown");
+			strncpy(version, name, delims[0] - name - 1);
+		} else {
+			strncpy(type, name, delims[0] - name);
+			strcpy(type, "Unknown");
+		}
 	}
-	p = strchr(name, '_');
-	if (!p) {
-		DEBUG_WARN("version not found\n");
-		return -1;
-	}
-	strncpy(version, name, p - name);
-	name = p;
-	while (*name == '_')
-		name++;
-	if (!*name) {
-		DEBUG_WARN("Unexpected end after version\n");
-		return -1;
-	}
-	p = strchr(name, '-');
-	if (!p) {
-		DEBUG_WARN("Serial not found\n");
-		return -1;
-	}
-	strncpy(serial, name, p - name);
 	return 0;
 }
 
@@ -231,8 +242,9 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
 				(cl_opts->opt_position && cl_opts->opt_position == i)) {
 				/* With serial number given and partial match, we are done!*/
 				strncpy(info->serial, serial, sizeof(info->serial));
-				strncpy(info->manufacturer, "BMP", sizeof(info->manufacturer));
-				strncpy(info->product, type, sizeof(info->product));
+				int res = snprintf(info->manufacturer, sizeof(info->manufacturer), "Black Magic Probe (%s)", type);
+				if (res)
+					DEBUG_WARN("Overflow\n");
 				strncpy(info->version, version, sizeof(info->version));
 				found_bmps = 1;
 				break;
@@ -245,8 +257,8 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
 	if (found_bmps < 1) {
 		DEBUG_WARN("No BMP probe found\n");
 		return -1;
-	} else if (found_bmps > 1) {
-		DEBUG_INFO("Available Probes:\n");
+	} else if ((found_bmps > 1) || cl_opts->opt_list_only) {
+		DEBUG_WARN("Available Probes:\n");
 	}
 	dir = opendir(DEVICE_BY_ID);
 	i = 0;
@@ -258,21 +270,20 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
 			if (scan_linux_id(dp->d_name, type, version, serial)) {
 				DEBUG_WARN("Unexpected device name found \"%s\"\n",
 						   dp->d_name);
-			} else if (found_bmps == 1) {
+			} else if ((found_bmps == 1) && (!cl_opts->opt_list_only)) {
 				strncpy(info->serial, serial, sizeof(info->serial));
 				found_bmps = 1;
 				strncpy(info->serial, serial, sizeof(info->serial));
-				strncpy(info->manufacturer, "BMP", sizeof(info->manufacturer));
-				strncpy(info->product, type, sizeof(info->product));
+				snprintf(info->manufacturer, sizeof(info->manufacturer), "Black Magic Probe (%s)", type);
 				strncpy(info->version, version, sizeof(info->version));
 				break;
-			} else if (found_bmps > 1) {
+			} else if (found_bmps > 0) {
 				DEBUG_WARN("%2d: %s, Black Sphere Technologies, Black Magic "
 						   "Probe (%s), %s\n", i, serial, type, version);
 			}
 		}
 	}
 	closedir(dir);
-	return (found_bmps == 1) ? 0 : 1;
+	return (found_bmps == 1 && !cl_opts->opt_list_only) ? 0 : 1;
 }
 #endif

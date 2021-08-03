@@ -33,7 +33,6 @@
 #include "target.h"
 #include "target_internal.h"
 #include "cortexm.h"
-#include "platform.h"
 #include "command.h"
 #include "gdb_packet.h"
 
@@ -86,7 +85,7 @@ static int cortexm_breakwatch_clear(target *t, struct breakwatch *);
 static target_addr cortexm_check_watch(target *t);
 
 #define CORTEXM_MAX_WATCHPOINTS	4	/* architecture says up to 15, no implementation has > 4 */
-#define CORTEXM_MAX_BREAKPOINTS	6	/* architecture says up to 127, no implementation has > 6 */
+#define CORTEXM_MAX_BREAKPOINTS	8	/* architecture says up to 127, no implementation has > 8 */
 
 static int cortexm_hostio_request(target *t);
 
@@ -327,9 +326,12 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 		t->core = "M0";
 		break;
 	default:
-		DEBUG_WARN("Unexpected CortexM CPUID partno %04x\n", cpuid_partno);
+		if (ap->ap_designer != AP_DESIGNER_ATMEL) /* Protected Atmel device?*/{
+			DEBUG_WARN("Unexpected CortexM CPUID partno %04" PRIx32 "\n", cpuid_partno);
+		}
 	}
-	DEBUG_INFO("CPUID 0x%08" PRIx32 " (%s var %x rev %x)\n", t->cpuid,
+	DEBUG_INFO("CPUID 0x%08" PRIx32 " (%s var %" PRIx32 " rev %" PRIx32 ")\n",
+			   t->cpuid,
 			   t->core, (t->cpuid & CPUID_REVISION_MASK) >> 20,
 			   t->cpuid & CPUID_PATCH_MASK);
 
@@ -377,7 +379,7 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 		target_check_error(t);
 	}
 #define PROBE(x) \
-	do { if ((x)(t)) {target_halt_resume(t, 0); return true;} else target_check_error(t); } while (0)
+	do { if ((x)(t)) {return true;} else target_check_error(t); } while (0)
 
 	switch (ap->ap_designer) {
 	case AP_DESIGNER_FREESCALE:
@@ -399,10 +401,7 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 		PROBE(stm32h7_probe);
 		PROBE(stm32l0_probe);
 		PROBE(stm32l4_probe);
-		if (ap->ap_partno == 0x472) {
-			t->driver = "STM32L552(no flash)";
-			target_halt_resume(t, 0);
-		}
+		PROBE(stm32g0_probe);
 		break;
 	case AP_DESIGNER_CYPRESS:
 		DEBUG_WARN("Unhandled Cypress device\n");
@@ -438,7 +437,11 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 						   "probed device\n", ap->ap_designer, ap->ap_partno);
 #endif
 		}
-		if (ap->ap_partno == 0x4c3)  { /* Cortex-M3 ROM */
+		if (ap->ap_partno == 0x4c0)  { /* Cortex-M0+ ROM */
+			if ((ap->dp->targetid & 0xfff) == AP_DESIGNER_RASPBERRY)
+				PROBE(rp_probe);
+			PROBE(lpc11xx_probe); /* LPC8 */
+		} else if (ap->ap_partno == 0x4c3)  { /* Cortex-M3 ROM */
 			PROBE(stm32f1_probe); /* Care for STM32F1 clones */
 			PROBE(lpc15xx_probe); /* Thanks to JojoS for testing */
 		} else if (ap->ap_partno == 0x471)  { /* Cortex-M0 ROM */
@@ -523,7 +526,7 @@ bool cortexm_attach(target *t)
 		platform_timeout timeout;
 		platform_timeout_set(&timeout, 1000);
 		while (1) {
-			uint32_t dhcsr = target_mem_read32(t, CORTEXM_DHCSR);
+			dhcsr = target_mem_read32(t, CORTEXM_DHCSR);
 			if (!(dhcsr & CORTEXM_DHCSR_S_RESET_ST))
 				break;
 			if (platform_timeout_is_expired(&timeout)) {
@@ -569,8 +572,8 @@ static void cortexm_regs_read(target *t, void *data)
 		for(i = 0; i < sizeof(regnum_cortex_m) / 4; i++)
 			*regs++ = base_regs[regnum_cortex_m[i]];
 		if (t->target_options & TOPT_FLAVOUR_V7MF)
-			for(size_t t = 0; t < sizeof(regnum_cortex_mf) / 4; t++)
-			*regs++ = ap->dp->ap_reg_read(ap, regnum_cortex_mf[t]);
+			for(i = 0; i < sizeof(regnum_cortex_mf) / 4; i++)
+				*regs++ = ap->dp->ap_reg_read(ap, regnum_cortex_mf[i]);
 	}
 #else
 	if (0) {}
@@ -924,7 +927,7 @@ int cortexm_run_stub(target *t, uint32_t loadaddr,
 	regs[2] = r2;
 	regs[3] = r3;
 	regs[15] = loadaddr;
-	regs[16] = 0x1000000;
+	regs[REG_XPSR] = CORTEXM_XPSR_THUMB;
 	regs[19] = 0;
 
 	cortexm_regs_write(t, regs);
@@ -934,16 +937,36 @@ int cortexm_run_stub(target *t, uint32_t loadaddr,
 
 	/* Execute the stub */
 	enum target_halt_reason reason;
+#if defined(PLATFORM_HAS_DEBUG)
+	uint32_t arm_regs_start[t->regs_size];
+	target_regs_read(t, arm_regs_start);
+#endif
 	cortexm_halt_resume(t, 0);
-	while ((reason = cortexm_halt_poll(t, NULL)) == TARGET_HALT_RUNNING)
-		;
+	platform_timeout timeout;
+	platform_timeout_set(&timeout, 5000);
+	do {
+		if (platform_timeout_is_expired(&timeout)) {
+			cortexm_halt_request(t);
+#if defined(PLATFORM_HAS_DEBUG)
+			DEBUG_WARN("Stub hangs\n");
+			uint32_t arm_regs[t->regs_size];
+			target_regs_read(t, arm_regs);
+			for (unsigned int i = 0; i < 20; i++) {
+				DEBUG_WARN("%2d: %08" PRIx32 ", %08" PRIx32 "\n",
+						   i, arm_regs_start[i], arm_regs[i]);
+			}
+#endif
+			return -3;
+		}
+	} while ((reason = cortexm_halt_poll(t, NULL)) == TARGET_HALT_RUNNING);
 
 	if (reason == TARGET_HALT_ERROR)
 		raise_exception(EXCEPTION_ERROR, "Target lost in stub");
 
-	if (reason != TARGET_HALT_BREAKPOINT)
+	if (reason != TARGET_HALT_BREAKPOINT) {
+		DEBUG_WARN(" Reasone %d\n", reason);
 		return -2;
-
+	}
 	uint32_t pc = cortexm_pc_read(t);
 	uint16_t bkpt_instr = target_mem_read16(t, pc);
 	if (bkpt_instr >> 8 != 0xbe)

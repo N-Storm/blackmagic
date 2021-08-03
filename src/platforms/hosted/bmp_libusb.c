@@ -24,18 +24,6 @@
 #include "ftdi_bmp.h"
 #include "version.h"
 
-#define VENDOR_ID_STLINK         0x0483
-#define PRODUCT_ID_STLINK_MASK   0xffe0
-#define PRODUCT_ID_STLINK_GROUP  0x3740
-#define PRODUCT_ID_STLINKV1      0x3744
-#define PRODUCT_ID_STLINKV2      0x3748
-#define PRODUCT_ID_STLINKV21     0x374b
-#define PRODUCT_ID_STLINKV21_MSD 0x3752
-#define PRODUCT_ID_STLINKV3      0x374f
-#define PRODUCT_ID_STLINKV3E     0x374e
-
-#define VENDOR_ID_SEGGER         0x1366
-
 #define NO_SERIAL_NUMBER "<no serial number>"
 
 void bmp_ident(bmp_info_t *info)
@@ -60,6 +48,73 @@ void libusb_exit_function(bmp_info_t *info)
 			info->usb_link->ul_libusb_device_handle, 0);
 		libusb_close(info->usb_link->ul_libusb_device_handle);
 	}
+}
+
+static bmp_type_t find_cmsis_dap_interface(libusb_device *dev,bmp_info_t *info) {
+	bmp_type_t type = BMP_TYPE_NONE;
+
+	struct libusb_config_descriptor *conf;
+	char interface_string[128];
+
+	int res = libusb_get_active_config_descriptor(dev, &conf);
+	if (res < 0) {
+		DEBUG_WARN( "WARN: libusb_get_active_config_descriptor() failed: %s",
+				libusb_strerror(res));
+		return type;
+	}
+
+	libusb_device_handle *handle;
+	res = libusb_open(dev, &handle);
+	if (res != LIBUSB_SUCCESS) {
+		DEBUG_INFO("INFO: libusb_open() failed: %s\n",
+					libusb_strerror(res));
+		return type;
+	}
+
+	for (int i = 0; i < conf->bNumInterfaces; i++) {
+		const struct libusb_interface_descriptor *interface = &conf->interface[i].altsetting[0];
+
+		if (!interface->iInterface) {
+			continue;
+		}
+
+		res = libusb_get_string_descriptor_ascii(
+			handle, interface->iInterface, (uint8_t*)interface_string,
+			sizeof(interface_string));
+		if (res < 0) {
+			DEBUG_WARN( "WARN: libusb_get_string_descriptor_ascii() failed: %s\n",
+					libusb_strerror(res));
+			continue;
+		}
+
+		if (!strstr(interface_string, "CMSIS")) {
+			continue;
+		}
+
+		if (interface->bInterfaceClass == 0x03) {
+			type = BMP_TYPE_CMSIS_DAP_V1;
+
+		} else if (interface->bInterfaceClass == 0xff && interface->bNumEndpoints == 2) {
+			type = BMP_TYPE_CMSIS_DAP_V2;
+
+			info->interface_num = interface->bInterfaceNumber;
+
+			for (int j = 0; j < interface->bNumEndpoints; j++) {
+				uint8_t n = interface->endpoint[j].bEndpointAddress;
+
+				if (n & 0x80) {
+					info->in_ep = n;
+				} else {
+					info->out_ep = n;
+				}
+			}
+
+			/* V2 is preferred, return early. */
+			return type;
+		}
+	}
+
+	return type;
 }
 
 int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
@@ -146,9 +201,11 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 		}
 		if (res < 0)
 			serial[0] = 0;
+		manufacturer[0] = 0;
 		res = libusb_get_string_descriptor_ascii(
 			handle, desc.iManufacturer, (uint8_t*)manufacturer,
 			sizeof(manufacturer));
+		product[0] = 0;
 		res = libusb_get_string_descriptor_ascii(
 			handle, desc.iProduct, (uint8_t*)product,
 			sizeof(product));
@@ -167,16 +224,21 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 		if (desc.idVendor == VENDOR_ID_BMP) {
 			if (desc.idProduct == PRODUCT_ID_BMP) {
 				type = BMP_TYPE_BMP;
-			} else if (desc.idProduct == PRODUCT_ID_BMP_BL) {
-				DEBUG_WARN("BMP in botloader mode found. Restart or reflash!\n");
+			} else {
+				if (desc.idProduct == PRODUCT_ID_BMP_BL)
+					DEBUG_WARN("BMP in botloader mode found. Restart or reflash!\n");
 				continue;
 			}
+		} else if ((type == BMP_TYPE_NONE) &&
+				   ((type = find_cmsis_dap_interface(dev, info)) != BMP_TYPE_NONE)) {
+			/* find_cmsis_dap_interface has set valid type*/
 		} else if ((strstr(manufacturer, "CMSIS")) || (strstr(product, "CMSIS"))) {
-			type = BMP_TYPE_CMSIS_DAP;
+			type = BMP_TYPE_CMSIS_DAP_V1;
 		} else if (desc.idVendor ==  VENDOR_ID_STLINK) {
 			if ((desc.idProduct == PRODUCT_ID_STLINKV2) ||
 				(desc.idProduct == PRODUCT_ID_STLINKV21) ||
 				(desc.idProduct == PRODUCT_ID_STLINKV21_MSD) ||
+				(desc.idProduct == PRODUCT_ID_STLINKV3_BL) ||
 				(desc.idProduct == PRODUCT_ID_STLINKV3) ||
 				(desc.idProduct == PRODUCT_ID_STLINKV3E)) {
 				type = BMP_TYPE_STLINKV2;
@@ -194,13 +256,13 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 				if ((cable->vendor != desc.idVendor) || (cable->product != desc.idProduct))
 					continue; /* VID/PID do not match*/
 				if (cl_opts->opt_cable) {
-					if (strcmp(cable->name, cl_opts->opt_cable))
+					if (strncmp(cable->name, cl_opts->opt_cable, strlen(cable->name)))
 						continue; /* cable names do not match*/
 					else
 						found = true;
 				}
 				if (cable->description) {
-					if (strcmp(cable->description, product))
+					if (strncmp(cable->description, product, strlen(cable->description)))
 						continue; /* discriptions do not match*/
 					else
 						found = true;

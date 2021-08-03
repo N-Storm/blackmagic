@@ -24,12 +24,10 @@
 
 #include "general.h"
 #include <unistd.h>
-#include <stdlib.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include "version.h"
-#include "target.h"
 #include "target_internal.h"
 #include "cortexm.h"
 #include "command.h"
@@ -135,6 +133,7 @@ static void cl_help(char **argv)
 	DEBUG_WARN("\t-h\t\t: This help.\n");
 	DEBUG_WARN("\t-v[bitmask]\t: Increasing verbosity. Bitmask:\n");
 	DEBUG_WARN("\t\t\t  1 = INFO, 2 = GDB, 4 = TARGET, 8 = PROBE, 16 = WIRE\n");
+	DEBUG_WARN("\t-l\t\t: List available probes\n");
 	DEBUG_WARN("Probe selection arguments:\n");
 	DEBUG_WARN("\t-d \"path\"\t: Use serial BMP device at <path>");
 #if HOSTED_BMP_ONLY == 1 && defined(__APPLE__)
@@ -160,7 +159,9 @@ static void cl_help(char **argv)
 	DEBUG_WARN("\t-e\t\t: Assume \"resistor SWD connection\" on FTDI: TDI\n"
                "\t\t\t  connected to TMS, TDO to TDI with eventual resistor\n");
 	DEBUG_WARN("\t-E\t\t: Erase flash until flash end or for given size\n");
-	DEBUG_WARN("\t-V\t\t: Verify flash against binary file\n");
+	DEBUG_WARN("\t-w\t\t: Write binary file to target flash (default).\n");
+	DEBUG_WARN("\t-V\t\t: Verify flash against binary file. Can be combined\n"
+	           "\t\t\t  with -w to verify right after programming.\n");
 	DEBUG_WARN("\t-r\t\t: Read flash and write to binary file\n");
 	DEBUG_WARN("\t-p\t\t: Supplies power to the target (where applicable)\n");
 	DEBUG_WARN("\t-R\t\t: Reset device\n");
@@ -181,10 +182,10 @@ void cl_init(BMP_CL_OPTIONS_t *opt, int argc, char **argv)
 {
 	int c;
 	opt->opt_target_dev = 1;
-	opt->opt_flash_size = 16 * 1024 *1024;
+	opt->opt_flash_size = 0xffffffff;
 	opt->opt_flash_start = 0xffffffff;
 	opt->opt_max_swj_frequency = 4000000;
-	while((c = getopt(argc, argv, "eEhHv:d:f:s:I:c:Cln:m:M:tVtTa:S:jpP:rR")) != -1) {
+	while((c = getopt(argc, argv, "eEhHv:d:f:s:I:c:Cln:m:M:wVtTa:S:jpP:rR")) != -1) {
 		switch(c) {
 		case 'c':
 			if (optarg)
@@ -251,8 +252,17 @@ void cl_init(BMP_CL_OPTIONS_t *opt, int argc, char **argv)
 		case 'T':
 			opt->opt_mode = BMP_MODE_SWJ_TEST;
 			break;
+		case 'w':
+			if (opt->opt_mode == BMP_MODE_FLASH_VERIFY)
+				opt->opt_mode = BMP_MODE_FLASH_WRITE_VERIFY;
+			else
+				opt->opt_mode = BMP_MODE_FLASH_WRITE;
+			break;
 		case 'V':
-			opt->opt_mode = BMP_MODE_FLASH_VERIFY;
+			if (opt->opt_mode == BMP_MODE_FLASH_WRITE)
+				opt->opt_mode = BMP_MODE_FLASH_WRITE_VERIFY;
+			else
+				opt->opt_mode = BMP_MODE_FLASH_VERIFY;
 			break;
 		case 'r':
 			opt->opt_mode = BMP_MODE_FLASH_READ;
@@ -353,6 +363,10 @@ int cl_execute(BMP_CL_OPTIONS_t *opt)
 		num_targets = platform_jtag_scan(NULL);
 	} else {
 		num_targets = platform_adiv5_swdp_scan(opt->opt_targetid);
+		if (!num_targets) {
+			DEBUG_INFO("Scan SWD failed, trying JTAG!\n");
+			num_targets = platform_jtag_scan(NULL);
+		}
 	}
 	if (!num_targets) {
 		DEBUG_WARN("No target found\n");
@@ -371,51 +385,44 @@ int cl_execute(BMP_CL_OPTIONS_t *opt)
 		DEBUG_WARN("Can not attach to target %d\n", opt->opt_target_dev);
 		goto target_detach;
 	}
+	/* List each defined RAM */
+	int n_ram = 0;
+	for (struct target_ram *r = t->ram; r; r = r->next)
+		n_ram++;
+	for (int n = n_ram; n >= 0; n --) {
+		struct target_ram *r = t->ram;
+		for (int i = 1; r; r = r->next, i++)
+			if (i == n)
+				DEBUG_INFO("RAM   Start: 0x%08" PRIx32 " length = 0x%" PRIx32 "\n",
+					   r->start, (uint32_t)r->length);
+	}
 	/* Always scan memory map to find lowest flash */
-	char memory_map [1024], *p = memory_map;
-	uint32_t flash_start = 0xffffffff;
-	if (target_mem_map(t, memory_map, sizeof(memory_map))) {
-		while (*p && (*p == '<')) {
-			unsigned int start, size;
-			char *res;
-			int match;
-			match = strncmp(p, "<memory-map>", strlen("<memory-map>"));
-			if (!match) {
-				p  += strlen("<memory-map>");
-				continue;
-			}
-			match = strncmp(p, "<memory type=\"flash\" ", strlen("<memory type=\"flash\" "));
-			if (!match) {
-				unsigned int blocksize;
-				if (sscanf(p, "<memory type=\"flash\" start=\"%x\" length=\"%x\">"
-						   "<property name=\"blocksize\">%x</property></memory>",
-						   &start, &size, &blocksize)) {
-					if (opt->opt_mode == BMP_MODE_TEST)
-						DEBUG_INFO("Flash Start: 0x%08x, length %#9x, "
-								   "blocksize %#8x\n", start, size, blocksize);
-					if (start < flash_start)
-						flash_start = start;
+	/* List each defined Flash */
+	uint32_t lowest_flash_start = 0xffffffff;
+	uint32_t lowest_flash_size = 0;
+	int n_flash = 0;
+	for (struct target_flash *f = t->flash; f; f = f->next)
+		n_flash++;
+	for (int n = n_flash; n >= 0; n --) {
+		struct target_flash *f = t->flash;
+		for (int i = 1; f; f = f->next, i++)
+			if (i == n) {
+				DEBUG_INFO("Flash Start: 0x%08" PRIx32 " length = 0x%" PRIx32
+						   " blocksize 0x%" PRIx32 "\n",
+						   f->start, (uint32_t)f->length, (uint32_t)f->blocksize);
+				if (f->start < lowest_flash_start) {
+					lowest_flash_start = f->start;
+					lowest_flash_size = f->length;
 				}
-				res = strstr(p, "</memory>");
-				p = res + strlen("</memory>");
-				continue;
 			}
-			match = strncmp(p, "<memory type=\"ram\" ", strlen("<memory type=\"ram\" "));
-			if (!match) {
-				if (sscanf(p, "<memory type=\"ram\" start=\"%x\" length=\"%x\"/",
-						   &start, &size))
-					if (opt->opt_mode == BMP_MODE_TEST)
-						DEBUG_INFO("Ram   Start: 0x%08x, length %#9x\n",
-								   start, size);
-				res = strstr(p, "/>");
-				p = res + strlen("/>");
-				continue;
-			}
-			break;
-		}
 	}
 	if (opt->opt_flash_start == 0xffffffff)
-		opt->opt_flash_start = flash_start;
+		opt->opt_flash_start = lowest_flash_start;
+	if ((opt->opt_flash_size == 0xffffffff) &&
+	    (opt->opt_mode != BMP_MODE_FLASH_WRITE) &&
+	    (opt->opt_mode != BMP_MODE_FLASH_VERIFY) &&
+	    (opt->opt_mode != BMP_MODE_FLASH_WRITE_VERIFY))
+		opt->opt_flash_size = lowest_flash_size;
 	if (opt->opt_mode == BMP_MODE_SWJ_TEST) {
 		switch (t->core[0]) {
 		case 'M':
@@ -437,7 +444,8 @@ int cl_execute(BMP_CL_OPTIONS_t *opt)
 		goto target_detach;
 	int read_file = -1;
 	if ((opt->opt_mode == BMP_MODE_FLASH_WRITE) ||
-		(opt->opt_mode == BMP_MODE_FLASH_VERIFY)) {
+	    (opt->opt_mode == BMP_MODE_FLASH_VERIFY) ||
+	    (opt->opt_mode == BMP_MODE_FLASH_WRITE_VERIFY)) {
 		int mmap_res = bmp_mmap(opt->opt_flash_file, &map);
 		if (mmap_res) {
 			DEBUG_WARN("Can not map file: %s. Aborting!\n", strerror(errno));
@@ -468,7 +476,8 @@ int cl_execute(BMP_CL_OPTIONS_t *opt)
 			goto free_map;
 		}
 		target_reset(t);
-	} else if (opt->opt_mode == BMP_MODE_FLASH_WRITE) {
+	} else if ((opt->opt_mode == BMP_MODE_FLASH_WRITE) ||
+	           (opt->opt_mode == BMP_MODE_FLASH_WRITE_VERIFY)) {
 		DEBUG_INFO("Erase    %zu bytes at 0x%08" PRIx32 "\n", map.size,
 			  opt->opt_flash_start);
 		uint32_t start_time = platform_time_ms();
@@ -491,11 +500,17 @@ int cl_execute(BMP_CL_OPTIONS_t *opt)
 			}
 		}
 		target_flash_done(t);
-		target_reset(t);
 		uint32_t end_time = platform_time_ms();
 		DEBUG_WARN("Flash Write succeeded for %d bytes, %8.3f kiB/s\n",
 			   (int)map.size, (((map.size * 1.0)/(end_time - start_time))));
-	} else {
+		if (opt->opt_mode != BMP_MODE_FLASH_WRITE_VERIFY) {
+			target_reset(t);
+			goto free_map;
+		}
+	}
+	if ((opt->opt_mode == BMP_MODE_FLASH_READ) ||
+	    (opt->opt_mode == BMP_MODE_FLASH_VERIFY) ||
+	    (opt->opt_mode == BMP_MODE_FLASH_WRITE_VERIFY)) {
 #define WORKSIZE 1024
 		uint8_t *data = alloca(WORKSIZE);
 		if (!data) {
@@ -529,7 +544,8 @@ int cl_execute(BMP_CL_OPTIONS_t *opt)
 			} else {
 				bytes_read += worksize;
 			}
-			if (opt->opt_mode == BMP_MODE_FLASH_VERIFY) {
+			if ((opt->opt_mode == BMP_MODE_FLASH_VERIFY) ||
+			    (opt->opt_mode == BMP_MODE_FLASH_WRITE_VERIFY)) {
 				int difference = memcmp(data, flash, worksize);
 				if (difference){
 					DEBUG_WARN("Verify failed at flash region 0x%08"
@@ -553,11 +569,11 @@ int cl_execute(BMP_CL_OPTIONS_t *opt)
 		uint32_t end_time = platform_time_ms();
 		if (read_file != -1)
 			close(read_file);
-		if ((opt->opt_mode == BMP_MODE_FLASH_VERIFY) ||
-			(opt->opt_mode == BMP_MODE_FLASH_READ))
-			DEBUG_WARN("Read/Verify succeeded for %d bytes, %8.3f kiB/s\n",
-					   bytes_read,
-					   (((bytes_read * 1.0)/(end_time - start_time))));
+		DEBUG_WARN("Read/Verify succeeded for %d bytes, %8.3f kiB/s\n",
+		           bytes_read,
+		           (((bytes_read * 1.0)/(end_time - start_time))));
+		if (opt->opt_mode == BMP_MODE_FLASH_WRITE_VERIFY)
+			target_reset(t);
 	}
   free_map:
 	if (map.size)

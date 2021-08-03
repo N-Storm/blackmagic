@@ -17,16 +17,15 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include <sys/types.h>
+#include "general.h"
 #include <sys/stat.h>
+#include <sys/select.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <termios.h>
 #include <unistd.h>
-#include <string.h>
 
-#include "general.h"
 #include "remote.h"
 #include "cl_utils.h"
 #include "cortexm.h"
@@ -60,8 +59,9 @@ static int set_interface_attribs(void)
 	tty.c_cflag |= (CLOCAL | CREAD);// ignore modem controls,
 	// enable reading
 	tty.c_cflag &= ~CSTOPB;
+#if defined(CRTSCTS)
 	tty.c_cflag &= ~CRTSCTS;
-
+#endif
 	if (tcsetattr (fd, TCSANOW, &tty) != 0) {
 		DEBUG_WARN("error %d from tcsetattr", errno);
 		return -1;
@@ -190,7 +190,8 @@ int platform_buffer_read(uint8_t *data, int maxsize)
 	c = data;
 	tv.tv_sec = 0;
 
-	tv.tv_usec = 1000 * cortexm_wait_timeout;
+	tv.tv_sec = cortexm_wait_timeout / 1000 ;
+	tv.tv_usec = 1000 * (cortexm_wait_timeout % 1000);
 
 	/* Look for start of response */
 	do {
