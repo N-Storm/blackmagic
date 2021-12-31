@@ -133,7 +133,7 @@ static ADIv5_DP_t remote_dp = {
 };
 
 
-void remotePacketProcessSWD(uint8_t i, char *packet)
+static void remotePacketProcessSWD(unsigned i, char *packet)
 {
 	uint8_t ticks;
 	uint32_t param;
@@ -184,7 +184,7 @@ void remotePacketProcessSWD(uint8_t i, char *packet)
     }
 }
 
-void remotePacketProcessJTAG(uint8_t i, char *packet)
+static void remotePacketProcessJTAG(unsigned i, char *packet)
 {
 	uint32_t MS;
 	uint64_t DO;
@@ -228,7 +228,8 @@ void remotePacketProcessJTAG(uint8_t i, char *packet)
 			jtag_proc.jtagtap_tdi_tdo_seq((void *)&DO, (packet[1]==REMOTE_TDITDO_TMS), (void *)&DI, ticks);
 
 			/* Mask extra bits on return value... */
-			DO &= (1LL << (ticks + 1)) - 1;
+			if (ticks < 64)
+				DO &= (1LL << ticks) - 1;
 
 			_respond(REMOTE_RESP_OK, DO);
 		}
@@ -266,7 +267,7 @@ void remotePacketProcessJTAG(uint8_t i, char *packet)
     }
 }
 
-void remotePacketProcessGEN(uint8_t i, char *packet)
+static void remotePacketProcessGEN(unsigned i, char *packet)
 
 {
 	(void)i;
@@ -295,8 +296,18 @@ void remotePacketProcessGEN(uint8_t i, char *packet)
 
     case REMOTE_PWR_SET:
 #ifdef PLATFORM_HAS_POWER_SWITCH
-		platform_target_set_power(packet[2]=='1');
-		_respond(REMOTE_RESP_OK,0);
+		if (packet[2]=='1'
+			&& !platform_target_get_power()
+			&& platform_target_voltage_sense() > POWER_CONFLICT_THRESHOLD)
+		{
+			/* want to enable target power, but voltage > 0.5V sensed
+			 * on the pin -> cancel
+			 */
+			_respond(REMOTE_RESP_ERR,0);
+		} else {
+			platform_target_set_power(packet[2]=='1');
+			_respond(REMOTE_RESP_OK,0);
+		}
 #else
 		_respond(REMOTE_RESP_NOTSUP,0);
 #endif
@@ -323,7 +334,7 @@ void remotePacketProcessGEN(uint8_t i, char *packet)
     }
 }
 
-void remotePacketProcessHL(uint8_t i, char *packet)
+static void remotePacketProcessHL(unsigned i, char *packet)
 
 {
 	(void)i;
@@ -427,7 +438,7 @@ void remotePacketProcessHL(uint8_t i, char *packet)
 }
 
 
-void remotePacketProcess(uint8_t i, char *packet)
+void remotePacketProcess(unsigned i, char *packet)
 {
 	switch (packet[0]) {
     case REMOTE_SWDP_PACKET:

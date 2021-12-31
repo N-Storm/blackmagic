@@ -68,6 +68,7 @@ static bmp_type_t find_cmsis_dap_interface(libusb_device *dev,bmp_info_t *info) 
 	if (res != LIBUSB_SUCCESS) {
 		DEBUG_INFO("INFO: libusb_open() failed: %s\n",
 					libusb_strerror(res));
+		libusb_free_config_descriptor(conf);
 		return type;
 	}
 
@@ -90,13 +91,9 @@ static bmp_type_t find_cmsis_dap_interface(libusb_device *dev,bmp_info_t *info) 
 		if (!strstr(interface_string, "CMSIS")) {
 			continue;
 		}
+		type = BMP_TYPE_CMSIS_DAP;
 
-		if (interface->bInterfaceClass == 0x03) {
-			type = BMP_TYPE_CMSIS_DAP_V1;
-
-		} else if (interface->bInterfaceClass == 0xff && interface->bNumEndpoints == 2) {
-			type = BMP_TYPE_CMSIS_DAP_V2;
-
+		if (interface->bInterfaceClass == 0xff && interface->bNumEndpoints == 2) {
 			info->interface_num = interface->bInterfaceNumber;
 
 			for (int j = 0; j < interface->bNumEndpoints; j++) {
@@ -110,10 +107,10 @@ static bmp_type_t find_cmsis_dap_interface(libusb_device *dev,bmp_info_t *info) 
 			}
 
 			/* V2 is preferred, return early. */
-			return type;
+			break;
 		}
 	}
-
+	libusb_free_config_descriptor(conf);
 	return type;
 }
 
@@ -121,12 +118,6 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 {
 	libusb_device **devs;
 	int res = libusb_init(&info->libusb_ctx);
-	if (res) {
-		DEBUG_WARN( "Fatal: Failed to get USB context: %s\n",
-				libusb_strerror(res));
-		exit(-1);
-	}
-	res = libusb_init(&info->libusb_ctx);
 	if (res) {
 		DEBUG_WARN( "Fatal: Failed to get USB context: %s\n",
 				libusb_strerror(res));
@@ -160,7 +151,6 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 	char *active_cable = NULL;
 	bool ftdi_unknown = false;
   rescan:
-	type = BMP_TYPE_NONE;
 	found_debuggers = 0;
 	serial[0] = 0;
 	manufacturer[0] = 0;
@@ -169,6 +159,7 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 	active_cable = NULL;
 	ftdi_unknown = false;
 	for (int i = 0;  devs[i]; i++) {
+		type = BMP_TYPE_NONE;
 		libusb_device *dev =  devs[i];
 		int res = libusb_get_device_descriptor(dev, &desc);
 		if (res < 0) {
@@ -178,7 +169,9 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 			continue;
 		}
 		/* Exclude hubs from testing. Probably more classes could be excluded here!*/
-		if (desc.bDeviceClass == LIBUSB_CLASS_HUB) {
+		switch (desc.bDeviceClass) {
+		case LIBUSB_CLASS_HUB:
+		case LIBUSB_CLASS_WIRELESS:
 			continue;
 		}
 		libusb_device_handle *handle;
@@ -226,18 +219,19 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 				type = BMP_TYPE_BMP;
 			} else {
 				if (desc.idProduct == PRODUCT_ID_BMP_BL)
-					DEBUG_WARN("BMP in botloader mode found. Restart or reflash!\n");
+					DEBUG_WARN("BMP in bootloader mode found. Restart or reflash!\n");
 				continue;
 			}
 		} else if ((type == BMP_TYPE_NONE) &&
 				   ((type = find_cmsis_dap_interface(dev, info)) != BMP_TYPE_NONE)) {
 			/* find_cmsis_dap_interface has set valid type*/
 		} else if ((strstr(manufacturer, "CMSIS")) || (strstr(product, "CMSIS"))) {
-			type = BMP_TYPE_CMSIS_DAP_V1;
+			type = BMP_TYPE_CMSIS_DAP;
 		} else if (desc.idVendor ==  VENDOR_ID_STLINK) {
 			if ((desc.idProduct == PRODUCT_ID_STLINKV2) ||
 				(desc.idProduct == PRODUCT_ID_STLINKV21) ||
 				(desc.idProduct == PRODUCT_ID_STLINKV21_MSD) ||
+				(desc.idProduct == PRODUCT_ID_STLINKV3_NO_MSD) ||
 				(desc.idProduct == PRODUCT_ID_STLINKV3_BL) ||
 				(desc.idProduct == PRODUCT_ID_STLINKV3) ||
 				(desc.idProduct == PRODUCT_ID_STLINKV3E)) {
@@ -313,9 +307,8 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 		((found_debuggers == 1) && (cl_opts->opt_list_only))) {
 		if (!report) {
 			if (found_debuggers > 1)
-				DEBUG_WARN("%d debuggers found!\nSelect with -P <pos>, "
-						   "-s <(partial)serial no.> "
-						   "and/or -S <(partial)description>\n",
+				DEBUG_WARN("%d debuggers found!\nSelect with -P <pos> "
+						   "or -s <(partial)serial no.>\n",
 						   found_debuggers);
 			report = true;
 			goto rescan;

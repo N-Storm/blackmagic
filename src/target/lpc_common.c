@@ -151,7 +151,7 @@ enum iap_status lpc_iap_call(struct lpc_flash *f, void *result, enum iap_cmd cmd
 #if defined(ENABLE_DEBUG)
 	if (param.status != IAP_STATUS_CMD_SUCCESS) {
 		if (param.status > (sizeof(iap_error) / sizeof(char*)))
-			DEBUG_WARN("IAP  cmd %d : %d\n", cmd, param.status);
+			DEBUG_WARN("IAP  cmd %d : %" PRId32 "\n", cmd, param.status);
 		else
 			DEBUG_WARN("IAP  cmd %d : %s\n", cmd, iap_error[param.status]);
 		DEBUG_WARN("return parameters: %08" PRIx32 " %08" PRIx32 " %08" PRIx32
@@ -184,7 +184,7 @@ int lpc_flash_erase(struct target_flash *tf, target_addr addr, size_t len)
 	if (f->reserved_pages && ((addr + len) >=  tf->length - 0x400) ) {
 		last_full_sector -= 1;
 	}
-	if (start >= last_full_sector) {
+	if (start <= last_full_sector) {
 		/* Sector erase */
 		if (lpc_iap_call(f, NULL, IAP_CMD_ERASE, start, last_full_sector, CPU_CLK_KHZ, f->bank))
 			return -2;

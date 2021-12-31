@@ -1,8 +1,7 @@
 /*
- * This file is part of the Black Magic Debug project.
+ * This file is part of the libopenstm32 project.
  *
- * Copyright (C) 2015  Black Sphere Technologies Ltd.
- * Written by Gareth McMullin <gareth@blacksphere.co.nz>
+ * Copyright (C) 2010 Thomas Otto <tommi@viadmin.org>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,23 +17,12 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "general.h"
-#include "exception.h"
-
-struct exception *innermost_exception;
-
-void raise_exception(uint32_t type, const char *msg)
+/* Define memory regions. */
+MEMORY
 {
-	struct exception *e;
-	for (e = innermost_exception; e; e = e->outer) {
-		if (e->mask & type) {
-			e->type = type;
-			e->msg = msg;
-			innermost_exception = e->outer;
-			longjmp(e->jmpbuf, type);
-		}
-	}
-	DEBUG_WARN("Unhandled exception: %s\n", msg);
-	abort();
+	rom (rx) : ORIGIN = 0x08000000, LENGTH = 512K
+	ram (rwx) : ORIGIN = 0x20000000, LENGTH = 96K
 }
 
+/* Include the common ld script from libopenstm32. */
+INCLUDE cortex-m-generic.ld

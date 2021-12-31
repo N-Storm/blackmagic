@@ -45,6 +45,7 @@
 #define ADIV5_DP_VERSION_MASK 0xf000
 #define ADIV5_DPv1            0x1000
 #define ADIV5_DPv2            0x2000
+#define ADIV5_MINDP          0x10000
 
 /* AP Abort Register (ABORT) */
 /* Bits 31:5 - Reserved */
@@ -64,7 +65,7 @@
 #define ADIV5_DP_CTRLSTAT_CDBGRSTREQ	(1u << 26)
 /* Bits 25:24 - Reserved */
 /* Bits 23:12 - TRNCNT */
-#define ADIV5_DP_CTRLSTAT_TRNCNT
+#define ADIV5_DP_CTRLSTAT_TRNCNT        (1u << 12)
 /* Bits 11:8 - MASKLANE */
 #define ADIV5_DP_CTRLSTAT_MASKLANE
 /* Bits 7:6 - Reserved in JTAG-DP */
@@ -88,19 +89,23 @@
 #define ADIV5_AP_BASE		ADIV5_AP_REG(0xF8)
 #define ADIV5_AP_IDR		ADIV5_AP_REG(0xFC)
 
-/* Known designers seen in SYSROM-PIDR. Ignore Bit 0 from
- * the designer bits to get JEDEC Ids with bit 7 ignored.*/
+/* Known designers seen in SYSROM-PIDR and JTAG IDCode.
+ * Ignore Bit 0 from the designer bits to get JEDEC Ids.
+ * Should get it's one file as not only related to Adiv5!
+ */
 #define AP_DESIGNER_FREESCALE    0x00e
 #define AP_DESIGNER_TEXAS        0x017
 #define AP_DESIGNER_ATMEL        0x01f
 #define AP_DESIGNER_STM          0x020
 #define AP_DESIGNER_CYPRESS      0x034
 #define AP_DESIGNER_INFINEON     0x041
+#define DESIGNER_XILINX          0x049
 #define AP_DESIGNER_NORDIC       0x244
 #define AP_DESIGNER_ARM          0x43b
 /*LPC845 with designer 501. Strange!? */
 #define AP_DESIGNER_SPECULAR     0x501
 #define AP_DESIGNER_CS           0x555
+#define DESIGNER_XAMBALA         0x61e
 #define AP_DESIGNER_ENERGY_MICRO 0x673
 #define AP_DESIGNER_GIGADEVICE   0x751
 #define AP_DESIGNER_RASPBERRY    0x927
@@ -165,11 +170,9 @@ typedef struct ADIv5_DP_s {
 	void (*seq_out_parity)(uint32_t MS, int ticks);
 	uint32_t (*seq_in)(int ticks);
 	bool (*seq_in_parity)(uint32_t *ret, int ticks);
-	/* dp_low_write returns true if no OK resonse. */
+	/* dp_low_write returns true if no OK resonse, but ignores errors */
 	bool (*dp_low_write)(struct ADIv5_DP_s *dp, uint16_t addr,
 						 const uint32_t data);
-	/* dp_low_read returns true with parity error */
-	bool (*dp_low_read)(struct ADIv5_DP_s *dp, uint16_t addr, uint32_t *data);
 	uint32_t (*dp_read)(struct ADIv5_DP_s *dp, uint16_t addr);
 	uint32_t (*error)(struct ADIv5_DP_s *dp);
 	uint32_t (*low_access)(struct ADIv5_DP_s *dp, uint8_t RnW,
@@ -177,6 +180,7 @@ typedef struct ADIv5_DP_s {
 	void (*abort)(struct ADIv5_DP_s *dp, uint32_t abort);
 
 #if PC_HOSTED == 1
+	bmp_type_t dp_bmp_type;
 	bool (*ap_setup)(int i);
 	void (*ap_cleanup)(int i);
     void (*ap_regs_read)(ADIv5_AP_t *ap, void *data);
@@ -185,7 +189,6 @@ typedef struct ADIv5_DP_s {
 	void (*read_block)(uint32_t addr, uint8_t *data, int size);
 	void (*dap_write_block_sized)(uint32_t addr, uint8_t *data,
 								  int size, enum align align);
-
 #endif
 	uint32_t (*ap_read)(ADIv5_AP_t *ap, uint16_t addr);
 	void (*ap_write)(ADIv5_AP_t *ap, uint16_t addr, uint32_t value);
@@ -286,7 +289,7 @@ void adiv5_ap_ref(ADIv5_AP_t *ap);
 void adiv5_ap_unref(ADIv5_AP_t *ap);
 void platform_add_jtag_dev(const int dev_index, const jtag_dev_t *jtag_dev);
 
-void adiv5_jtag_dp_handler(uint8_t jd_index, uint32_t j_idcode);
+void adiv5_jtag_dp_handler(jtag_dev_t *jd);
 int platform_jtag_dp_init(ADIv5_DP_t *dp);
 int swdptap_init(ADIv5_DP_t *dp);
 

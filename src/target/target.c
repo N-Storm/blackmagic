@@ -34,6 +34,11 @@ static bool nop_function(void)
 	return true;
 }
 
+static int null_function(void)
+{
+	return 0;
+}
+
 target *target_new(void)
 {
 	target *t = (void*)calloc(1, sizeof(*t));
@@ -63,6 +68,7 @@ target *target_new(void)
 	t->halt_request = (void*)nop_function;
 	t->halt_poll = (void*)nop_function;
 	t->halt_resume = (void*)nop_function;
+	t->check_error = (void*)null_function;
 
 	t->target_storage = NULL;
 
@@ -568,7 +574,7 @@ int target_command(target *t, int argc, const char *argv[])
 	for (struct target_command_s *tc = t->commands; tc; tc = tc->next)
 		for(const struct command_s *c = tc->cmds; c->cmd; c++)
 			if(!strncmp(argv[0], c->cmd, strlen(argv[0])))
-				return !c->handler(t, argc, argv);
+				return (c->handler(t, argc, argv)) ? 0 : 1;
 	return -1;
 }
 

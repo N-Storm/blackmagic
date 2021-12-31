@@ -284,6 +284,8 @@ int gdb_main_loop(struct target_controller *tc, bool in_syscall)
 			else if(last_target) {
 				cur_target = target_attach(last_target,
 						           &gdb_controller);
+				if(cur_target)
+					morse(NULL, false);
 				target_reset(cur_target);
 			}
 			break;
@@ -372,7 +374,8 @@ handle_q_packet(char *packet, int len)
 		else if(c == 0)
 			gdb_putpacketz("OK");
 		else
-			gdb_putpacketz("E");
+			gdb_putpacket(hexify(pbuf, "Failed\n", strlen("Failed\n")),
+						  2 * strlen("Failed\n"));
 
 	} else if (!strncmp (packet, "qSupported", 10)) {
 		/* Query supported protocol features */
@@ -410,7 +413,12 @@ handle_q_packet(char *packet, int len)
 			gdb_putpacketz("E01");
 			return;
 		}
-		gdb_putpacket_f("C%lx", generic_crc32(cur_target, addr, alen));
+		uint32_t crc;
+		int res = generic_crc32(cur_target, &crc, addr, alen);
+		if (res)
+			gdb_putpacketz("E03");
+		else
+			gdb_putpacket_f("C%lx", crc);
 
 	} else {
 		DEBUG_GDB("*** Unsupported packet: %s\n", packet);
@@ -428,9 +436,10 @@ handle_v_packet(char *packet, int plen)
 	if (sscanf(packet, "vAttach;%08lx", &addr) == 1) {
 		/* Attach to remote target processor */
 		cur_target = target_attach_n(addr, &gdb_controller);
-		if(cur_target)
+		if(cur_target) {
+			morse(NULL, false);
 			gdb_putpacketz("T05");
-		else
+		} else
 			gdb_putpacketz("E01");
 
 	} else if (!strncmp(packet, "vRun", 4)) {
@@ -470,12 +479,13 @@ handle_v_packet(char *packet, int plen)
 			cur_target = target_attach(last_target,
 						   &gdb_controller);
 
-                        /* If we were able to attach to the target again */
-                        if (cur_target) {
+			/* If we were able to attach to the target again */
+			if (cur_target) {
 				target_set_cmdline(cur_target, cmdline);
-                        	target_reset(cur_target);
-                        	gdb_putpacketz("T05");
-                        } else	gdb_putpacketz("E01");
+				target_reset(cur_target);
+				morse(NULL, false);
+				gdb_putpacketz("T05");
+			} else	gdb_putpacketz("E01");
 
 		} else	gdb_putpacketz("E01");
 
