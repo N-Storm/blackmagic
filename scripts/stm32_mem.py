@@ -18,7 +18,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import print_function
 from time import sleep
 import struct
 import os
@@ -72,7 +71,7 @@ def stm32_read(dev):
 	return data
 
 def stm32_manifest(dev):
-	dev.download(0, "")
+	dev.download(0, b"")
 	while True:
 		try:
 			status = dev.get_status()
@@ -138,7 +137,7 @@ def stm32_scan(args, test):
 		product = dfudev.handle.getString(dfudev.dev.iProduct, 96).decode('utf8')
 		serial_no = dfudev.handle.getString(dfudev.dev.iSerialNumber, 30).decode('utf8')
 		if args.serial_target:
-			if man == "Black Sphere Technologies" and serial_no ==	args.serial_target:
+			if man == "Black Sphere Technologies" and serial_no == args.serial_target:
 				break
 		else:
 			if man == "Black Sphere Technologies":
@@ -236,7 +235,7 @@ if __name__ == "__main__":
 	bin = file.read()
 	len = len(bin)
 	addr = start
-	print("-")
+	print("\n-")
 	while bin:
 		try:
 			stm32_set_address(dfudev, addr)
@@ -251,7 +250,7 @@ if __name__ == "__main__":
 		else :
 			size = len
 		if bin[:size] != bytearray(data[:size]) :
-			print ("\nMitmatch in block at	0x%08X" % addr)
+			print ("\nMismatch in block at 0x%08X" % addr)
 			break;
 		bin = bin[1024:]
 		addr += 1024
