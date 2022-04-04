@@ -146,7 +146,6 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 	char serial[64];
 	char manufacturer[128];
 	char product[128];
-	bmp_type_t type;
 	bool access_problems = false;
 	char *active_cable = NULL;
 	bool ftdi_unknown = false;
@@ -159,7 +158,7 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 	active_cable = NULL;
 	ftdi_unknown = false;
 	for (int i = 0;  devs[i]; i++) {
-		type = BMP_TYPE_NONE;
+		bmp_type_t type = BMP_TYPE_NONE;
 		libusb_device *dev =  devs[i];
 		int res = libusb_get_device_descriptor(dev, &desc);
 		if (res < 0) {
@@ -299,7 +298,7 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info)
 	}
 	if ((found_debuggers == 0) && ftdi_unknown)
 		DEBUG_WARN("Generic FTDI MPSSE VID/PID found. Please specify exact type with \"-c <cable>\" !\n");
-	if ((found_debuggers == 1) && !cl_opts->opt_cable && (type == BMP_TYPE_LIBFTDI))
+	if ((found_debuggers == 1) && !cl_opts->opt_cable && (info->bmp_type == BMP_TYPE_LIBFTDI))
 		cl_opts->opt_cable = active_cable;
 	if (!found_debuggers && cl_opts->opt_list_only)
 		DEBUG_WARN("No usable debugger found\n");

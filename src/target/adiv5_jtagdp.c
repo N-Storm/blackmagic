@@ -39,7 +39,7 @@
 
 static uint32_t adiv5_jtagdp_error(ADIv5_DP_t *dp);
 
-void adiv5_jtag_dp_handler(jtag_dev_t *jd)
+void adiv5_jtag_dp_handler(uint8_t jd_index)
 {
 	ADIv5_DP_t *dp = (void*)calloc(1, sizeof(*dp));
 	if (!dp) {			/* calloc failed: heap exhaustion */
@@ -47,8 +47,8 @@ void adiv5_jtag_dp_handler(jtag_dev_t *jd)
 		return;
 	}
 
-	dp->dp_jd_index = jd->jd_dev;
-	dp->idcode = jd->jd_idcode;
+	dp->dp_jd_index = jd_index;
+	dp->idcode = jtag_devs[jd_index].jd_idcode;
 	if ((PC_HOSTED == 0 ) || (!platform_jtag_dp_init(dp))) {
 		dp->dp_read = fw_adiv5_jtagdp_read;
 		dp->error = adiv5_jtagdp_error;
@@ -85,7 +85,7 @@ uint32_t fw_adiv5_jtagdp_low_access(ADIv5_DP_t *dp, uint8_t RnW,
 
 	jtag_dev_write_ir(&jtag_proc, dp->dp_jd_index, APnDP ? IR_APACC : IR_DPACC);
 
-	platform_timeout_set(&timeout, 20);
+	platform_timeout_set(&timeout, 250);
 	do {
 		jtag_dev_shift_dr(&jtag_proc, dp->dp_jd_index, (uint8_t*)&response,
 						  (uint8_t*)&request, 35);

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # gdb.py: Python module for low level GDB protocol implementation
 # Copyright (C) 2009  Black Sphere Technologies
@@ -152,7 +152,7 @@ class Target:
 		"""Read length bytes from target at address addr"""
 		ret = b''
 		while length:
-			# print "Read"
+			# print("Read")
 			packlen = min(length,self.PacketSize//2)
 			self.putpacket(b"m%08X,%08X" % (addr, packlen))
 			reply = self.getpacket()
@@ -188,11 +188,11 @@ class Target:
 		self.putpacket(b"g")
 		reply = self.getpacket()
 		if (reply == b'') or (reply[:1] == b'E'):
-			raise Exception('Error reading memory at 0x%08X' % addr)
+			raise Exception('Error reading target core registers')
 		try:
 			data = unhexify(reply)
 		except Exception:
-			raise Exception('Invalid response to memory read packet: %r' % reply)
+			raise Exception('Invalid response to registers read packet: %r' % reply)
 		ret = array.array('I',data)
 		return ret
 
@@ -292,7 +292,7 @@ class Target:
 				addr = self.offset + self.blocksize * i
 				if data is None:
 					continue
-				#print "Erasing flash at 0x%X" % (self.offset + self.blocksize*i)
+				#print("Erasing flash at 0x%X" % (self.offset + self.blocksize*i))
 				self.target.putpacket(b"vFlashErase:%08X,%08X" %
 					(self.offset + self.blocksize*i, self.blocksize))
 				if self.target.getpacket() != b'OK':
@@ -301,7 +301,7 @@ class Target:
 				while data:
 					d = data[0:980]
 					data = data[len(d):]
-					#print "Writing %d bytes at 0x%X" % (len(d), addr)
+					#print("Writing %d bytes at 0x%X" % (len(d), addr))
 					self.target.putpacket(b"vFlashWrite:%08X:%s" % (addr, d))
 					addr += len(d)
 					if self.target.getpacket() != b'OK':

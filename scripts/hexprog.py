@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # hexprog.py: Python application to flash a target with an Intel hex file
 # Copyright (C) 2011  Black Sphere Technologies
@@ -18,7 +18,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import gdb
-import struct
 import time
 
 # Microcode sequence to erase option bytes
@@ -35,7 +34,7 @@ def flash_write_hex(target, hexfile, progress_cb=None):
 			raise Exception("Error in hex file")
 		reclen = int(line[1:3], 16)
 		addrlo = int(line[3:7], 16)
-		rectype = int(line[7:9], 16);
+		rectype = int(line[7:9], 16)
 		if sum(x for x in bytes.fromhex(line[1:11+reclen*2])) & 0xff != 0:
 			raise Exception("Checksum error in hex file")
 		if rectype == 0: # Data record
@@ -65,8 +64,8 @@ if __name__ == "__main__":
 	from sys import argv, platform, stdout
 	from getopt import getopt
 
-	if platform == "linux2":
-		print ("\x1b\x5b\x48\x1b\x5b\x32\x4a") # clear terminal screen
+	if platform == "linux":
+		print("\x1b\x5b\x48\x1b\x5b\x32\x4a") # clear terminal screen
 	print("Black Magic Probe -- Target Production Programming Tool -- version 1.0")
 	print("Copyright (C) 2011  Black Sphere Technologies")
 	print("License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>")
