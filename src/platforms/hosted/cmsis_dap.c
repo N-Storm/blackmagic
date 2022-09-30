@@ -33,23 +33,27 @@
 #include <sys/time.h>
 #include <hidapi.h>
 #include <wchar.h>
+#include <sys/stat.h>
 
 #include "bmp_hosted.h"
 #include "dap.h"
 #include "cmsis_dap.h"
 
-#include "cl_utils.h"
+#include "cli.h"
 #include "target.h"
 #include "target_internal.h"
 
 uint8_t dap_caps;
 uint8_t mode;
 
-typedef enum cmsis_type_s {
+#define TRANSFER_TIMEOUT_MS (100)
+
+typedef enum cmsis_type_e {
 	CMSIS_TYPE_NONE = 0,
 	CMSIS_TYPE_HID,
 	CMSIS_TYPE_BULK
 } cmsis_type_t;
+
 /*- Variables ---------------------------------------------------------------*/
 static cmsis_type_t type;
 static libusb_device_handle *usb_handle = NULL;
@@ -60,54 +64,130 @@ static uint8_t buffer[1024 + 1];
 static int report_size = 64 + 1; // TODO: read actual report size
 static bool has_swd_sequence = false;
 
+static size_t mbslen(const char *str)
+{
+	const char *const end = str + strlen(str);
+	size_t result = 0;
+	// Reset conversion state
+	mblen(NULL, 0);
+	while (str < end) {
+		const int next = mblen(str, end - str);
+		// If an error occurs, bail out with whatever we got so far.
+		if (next == -1)
+			break;
+		str += next;
+		++result;
+	}
+	return result;
+}
+
+#ifdef __linux__
+static void dap_hid_print_permissions_for(const struct hid_device_info *const dev)
+{
+	const char *const path = dev->path;
+	PRINT_INFO("Tried device '%s'", path);
+	struct stat dev_stat;
+	if (stat(path, &dev_stat) == 0) {
+		PRINT_INFO(", permissions = %04o, owner = %u, group = %u",
+			dev_stat.st_mode & ACCESSPERMS, dev_stat.st_uid, dev_stat.st_gid);
+	}
+	PRINT_INFO("\n");
+}
+
+static void dap_hid_print_permissions(const uint16_t vid, const uint16_t pid, const wchar_t *const serial)
+{
+	struct hid_device_info *const devs = hid_enumerate(vid, pid);
+	if (!devs)
+		return;
+	for (const struct hid_device_info *dev = devs; dev; dev = dev->next) {
+		if (serial) {
+			if (wcscmp(serial, dev->serial_number) == 0) {
+				dap_hid_print_permissions_for(dev);
+				break;
+			}
+		}
+		else
+			dap_hid_print_permissions_for(dev);
+	}
+	hid_free_enumeration(devs);
+}
+#endif
+
+static bool dap_init_hid(const bmp_info_t *const info)
+{
+	DEBUG_INFO("Using hid transfer\n");
+	if (hid_init())
+		return false;
+
+	const size_t size = mbslen(info->serial);
+	if (size > 64) {
+		PRINT_INFO("Serial number invalid, aborting\n");
+		hid_exit();
+		return false;
+	}
+	wchar_t serial[65] = {0};
+	if (mbstowcs(serial, info->serial, size) != size) {
+		PRINT_INFO("Serial number conversion failed, aborting\n");
+		hid_exit();
+		return false;
+	}
+	serial[size] = 0;
+	/* Blacklist devices that do not work with 513 byte report length
+	* FIXME: Find a solution to decipher from the device.
+	*/
+	if (info->vid == 0x1fc9 && info->pid == 0x0132) {
+		DEBUG_WARN("Blacklist\n");
+		report_size = 64 + 1;
+	}
+	handle = hid_open(info->vid, info->pid, serial[0] ? serial : NULL);
+	if (!handle) {
+		PRINT_INFO("hid_open failed: %ls\n", hid_error(NULL));
+#ifdef __linux__
+		dap_hid_print_permissions(info->vid, info->pid, serial[0] ? serial : NULL);
+#endif
+		hid_exit();
+		return false;
+	}
+	return true;
+}
+
+static bool dap_init_bulk(const bmp_info_t *const info)
+{
+	DEBUG_INFO("Using bulk transfer\n");
+	usb_handle = libusb_open_device_with_vid_pid(info->libusb_ctx, info->vid, info->pid);
+	if (!usb_handle) {
+		DEBUG_WARN("WARN: libusb_open_device_with_vid_pid() failed\n");
+		return false;
+	}
+	if (libusb_claim_interface(usb_handle, info->interface_num) < 0) {
+		DEBUG_WARN("WARN: libusb_claim_interface() failed\n");
+		return false;
+	}
+	in_ep = info->in_ep;
+	out_ep = info->out_ep;
+	return true;
+}
+
 /* LPC845 Breakout Board Rev. 0 report invalid response with > 65 bytes */
 int dap_init(bmp_info_t *info)
 {
 	type = (info->in_ep && info->out_ep) ? CMSIS_TYPE_BULK : CMSIS_TYPE_HID;
-	int size;
 
 	if (type == CMSIS_TYPE_HID) {
-		DEBUG_INFO("Using hid transfer\n");
-		if (hid_init())
+		if (!dap_init_hid(info))
 			return -1;
-		size = strlen(info->serial);
-		wchar_t serial[64] = {0}, *wc = serial;
-		for (int i = 0; i < size; i++)
-			*wc++ = info->serial[i];
-		*wc = 0;
-		/* Blacklist devices that do not work with 513 byte report length
-		* FIXME: Find a solution to decipher from the device.
-		*/
-		if ((info->vid == 0x1fc9) && (info->pid == 0x0132)) {
-			DEBUG_WARN("Blacklist\n");
-			report_size = 64 + 1;
-		}
-		handle = hid_open(info->vid, info->pid,  (serial[0]) ? serial : NULL);
-		if (!handle) {
-			DEBUG_WARN("hid_open failed\n");
-			return -1;
-		}
 	} else if (type == CMSIS_TYPE_BULK) {
-		DEBUG_INFO("Using bulk transfer\n");
-		usb_handle = libusb_open_device_with_vid_pid(info->libusb_ctx, info->vid, info->pid);
-		if (!usb_handle) {
-			DEBUG_WARN("WARN: libusb_open_device_with_vid_pid() failed\n");
+		if (!dap_init_bulk(info))
 			return -1;
-		}
-		if (libusb_claim_interface(usb_handle, info->interface_num) < 0) {
-			DEBUG_WARN("WARN: libusb_claim_interface() failed\n");
-			return -1;
-		}
-		in_ep = info->in_ep;
-		out_ep = info->out_ep;
 	}
 	dap_disconnect();
-	size = dap_info(DAP_INFO_FW_VER, buffer, sizeof(buffer));
+	size_t size = dap_info(DAP_INFO_FW_VER, buffer, sizeof(buffer));
 	if (size) {
 		DEBUG_INFO("Ver %s, ", buffer);
-		int major = -1, minor = -1, sub = -1;
-		if (sscanf((const char *)buffer, "%d.%d.%d",
-				   &major, &minor, &sub)) {
+		int major = -1;
+		int minor = -1;
+		int sub = -1;
+		if (sscanf((const char *)buffer, "%d.%d.%d", &major, &minor, &sub)) {
 			if (sub == -1) {
 				if (minor >= 10) {
 					minor /= 10;
@@ -135,7 +215,7 @@ int dap_init(bmp_info_t *info)
 	return 0;
 }
 
-void dap_srst_set_val(bool assert)
+void dap_nrst_set_val(bool assert)
 {
 	dap_reset_pin(!assert);
 }
@@ -221,40 +301,46 @@ int dbg_dap_cmd(uint8_t *data, int size, int rsize)
 	memcpy(&buffer[1], data, rsize);
 
 	DEBUG_WIRE("cmd :   ");
-	for(int i = 0; (i < 32) && (i < rsize + 1); i++)
+	for(int i = (type == CMSIS_TYPE_HID) ? 0 : 1; (i < rsize + 1); i++)
 		DEBUG_WIRE("%02x.",	buffer[i]);
 	DEBUG_WIRE("\n");
 	if (type == CMSIS_TYPE_HID) {
 		res = hid_write(handle, buffer, 65);
 		if (res < 0) {
-			DEBUG_WARN( "Error: %ls\n", hid_error(handle));
+			DEBUG_WARN("Error: %ls\n", hid_error(handle));
 			exit(-1);
 		}
-		res = hid_read_timeout(handle, buffer, 65, 1000);
-		if (res < 0) {
-			DEBUG_WARN( "debugger read(): %ls\n", hid_error(handle));
-			exit(-1);
-		} else if (res == 0) {
-			DEBUG_WARN( "timeout\n");
-			exit(-1);
-		}
+		do {
+			res = hid_read_timeout(handle, buffer, 65, 1000);
+			if (res < 0) {
+				DEBUG_WARN("debugger read(): %ls\n", hid_error(handle));
+				exit(-1);
+			} else if (res == 0) {
+				DEBUG_WARN("timeout\n");
+				exit(-1);
+			}
+		} while (buffer[0] != cmd);
 	} else if (type == CMSIS_TYPE_BULK) {
 		int transferred = 0;
 
-		res = libusb_bulk_transfer(usb_handle, out_ep, data, rsize, &transferred, 500);
+		res = libusb_bulk_transfer(usb_handle, out_ep, data, rsize, &transferred, TRANSFER_TIMEOUT_MS);
 		if (res < 0) {
 			DEBUG_WARN("OUT error: %d\n", res);
 			return res;
 		}
-		res = libusb_bulk_transfer(usb_handle, in_ep, buffer, report_size, &transferred, 500);
-		if (res < 0) {
-			DEBUG_WARN("IN error: %d\n", res);
-			return res;
-		}
+
+		/* We repeat the read in case we're out of step with the transmitter */
+		do {
+			res = libusb_bulk_transfer(usb_handle, in_ep, buffer, report_size, &transferred, TRANSFER_TIMEOUT_MS);
+			if (res < 0) {
+				DEBUG_WARN("IN error: %d\n", res);
+				return res;
+			}
+		} while (buffer[0] != cmd);
 		res = transferred;
 	}
 	DEBUG_WIRE("cmd res:");
-	for(int i = 0; (i < 16) && (i < size + 1); i++)
+	for (int i = 0; i < res; i++)
 		DEBUG_WIRE("%02x.",	buffer[i]);
 	DEBUG_WIRE("\n");
 	if (buffer[0] != cmd) {
@@ -306,9 +392,7 @@ static void dap_mem_read(ADIv5_AP_t *ap, void *dest, uint32_t src, size_t len)
     DEBUG_WIRE("memread res last data %08" PRIx32 "\n", ((uint32_t*)dest)[-1]);
 }
 
-static void dap_mem_write_sized(
-	ADIv5_AP_t *ap, uint32_t dest, const void *src,
-							size_t len, enum align align)
+static void dap_mem_write_sized( ADIv5_AP_t *ap, uint32_t dest, const void *src, size_t len, enum align align)
 {
 	if (len == 0)
 		return;
@@ -339,6 +423,9 @@ static void dap_mem_write_sized(
 			src       += transfersize;
 		}
 	}
+
+	/* Make sure this write is complete by doing a dummy read */
+	adiv5_dp_read(ap->dp, ADIV5_DP_RDBUFF);
 	DEBUG_WIRE("memwrite done\n");
 }
 
@@ -358,34 +445,34 @@ static void cmsis_dap_jtagtap_reset(void)
 	/* Is there a way to know if TRST is available?*/
 }
 
-static void cmsis_dap_jtagtap_tms_seq(uint32_t MS, int ticks)
+static void cmsis_dap_jtagtap_tms_seq(const uint32_t tms_states, const size_t clock_cycles)
 {
-	uint8_t TMS[4] = {MS & 0xff, (MS >> 8) & 0xff, (MS >> 16) & 0xff,
-					  (MS >> 24) & 0xff};
-	dap_jtagtap_tdi_tdo_seq(NULL, false, TMS, NULL, ticks);
-	DEBUG_PROBE("tms_seq DI %08x %d\n", MS, ticks);
+	const uint8_t tms[4] = {
+		(uint8_t)tms_states, (uint8_t)(tms_states >> 8U), (uint8_t)(tms_states >> 16U), (uint8_t)(tms_states >> 24U)};
+	dap_jtagtap_tdi_tdo_seq(NULL, false, tms, NULL, clock_cycles);
+	DEBUG_PROBE("tms_seq data_in %08x %zu\n", tms_states, clock_cycles);
 }
 
-static void cmsis_dap_jtagtap_tdi_tdo_seq(uint8_t *DO, const uint8_t final_tms,
-										  const uint8_t *DI, int ticks)
+static void cmsis_dap_jtagtap_tdi_tdo_seq(uint8_t *const data_out, const bool final_tms, const uint8_t *const data_in, const size_t clock_cycles)
 {
-	dap_jtagtap_tdi_tdo_seq(DO, (final_tms), NULL, DI, ticks);
-	DEBUG_PROBE("jtagtap_tdi_tdo_seq %d, %02x-> %02x\n", ticks, DI[0], (DO)? DO[0] : 0);
+	dap_jtagtap_tdi_tdo_seq(data_out, final_tms, NULL, data_in, clock_cycles);
+	DEBUG_PROBE("jtagtap_tdi_tdo_seq %zu, %02x-> %02x\n", clock_cycles, data_in[0], data_out ? data_out[0] : 0);
 }
 
-static void  cmsis_dap_jtagtap_tdi_seq(const uint8_t final_tms,
-									   const uint8_t *DI, int ticks)
+static void cmsis_dap_jtagtap_tdi_seq(const bool final_tms, const uint8_t *const data_in, const size_t clock_cycles)
 {
-	dap_jtagtap_tdi_tdo_seq(NULL, (final_tms), NULL, DI, ticks);
-	DEBUG_PROBE("jtagtap_tdi_seq %d, %02x\n", ticks, DI[0]);
+	dap_jtagtap_tdi_tdo_seq(NULL, final_tms, NULL, data_in, clock_cycles);
+	DEBUG_PROBE("jtagtap_tdi_seq %zu, %02x\n", clock_cycles, data_in[0]);
 }
 
-static uint8_t cmsis_dap_jtagtap_next(uint8_t dTMS, uint8_t dTDI)
+static bool cmsis_dap_jtagtap_next(const bool tms, const bool tdi)
 {
-	uint8_t tdo[1];
-	dap_jtagtap_tdi_tdo_seq(tdo, false, &dTMS, &dTDI, 1);
-	DEBUG_PROBE("next tms %02x tdi %02x tdo %02x\n", dTMS, dTDI, tdo[0]);
-	return (tdo[0] & 1);
+	const uint8_t tms_byte = tms ? 1 : 0;
+	const uint8_t tdi_byte = tdi ? 1 : 0;
+	uint8_t tdo = 0;
+	dap_jtagtap_tdi_tdo_seq(&tdo, false, &tms_byte, &tdi_byte, 1U);
+	DEBUG_PROBE("next tms %02x tdi %02x tdo %02x\n", tms, tdi, tdo);
+	return tdo;
 }
 
 int cmsis_dap_jtagtap_init(jtag_proc_t *jtag_proc)
@@ -397,11 +484,11 @@ int cmsis_dap_jtagtap_init(jtag_proc_t *jtag_proc)
 	dap_disconnect();
 	dap_connect(true);
 	dap_reset_link(true);
-	jtag_proc->jtagtap_reset       = cmsis_dap_jtagtap_reset;
-	jtag_proc->jtagtap_next        = cmsis_dap_jtagtap_next;
-	jtag_proc->jtagtap_tms_seq     = cmsis_dap_jtagtap_tms_seq;
+	jtag_proc->jtagtap_reset = cmsis_dap_jtagtap_reset;
+	jtag_proc->jtagtap_next = cmsis_dap_jtagtap_next;
+	jtag_proc->jtagtap_tms_seq = cmsis_dap_jtagtap_tms_seq;
 	jtag_proc->jtagtap_tdi_tdo_seq = cmsis_dap_jtagtap_tdi_tdo_seq;
-	jtag_proc->jtagtap_tdi_seq     = cmsis_dap_jtagtap_tdi_seq;
+	jtag_proc->jtagtap_tdi_seq = cmsis_dap_jtagtap_tdi_seq;
 	return 0;
 }
 
@@ -455,12 +542,11 @@ int dap_swdptap_init(ADIv5_DP_t *dp)
 	dap_connect(false);
 	dap_led(0, 1);
 	dap_reset_link(false);
-	if ((has_swd_sequence)  && dap_sequence_test()) {
+	if (has_swd_sequence)
 		/* DAP_SWD_SEQUENCE does not do auto turnaround, use own!*/
 		dp->dp_low_write = dap_dp_low_write;
-	} else {
+	else
 		dp->dp_low_write = NULL;
-	}
 	dp->seq_out = dap_swdptap_seq_out;
 	dp->dp_read = dap_dp_read_reg;
 	/* For error() use the TARGETID switching firmware_swdp_error */

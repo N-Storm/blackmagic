@@ -19,7 +19,7 @@
 /* Print decoded swo stream on the usb serial */
 
 #include "general.h"
-#include "cdcacm.h"
+#include "usb_serial.h"
 #include "traceswo.h"
 
 /* SWO decoding */
@@ -47,7 +47,7 @@ uint16_t traceswo_decode(usbd_device *usbd_dev, uint8_t addr,
 			if (swo_print) {
 				swo_buf[swo_buf_len++]=ch;
 				if (swo_buf_len == sizeof(swo_buf)) {
-					if (cdcacm_get_config() && cdcacm_get_dtr()) /* silently drop if usb not ready */
+					if (usb_get_config() && gdb_serial_get_dtr()) /* silently drop if usb not ready */
 						usbd_ep_write_packet(usbd_dev, addr, swo_buf, swo_buf_len);
 					swo_buf_len=0;
 				}

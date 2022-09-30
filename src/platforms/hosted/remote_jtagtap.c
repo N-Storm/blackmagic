@@ -33,37 +33,44 @@
 
 #include "remote.h"
 #include "jtagtap.h"
+#include "bmp_hosted.h"
 #include "bmp_remote.h"
 
 static void jtagtap_reset(void);
-static void jtagtap_tms_seq(uint32_t MS, int ticks);
-static void jtagtap_tdi_tdo_seq(
-	uint8_t *DO, const uint8_t final_tms, const uint8_t *DI, int ticks);
-static void jtagtap_tdi_seq(
-	const uint8_t final_tms, const uint8_t *DI, int ticks);
-static uint8_t jtagtap_next(uint8_t dTMS, uint8_t dTDI);
+static void jtagtap_tms_seq(uint32_t tms_states, size_t ticks);
+static void jtagtap_tdi_tdo_seq(uint8_t *data_out, bool final_tms, const uint8_t *data_in, size_t clock_cycles);
+static void jtagtap_tdi_seq(bool final_tms, const uint8_t *data_in, size_t clock_cycles);
+static bool jtagtap_next(bool tms, bool tdi);
+static void jtagtap_cycle(bool tms, bool tdi, size_t clock_cycles);
+
+static inline unsigned int bool_to_int(const bool value)
+{
+	return value ? 1 : 0;
+}
 
 int remote_jtagtap_init(jtag_proc_t *jtag_proc)
 {
-	uint8_t construct[REMOTE_MAX_MSG_SIZE];
-	int s;
+	platform_buffer_write((uint8_t *)REMOTE_JTAG_INIT_STR, sizeof(REMOTE_JTAG_INIT_STR));
 
-	s = snprintf((char *)construct, REMOTE_MAX_MSG_SIZE, "%s",
-				 REMOTE_JTAG_INIT_STR);
-	platform_buffer_write(construct, s);
-
-	s = platform_buffer_read(construct, REMOTE_MAX_MSG_SIZE);
-	if ((!s) || (construct[0] == REMOTE_RESP_ERR)) {
-      DEBUG_WARN("jtagtap_init failed, error %s\n",
-			  s ? (char *)&(construct[1]) : "unknown");
-      exit(-1);
-    }
+	char buffer[REMOTE_MAX_MSG_SIZE];
+	int length = platform_buffer_read((uint8_t *)buffer, REMOTE_MAX_MSG_SIZE);
+	if ((!length) || (buffer[0] == REMOTE_RESP_ERR)) {
+		DEBUG_WARN("jtagtap_init failed, error %s\n", length ? buffer + 1 : "unknown");
+		exit(-1);
+	}
 
 	jtag_proc->jtagtap_reset = jtagtap_reset;
-	jtag_proc->jtagtap_next =jtagtap_next;
+	jtag_proc->jtagtap_next = jtagtap_next;
 	jtag_proc->jtagtap_tms_seq = jtagtap_tms_seq;
 	jtag_proc->jtagtap_tdi_tdo_seq = jtagtap_tdi_tdo_seq;
 	jtag_proc->jtagtap_tdi_seq = jtagtap_tdi_seq;
+
+	platform_buffer_write((uint8_t *)REMOTE_HL_CHECK_STR, sizeof(REMOTE_HL_CHECK_STR));
+	length = platform_buffer_read((uint8_t *)buffer, REMOTE_MAX_MSG_SIZE);
+	if (!length || buffer[0] == REMOTE_RESP_ERR || buffer[0] == 1)
+		PRINT_INFO("Firmware does not support newer JTAG commands, please update it.");
+	else
+		jtag_proc->jtagtap_cycle = jtagtap_cycle;
 
 	return 0;
 }
@@ -72,116 +79,104 @@ int remote_jtagtap_init(jtag_proc_t *jtag_proc)
 
 static void jtagtap_reset(void)
 {
-	uint8_t construct[REMOTE_MAX_MSG_SIZE];
-	int s;
-
-	s = snprintf((char *)construct, REMOTE_MAX_MSG_SIZE, "%s",
-				 REMOTE_JTAG_RESET_STR);
-	platform_buffer_write(construct, s);
-
-	s = platform_buffer_read(construct, REMOTE_MAX_MSG_SIZE);
-	if ((!s) || (construct[0] == REMOTE_RESP_ERR)) {
-		DEBUG_WARN("jtagtap_reset failed, error %s\n",
-				s ? (char *)&(construct[1]) : "unknown");
+	platform_buffer_write((uint8_t *)REMOTE_JTAG_RESET_STR, sizeof(REMOTE_JTAG_RESET_STR));
+	char buffer[REMOTE_MAX_MSG_SIZE];
+	const int length = platform_buffer_read((uint8_t *)buffer, REMOTE_MAX_MSG_SIZE);
+	if (!length || buffer[0] == REMOTE_RESP_ERR) {
+		DEBUG_WARN("jtagtap_reset failed, error %s\n", length ? buffer + 1 : "unknown");
 		exit(-1);
-    }
+	}
 }
 
-static void jtagtap_tms_seq(uint32_t MS, int ticks)
+static void jtagtap_tms_seq(uint32_t tms_states, size_t clock_cycles)
 {
-	uint8_t construct[REMOTE_MAX_MSG_SIZE];
-	int s;
+	char buffer[REMOTE_MAX_MSG_SIZE];
+	int length = snprintf(buffer, REMOTE_MAX_MSG_SIZE, REMOTE_JTAG_TMS_STR, clock_cycles, tms_states);
+	platform_buffer_write((uint8_t *)buffer, length);
 
-	s = snprintf((char *)construct, REMOTE_MAX_MSG_SIZE,
-				 REMOTE_JTAG_TMS_STR, ticks, MS);
-	platform_buffer_write(construct, s);
-
-	s = platform_buffer_read(construct, REMOTE_MAX_MSG_SIZE);
-	if ((!s) || (construct[0] == REMOTE_RESP_ERR)) {
-		DEBUG_WARN("jtagtap_tms_seq failed, error %s\n",
-				s ? (char *)&(construct[1]) : "unknown");
+	length = platform_buffer_read((uint8_t *)buffer, REMOTE_MAX_MSG_SIZE);
+	if (!length || buffer[0] == REMOTE_RESP_ERR) {
+		DEBUG_WARN("jtagtap_tms_seq failed, error %s\n", length ? buffer + 1 : "unknown");
 		exit(-1);
-    }
+	}
 }
 
-/* At least up to v1.7.1-233, remote handles only up to 32 ticks in one
+/* At least up to v1.7.1-233, remote handles only up to 32 clock cycles in one
  * call. Break up large calls.
  *
  * FIXME: Provide and test faster call and keep fallback
  * for old firmware
  */
-static void jtagtap_tdi_tdo_seq(
-	uint8_t *DO, const uint8_t final_tms, const uint8_t *DI, int ticks)
+static void jtagtap_tdi_tdo_seq(uint8_t *const data_out, const bool final_tms, const uint8_t *const data_in, const size_t clock_cycles)
 {
-	uint8_t construct[REMOTE_MAX_MSG_SIZE];
-	int s;
-
-	if(!ticks || (!DI && !DO))
+	if (!clock_cycles || (!data_in && !data_out))
 		return;
-	while (ticks) {
-		int chunk;
-		if (ticks < 65)
-			chunk = ticks;
-		else {
+
+	char buffer[REMOTE_MAX_MSG_SIZE];
+	size_t in_offset = 0;
+	size_t out_offset = 0;
+	for (size_t cycle = 0; cycle < clock_cycles; ) {
+		size_t chunk;
+		if (clock_cycles - cycle <= 64)
+			chunk = clock_cycles - cycle;
+		else
 			chunk = 64;
-		}
-		ticks -= chunk;
-		uint64_t di = 0;
-		int bytes = (chunk + 7) >> 3;
-		int i = 0;
-		if (DI) {
-			for (; i < bytes; i++) {
-				di |= *DI << (i * 8);
-				DI++;
-			}
+		cycle += chunk;
+
+		uint64_t data = 0;
+		const size_t bytes = (chunk + 7U) >> 3U;
+		if (data_in) {
+			for (size_t i = 0; i < bytes; ++i)
+				data |= data_in[in_offset++] << (i * 8U);
 		}
 		/* PRIx64 differs with system. Use it explicit in the format string*/
-		s = snprintf((char *)construct, REMOTE_MAX_MSG_SIZE,
-					 "!J%c%02x%" PRIx64 "%c",
-					 (!ticks && final_tms) ?
-					 REMOTE_TDITDO_TMS : REMOTE_TDITDO_NOTMS,
-					 chunk, di, REMOTE_EOM);
-		platform_buffer_write(construct,s);
+		int length = snprintf(buffer, REMOTE_MAX_MSG_SIZE, "!J%c%02zx%" PRIx64 "%c",
+			!clock_cycles && final_tms ? REMOTE_TDITDO_TMS : REMOTE_TDITDO_NOTMS, chunk, data, REMOTE_EOM);
+		platform_buffer_write((uint8_t *)buffer, length);
 
-		s = platform_buffer_read(construct, REMOTE_MAX_MSG_SIZE);
-		if ((!s) || (construct[0] == REMOTE_RESP_ERR)) {
-			DEBUG_WARN("jtagtap_tms_seq failed, error %s\n",
-					   s ? (char *)&(construct[1]) : "unknown");
+		length = platform_buffer_read((uint8_t *)buffer, REMOTE_MAX_MSG_SIZE);
+		if (!length || buffer[0] == REMOTE_RESP_ERR) {
+			DEBUG_WARN("jtagtap_tdi_tdo_seq failed, error %s\n", length ? buffer + 1 : "unknown");
 			exit(-1);
 		}
-		if (DO) {
-			uint64_t res = remotehston(-1, (char *)&construct[1]);
-			for (i = bytes; i > 0; i--) {
-				*DO++ = res & 0xff;
-				res >>= 8;
-			}
+		if (data_out) {
+			const uint64_t data = remotehston(-1, buffer + 1);
+			for (size_t i = 0; i < bytes; ++i)
+				data_out[out_offset++] = (uint8_t)(data >> (i * 8U));
 		}
 	}
 }
 
-static void jtagtap_tdi_seq(
-	const uint8_t final_tms, const uint8_t *DI, int ticks)
+static void jtagtap_tdi_seq(const bool final_tms, const uint8_t *data_in, size_t clock_cycles)
 {
-	return jtagtap_tdi_tdo_seq(NULL,  final_tms, DI, ticks);
+	return jtagtap_tdi_tdo_seq(NULL, final_tms, data_in, clock_cycles);
 }
 
-
-static uint8_t jtagtap_next(uint8_t dTMS, uint8_t dTDI)
+static bool jtagtap_next(const bool tms, const bool tdi)
 {
-	uint8_t construct[REMOTE_MAX_MSG_SIZE];
-	int s;
+	char buffer[REMOTE_MAX_MSG_SIZE];
+	int length = snprintf((char *)buffer, REMOTE_MAX_MSG_SIZE, REMOTE_JTAG_NEXT, bool_to_int(tms), bool_to_int(tdi));
+	platform_buffer_write((uint8_t *)buffer, length);
 
-	s = snprintf((char *)construct, REMOTE_MAX_MSG_SIZE, REMOTE_JTAG_NEXT,
-				 dTMS ? '1' : '0', dTDI ? '1' : '0');
-
-	platform_buffer_write(construct, s);
-
-	s = platform_buffer_read(construct, REMOTE_MAX_MSG_SIZE);
-	if ((!s) || (construct[0] == REMOTE_RESP_ERR)) {
-		DEBUG_WARN("jtagtap_next failed, error %s\n",
-				s ? (char *)&(construct[1]) : "unknown");
+	length = platform_buffer_read((uint8_t *)buffer, REMOTE_MAX_MSG_SIZE);
+	if (!length || buffer[0] == REMOTE_RESP_ERR) {
+		DEBUG_WARN("jtagtap_next failed, error %s\n", length ? buffer + 1 : "unknown");
 		exit(-1);
-    }
+	}
 
-	return remotehston(-1, (char *)&construct[1]);
+	return remotehston(-1, buffer + 1);
+}
+
+static void jtagtap_cycle(const bool tms, const bool tdi, const size_t clock_cycles)
+{
+	char buffer[REMOTE_MAX_MSG_SIZE];
+	int length =
+		snprintf(buffer, REMOTE_MAX_MSG_SIZE, REMOTE_JTAG_CYCLE_STR, bool_to_int(tms), bool_to_int(tdi), clock_cycles);
+	platform_buffer_write((uint8_t *)buffer, length);
+
+	length = platform_buffer_read((uint8_t *)buffer, REMOTE_MAX_MSG_SIZE);
+	if (!length || buffer[0] == REMOTE_RESP_ERR) {
+		DEBUG_WARN("jtagtap_cycle failed, error %s\n", length ? buffer + 1 : "unknown");
+		exit(-1);
+	}
 }

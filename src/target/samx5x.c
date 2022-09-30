@@ -38,10 +38,8 @@
 #include "target_internal.h"
 #include "cortexm.h"
 
-static int samx5x_flash_erase(struct target_flash *t, target_addr addr,
-			      size_t len);
-static int samx5x_flash_write(struct target_flash *f,
-			      target_addr dest, const void *src, size_t len);
+static bool samx5x_flash_erase(target_flash_s *f, target_addr_t addr, size_t len);
+static bool samx5x_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len);
 static bool samx5x_cmd_lock_flash(target *t, int argc, const char **argv);
 static bool samx5x_cmd_unlock_flash(target *t, int argc, const char **argv);
 static bool samx5x_cmd_unlock_bootprot(target *t, int argc, const char **argv);
@@ -52,9 +50,8 @@ static bool samx5x_cmd_ssb(target *t, int argc, const char **argv);
 static bool samx5x_cmd_update_user_word(target *t, int argc, const char **argv);
 
 /* (The SAM D1x/2x implementation of erase_all is reused as it's identical)*/
-extern bool samd_cmd_erase_all(target *t, int argc, const char **argv);
-#define samx5x_cmd_erase_all samd_cmd_erase_all
-
+bool samd_mass_erase(target *t);
+#define samx5x_mass_erase samd_mass_erase
 
 #ifdef SAMX5X_EXTRA_CMDS
 static bool samx5x_cmd_mbist(target *t, int argc, const char **argv);
@@ -64,8 +61,6 @@ static bool samx5x_cmd_write32(target *t, int argc, const char **argv);
 #endif
 
 const struct command_s samx5x_cmd_list[] = {
-	{"erase_mass", (cmd_handler)samx5x_cmd_erase_all,
-	 "Erase entire flash memory"},
 	{"lock_flash", (cmd_handler)samx5x_cmd_lock_flash,
 	 "Locks flash against spurious commands"},
 	{"unlock_flash", (cmd_handler)samx5x_cmd_unlock_flash,
@@ -92,12 +87,6 @@ const struct command_s samx5x_cmd_list[] = {
 	{"write32", (cmd_handler)samx5x_cmd_write32,
 	 "Writes a 32-bit word: write32 <addr> <value>"},
 #endif
-	{NULL, NULL, NULL}
-};
-
-const struct command_s samx5x_protected_cmd_list[] = {
-	{"erase_mass", (cmd_handler)samx5x_cmd_erase_all,
-	 "Erase entire flash memory"},
 	{NULL, NULL, NULL}
 };
 
@@ -326,11 +315,10 @@ struct samx5x_descr samx5x_parse_device_id(uint32_t did)
 	return samd;
 }
 
-static void samx5x_add_flash(target *t, uint32_t addr, size_t length,
-			     size_t erase_block_size, size_t write_page_size)
+static void samx5x_add_flash(target *t, uint32_t addr, size_t length, size_t erase_block_size, size_t write_page_size)
 {
-	struct target_flash *f = calloc(1, sizeof(*f));
-	if (!f) {			/* calloc failed: heap exhaustion */
+	target_flash_s *f = calloc(1, sizeof(*f));
+	if (!f) { /* calloc failed: heap exhaustion */
 		DEBUG_INFO("calloc: failed in %s\n", __func__);
 		return;
 	}
@@ -340,7 +328,7 @@ static void samx5x_add_flash(target *t, uint32_t addr, size_t length,
 	f->blocksize = erase_block_size;
 	f->erase = samx5x_flash_erase;
 	f->write = samx5x_flash_write;
-	f->buf_size = write_page_size;
+	f->writesize = write_page_size;
 	target_add_flash(t, f);
 }
 
@@ -391,6 +379,7 @@ bool samx5x_probe(target *t)
 	}
 
 	/* Setup Target */
+	t->mass_erase = samx5x_mass_erase;
 	t->driver = priv_storage->samx5x_variant_string;
 	t->reset = samx5x_reset;
 
@@ -408,32 +397,23 @@ bool samx5x_probe(target *t)
 	default:
 	case 18:
 		target_add_ram(t, 0x20000000, 0x20000);
-		samx5x_add_flash(t, 0x00000000, 0x40000,
-				 SAMX5X_BLOCK_SIZE,
-				 SAMX5X_PAGE_SIZE);
+		samx5x_add_flash(t, 0x00000000, 0x40000, SAMX5X_BLOCK_SIZE, SAMX5X_PAGE_SIZE);
 		break;
 	case 19:
 		target_add_ram(t, 0x20000000, 0x30000);
-		samx5x_add_flash(t, 0x00000000, 0x80000,
-				 SAMX5X_BLOCK_SIZE,
-				 SAMX5X_PAGE_SIZE);
+		samx5x_add_flash(t, 0x00000000, 0x80000, SAMX5X_BLOCK_SIZE, SAMX5X_PAGE_SIZE);
 		break;
 	case 20:
 		target_add_ram(t, 0x20000000, 0x40000);
-		samx5x_add_flash(t, 0x00000000, 0x100000,
-				 SAMX5X_BLOCK_SIZE,
-				 SAMX5X_PAGE_SIZE);
+		samx5x_add_flash(t, 0x00000000, 0x100000, SAMX5X_BLOCK_SIZE, SAMX5X_PAGE_SIZE);
 		break;
 	}
 
-	if (protected)
-		target_add_commands(t, samx5x_protected_cmd_list,
-				    "SAMD5x/E5x (protected)");
-	else
+	if (!protected)
 		target_add_commands(t, samx5x_cmd_list, "SAMD5x/E5x");
 
 	/* If we're not in reset here */
-	if (!platform_srst_get_val()) {
+	if (!platform_nrst_get_val()) {
 		/* We'll have to release the target from
 		 * extended reset to make attach possible */
 		if (target_mem_read32(t, SAMX5X_DSU_CTRLSTAT) &
@@ -469,19 +449,14 @@ static void samx5x_unlock_current_address(target *t)
  */
 static void samx5x_print_nvm_error(uint16_t errs)
 {
-	if (errs & SAMX5X_INTFLAG_ADDRE) {
+	if (errs & SAMX5X_INTFLAG_ADDRE)
 		DEBUG_WARN(" ADDRE");
-	}
-	if (errs & SAMX5X_INTFLAG_PROGE) {
+	if (errs & SAMX5X_INTFLAG_PROGE)
 		DEBUG_WARN(" PROGE");
-	}
-	if (errs & SAMX5X_INTFLAG_LOCKE) {
+	if (errs & SAMX5X_INTFLAG_LOCKE)
 		DEBUG_WARN(" LOCKE");
-	}
-	if (errs & SAMX5X_INTFLAG_NVME) {
+	if (errs & SAMX5X_INTFLAG_NVME)
 		DEBUG_WARN(" NVME");
-	}
-
 	DEBUG_WARN("\n");
 }
 
@@ -521,8 +496,7 @@ static int samx5x_check_nvm_error(target *t)
 /**
  * Erase flash block by block
  */
-static int samx5x_flash_erase(struct target_flash *f, target_addr addr,
-			      size_t len)
+static bool samx5x_flash_erase(target_flash_s *f, target_addr_t addr, size_t len)
 {
 	target *t = f->t;
 	uint16_t errs = samx5x_read_nvm_error(t);
@@ -543,12 +517,12 @@ static int samx5x_flash_erase(struct target_flash *f, target_addr addr,
 
 	if (addr < (15 - bootprot) * 8192) {
             DEBUG_WARN("Bootprot\n");
-            return -1;
+            return false;
         }
 
 	if (~runlock & (1 << addr / lock_region_size)) {
             DEBUG_WARN("runlock\n");
-            return -1;
+            return false;
         }
 
 	while (len) {
@@ -567,12 +541,12 @@ static int samx5x_flash_erase(struct target_flash *f, target_addr addr,
 			SAMX5X_STATUS_READY) == 0)
                     if (target_check_error(t) || samx5x_check_nvm_error(t)) {
                         DEBUG_WARN("NVM Ready\n");
-                        return -1;
+                        return false;
                     }
 
 		if (target_check_error(t) || samx5x_check_nvm_error(t)) {
                     DEBUG_WARN("Error\n");
-                    return -1;
+                    return false;
                 }
 
 		/* Lock */
@@ -582,14 +556,13 @@ static int samx5x_flash_erase(struct target_flash *f, target_addr addr,
 		len -= f->blocksize;
 	}
 
-	return 0;
+	return true;
 }
 
 /**
  * Write flash page by page
  */
-static int samx5x_flash_write(struct target_flash *f,
-			      target_addr dest, const void *src, size_t len)
+static bool samx5x_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len)
 {
 	target *t = f->t;
 	bool error = false;
@@ -622,13 +595,13 @@ static int samx5x_flash_write(struct target_flash *f,
 	if (error || target_check_error(t) || samx5x_check_nvm_error(t)) {
 		DEBUG_WARN("Error writing flash page at 0x%08"PRIx32
 		      " (len 0x%08zx)\n",  dest, len);
-		return -1;
+		return false;
 	}
 
 	/* Lock */
 	samx5x_lock_current_address(t);
 
-	return 0;
+	return true;
 }
 
 /**
@@ -691,7 +664,7 @@ static int samx5x_update_user_word(target *t, uint32_t addr, uint32_t value,
 		0xFF, 0xFF, 0xFF, 0xFF };
 
 	uint8_t buffer[SAMX5X_PAGE_SIZE];
-	uint32_t current_word, new_word;
+	uint32_t current_word;
 
 	target_mem_read(t, buffer, SAMX5X_NVM_USER_PAGE, SAMX5X_PAGE_SIZE);
 	memcpy(&current_word, buffer + addr, 4);
@@ -701,20 +674,18 @@ static int samx5x_update_user_word(target *t, uint32_t addr, uint32_t value,
 	for (int i = 0; !force && i < 4 && addr + i < 20; i++)
 		factory_word |= (uint32_t)factory_bits[addr + i] << (i * 8);
 
-	new_word = current_word & factory_word;
+	uint32_t new_word = current_word & factory_word;
 	new_word |= value & ~factory_word;
 	if (value_written != NULL)
 		*value_written = new_word;
 
 	if (new_word != current_word) {
-		DEBUG_INFO("Writing user page word 0x%08"PRIx32
-				   " at offset 0x%03"PRIx32"\n", new_word, addr);
+		DEBUG_INFO("Writing user page word 0x%08" PRIx32 " at offset 0x%03"PRIx32"\n", new_word, addr);
 		memcpy(buffer + addr, &new_word, 4);
 		return samx5x_write_user_page(t, buffer);
 	}
-	else {
+	else
 		DEBUG_INFO("Skipping user page write as no change would be made");
-	}
 
 	return 0;
 }
@@ -826,16 +797,12 @@ static bool samx5x_cmd_read_userpage(target *t, int argc, const char **argv)
 	(void)argc;
 	(void)argv;
 	uint8_t buffer[SAMX5X_PAGE_SIZE];
-	int i = 0;
 
 	target_mem_read(t, buffer, SAMX5X_NVM_USER_PAGE, SAMX5X_PAGE_SIZE);
 
 	tc_printf(t, "User Page:\n");
-	while (i < SAMX5X_PAGE_SIZE) {
-		tc_printf(t, "%02x%c", buffer[i],
-			  (i + 1) % 16 == 0 ? '\n' : ' ');
-		i++;
-	}
+	for (size_t i = 0; i < SAMX5X_PAGE_SIZE; ++i)
+		tc_printf(t, "%02x%c", buffer[i], (i + 1) % 16 == 0 ? '\n' : ' ');
 	return true;
 }
 
@@ -875,9 +842,7 @@ static bool samx5x_cmd_ssb(target *t, int argc, const char **argv)
 		if (target_check_error(t))
 			return -1;
 
-	tc_printf(t, "Set the security bit! "
-		  "You will need to issue 'monitor erase_mass' "
-		  "to clear this.\n");
+	tc_printf(t, "Set the security bit!\nYou will need to issue 'monitor erase_mass' to clear this.\n");
 
 	return true;
 }

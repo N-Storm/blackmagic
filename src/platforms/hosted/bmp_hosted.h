@@ -1,7 +1,41 @@
-#if !defined(__BMP_LIBUSB_H)
-#define      __BMP_LIBUSB_H
+/*
+ * This file is part of the Black Magic Debug project.
+ *
+ * Copyright (C) 2020-2021 Uwe Bonnes (bon@elektron.ikp.physik.tu-darmstadt.de)
+ *
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holders nor the names of
+ *    contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+ * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+ * OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+ * AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+ * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
 
-#include "cl_utils.h"
+#ifndef PLATFORMS_HOSTED_BMP_HOSTED_H
+#define PLATFORMS_HOSTED_BMP_HOSTED_H
+
+#include "cli.h"
 
 #if HOSTED_BMP_ONLY != 1
 # include <libusb-1.0/libusb.h>
@@ -49,4 +83,12 @@ void bmp_ident(bmp_info_t *info);
 int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info);
 void libusb_exit_function(bmp_info_t *info);
 
+#if defined(_WIN32) || defined(__CYGWIN__)
+#include <wchar.h>
+#define PRINT_INFO(fmt, ...) wprintf(L ## fmt, ##__VA_ARGS__)
+#else
+#include <stdio.h>
+#define PRINT_INFO(fmt, ...) printf((fmt), ##__VA_ARGS__)
 #endif
+
+#endif /* PLATFORMS_HOSTED_BMP_HOSTED_H */

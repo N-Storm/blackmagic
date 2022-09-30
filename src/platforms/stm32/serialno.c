@@ -20,47 +20,46 @@
 #include "general.h"
 #include <libopencm3/stm32/desig.h>
 
-char *serial_no_read(char *s)
+char serial_no[DFU_SERIAL_LENGTH];
+
+void read_serial_number(void)
 {
 #if DFU_SERIAL_LENGTH == 9
-	int i;
-	volatile uint32_t *unique_id_p = (volatile uint32_t *)DESIG_UNIQUE_ID_BASE;
-	uint32_t unique_id = *unique_id_p +
-			*(unique_id_p + 1) +
-			*(unique_id_p + 2);
+	const volatile uint32_t *const unique_id_p = (uint32_t *)DESIG_UNIQUE_ID_BASE;
+	const uint32_t unique_id = unique_id_p[0] + unique_id_p[1] + unique_id_p[2];
 	/* Fetch serial number from chip's unique ID */
-	for(i = 0; i < 8; i++) {
-		s[7-i] = ((unique_id >> (4*i)) & 0xF) + '0';
+	for (size_t i = 0; i < 8U; ++i) {
+		serial_no[7U - i] = ((unique_id >> (i * 4U)) & 0x0FU) + '0';
+		/* If the character is something above 9, then add the offset to make it ASCII A-F */
+		if (serial_no[7U - i] > '9')
+			serial_no[7U - i] += 7; /* 'A' - '9' = 8, less 1 gives 7. */
 	}
-	for(i = 0; i < 8; i++)
-		if(s[i] > '9')
-			s[i] += 'A' - '9' - 1;
 #elif DFU_SERIAL_LENGTH == 13
 	/* Use the same serial number as the ST DFU Bootloader.*/
-	uint16_t *uid = (uint16_t *)DESIG_UNIQUE_ID_BASE;
-# if defined(STM32F4) || defined(STM32F7)
+	const volatile uint16_t *const uid = (uint16_t *)DESIG_UNIQUE_ID_BASE;
+#if defined(STM32F4) || defined(STM32F7)
 	int offset = 3;
-# elif defined(STM32L0) ||  defined(STM32F0) || defined(STM32F3)
+#elif defined(STM32L0) || defined(STM32F0) || defined(STM32F3)
 	int offset = 5;
-# endif
-	sprintf(s, "%04X%04X%04X",
-            uid[1] + uid[5], uid[0] + uid[4], uid[offset]);
-#elif DFU_SERIAL_LENGTH == 25
-	int i;
-	uint32_t unique_id[3];
-	memcpy(unique_id, (uint32_t *)DESIG_UNIQUE_ID_BASE, 12);
-	for(i = 0; i < 8; i++) {
-		s[ 7-i] = ((unique_id[0] >> (4*i)) & 0xF) + '0';
-		s[15-i] = ((unique_id[1] >> (4*i)) & 0xF) + '0';
-		s[23-i] = ((unique_id[2] >> (4*i)) & 0xF) + '0';
-	}
-	for (i = 0; i < 24; i++)
-		if(s[i] > '9')
-			s[i] += 'A' - '9' - 1;
-#else
-# WARNING "Unhandled DFU_SERIAL_LENGTH"
 #endif
-	s[DFU_SERIAL_LENGTH - 1] = 0;
-	return s;
-}
+	sprintf(serial_no, "%04X%04X%04X", uid[1] + uid[5], uid[0] + uid[4], uid[offset]);
+#elif DFU_SERIAL_LENGTH == 25
+	const volatile uint32_t *const unique_id_p = (uint32_t *)DESIG_UNIQUE_ID_BASE;
+	uint32_t unique_id = 0;
+	for (size_t i = 0; i < 24U; ++i) {
+		const size_t chunk = i >> 3U;
+		const size_t nibble = i & 7U;
+		const size_t idx = (chunk << 3U) + (7U - nibble);
+		if (nibble == 0)
+			unique_id = unique_id_p[chunk];
+		serial_no[idx] = ((unique_id >> (nibble * 4U)) & 0x0F) + '0';
 
+		/* If the character is something above 9, then add the offset to make it ASCII A-F */
+		if (serial_no[idx] > '9')
+			serial_no[idx] += 7; /* 'A' - '9' = 8, less 1 gives 7. */
+	}
+#else
+#WARNING "Unhandled DFU_SERIAL_LENGTH"
+#endif
+	serial_no[DFU_SERIAL_LENGTH - 1] = '\0';
+}

@@ -22,20 +22,19 @@
 /* This file implements the platform specific functions for the STM32
  * implementation.
  */
-#ifndef __PLATFORM_H
-#define __PLATFORM_H
+#ifndef PLATFORMS_SWLINK_PLATFORM_H
+#define PLATFORMS_SWLINK_PLATFORM_H
 
 #include "gpio.h"
 #include "timing.h"
 #include "timing_stm32.h"
 
 #ifdef ENABLE_DEBUG
-# define PLATFORM_HAS_DEBUG
-# define USBUART_DEBUG
+#define PLATFORM_HAS_DEBUG
 extern bool debug_bmp;
-int usbuart_debug_write(const char *buf, size_t len);
 #endif
 
+#define PLATFORM_HAS_USBUART
 #define PLATFORM_IDENT		"(SWLINK) "
 
 /* Hardware definitions... */
@@ -43,12 +42,12 @@ int usbuart_debug_write(const char *buf, size_t len);
 #define TCK_PORT	GPIOA
 #define TDI_PORT	GPIOA
 #define TDO_PORT	GPIOB
-#define JRST_PORT	GPIOB
+#define TRST_PORT	GPIOB
 #define TMS_PIN		GPIO13
 #define TCK_PIN		GPIO14
 #define TDI_PIN		GPIO15
 #define TDO_PIN		GPIO3
-#define JRST_PIN	GPIO4
+#define TRST_PIN	GPIO4
 
 #define SWDIO_PORT 	TMS_PORT
 #define SWCLK_PORT 	TCK_PORT
@@ -88,6 +87,8 @@ int usbuart_debug_write(const char *buf, size_t len);
 	gpio_set_mode(USBUSART_PORT, GPIO_MODE_INPUT, \
 				  GPIO_CNF_INPUT_PULL_UPDOWN, USBUSART_RX_PIN); \
 	gpio_set(USBUSART_PORT, USBUSART_RX_PIN); \
+	gpio_set_mode(USBUSART_PORT, GPIO_MODE_OUTPUT_50_MHZ, \
+                  GPIO_CNF_OUTPUT_PUSHPULL, USBUSART_RTS_PIN | USBUSART_DTR_PIN); \
 } while(0)
 
 #define USB_DRIVER      st_usbfs_v1_usb_driver
@@ -110,6 +111,8 @@ int usbuart_debug_write(const char *buf, size_t len);
 #define USBUSART_PORT GPIOB
 #define USBUSART_TX_PIN GPIO6
 #define USBUSART_RX_PIN GPIO7
+#define USBUSART_RTS_PIN GPIO8
+#define USBUSART_DTR_PIN GPIO9
 #define USBUSART_ISR(x) usart1_isr(x)
 #define USBUSART_DMA_BUS DMA1
 #define USBUSART_DMA_CLK RCC_DMA1
@@ -184,4 +187,4 @@ extern uint8_t detect_rev(void);
 #define snprintf sniprintf
 #endif
 
-#endif
+#endif /* PLATFORMS_SWLINK_PLATFORM_H */

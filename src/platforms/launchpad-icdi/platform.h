@@ -14,14 +14,15 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef __PLATFORM_H
-#define __PLATFORM_H
+#ifndef PLATFORMS_LAUNCHPAD_ICDI_PLATFORM_H
+#define PLATFORMS_LAUNCHPAD_ICDI_PLATFORM_H
 
 #include <libopencm3/lm4f/gpio.h>
 #include <libopencm3/usb/usbd.h>
 
 #include "timing.h"
 
+#define PLATFORM_HAS_USBUART
 #define PLATFORM_IDENT      "(Launchpad ICDI) "
 
 extern uint8_t running_status;
@@ -48,8 +49,8 @@ extern uint32_t swd_delay_cnt;
 #define SWCLK_PORT	TCK_PORT
 #define SWCLK_PIN	TCK_PIN
 
-#define SRST_PORT	GPIOA_BASE
-#define SRST_PIN	GPIO6
+#define NRST_PORT	GPIOA_BASE
+#define NRST_PIN	GPIO6
 
 #define TMS_SET_MODE()	{								\
 	gpio_mode_setup(TMS_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, TMS_PIN);		\
@@ -111,9 +112,6 @@ inline static uint8_t gpio_get(uint32_t port, uint8_t pin) {
 
 #define disconnect_usb() do { usbd_disconnect(usbdev,1); nvic_disable_irq(USB_IRQ);} while(0)
 
-static inline int platform_hwversion(void)
-{
-	        return 0;
-}
+static inline int platform_hwversion(void) { return 0; }
 
-#endif
+#endif /* PLATFORMS_LAUNCHPAD_ICDI_PLATFORM_H */

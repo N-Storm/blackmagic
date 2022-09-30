@@ -18,11 +18,14 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef __GENERAL_H
-#define __GENERAL_H
+#ifndef INCLUDE_GENERAL_H
+#define INCLUDE_GENERAL_H
 
-#if !defined(_GNU_SOURCE)
-# define _GNU_SOURCE
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
 #endif
 #if !defined(__USE_MINGW_ANSI_STDIO)
 # define __USE_MINGW_ANSI_STDIO 1
@@ -38,6 +41,10 @@
 
 #include "platform.h"
 #include "platform_support.h"
+
+#ifndef ARRAY_LENGTH
+#define ARRAY_LENGTH(arr) (sizeof(arr) / sizeof(arr[0]))
+#endif
 
 extern uint32_t delay_cnt;
 
@@ -74,6 +81,8 @@ enum BMP_DEBUG {
 # define DEBUG_PROBE(...) do {} while(0)
 # define DEBUG_WIRE(...) do {} while(0)
 # define DEBUG_GDB_WIRE(...) do {} while(0)
+
+void debug_serial_send_stdout(const uint8_t *data, size_t len);
 #else
 # include <stdarg.h>
 extern int cl_debuglevel;
@@ -170,5 +179,4 @@ static inline void DEBUG_WIRE(const char *format, ...)
 #define SYSTICKMS (1000 / SYSTICKHZ)
 #define MORSECNT ((SYSTICKHZ / 10) - 1)
 
-#endif
-
+#endif /* INCLUDE_GENERAL_H */

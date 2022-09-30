@@ -22,8 +22,8 @@
 /* This file implements the platform specific functions for the STM32
  * implementation.
  */
-#ifndef __PLATFORM_H
-#define __PLATFORM_H
+#ifndef PLATFORMS_HYDRABUS_PLATFORM_H
+#define PLATFORMS_HYDRABUS_PLATFORM_H
 
 #include "gpio.h"
 #include "timing.h"
@@ -31,6 +31,7 @@
 
 #include <setjmp.h>
 
+#define PLATFORM_HAS_USBUART
 #define PLATFORM_HAS_TRACESWO
 #define PLATFORM_IDENT        " (HydraBus))"
 
@@ -45,7 +46,7 @@
  * TCK = 	PC1 (SWCLK)
  * TDO = 	PC2 (input for TRACESWO)
  * TDI = 	PC3
- * nSRST = PC4 (nRST /RESET / System Reset)
+ * nRST =   PC4 (nRST / nRESET / "System Reset")
  * nTRST = 	PC5 (Test Reset optional)
  *
  * USB VBUS detect:  PB13
@@ -70,8 +71,8 @@
 
 #define TRST_PORT	GPIOC
 #define TRST_PIN	GPIO5
-#define SRST_PORT	GPIOC
-#define SRST_PIN	GPIO4
+#define NRST_PORT	GPIOC
+#define NRST_PIN	GPIO4
 
 #define LED_PORT	GPIOA
 #define LED_PORT_UART	GPIOA
@@ -188,4 +189,4 @@ static inline int platform_hwversion(void)
 #define snprintf sniprintf
 #endif
 
-#endif
+#endif /* PLATFORMS_HYDRABUS_PLATFORM_H */

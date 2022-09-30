@@ -23,8 +23,8 @@
  */
 
 #include "general.h"
-#include "cdcacm.h"
-#include "usbuart.h"
+#include "usb.h"
+#include "aux_serial.h"
 #include "morse.h"
 
 #include <libopencm3/stm32/rcc.h>
@@ -76,12 +76,12 @@ void platform_init(void)
 			LED_UART | LED_IDLE_RUN | LED_ERROR | LED_BOOTLOADER);
 
 	platform_timing_init();
-	usbuart_init();
-	cdcacm_init();
+	blackmagic_usb_init();
+	aux_serial_init();
 }
 
-void platform_srst_set_val(bool assert) { (void)assert; }
-bool platform_srst_get_val(void) { return false; }
+void platform_nrst_set_val(bool assert) { (void)assert; }
+bool platform_nrst_get_val(void) { return false; }
 
 const char *platform_target_voltage(void)
 {
@@ -104,4 +104,9 @@ void platform_request_boot(void)
 	rcc_peripheral_enable_clock(&RCC_APB2ENR, RCC_APB2ENR_SYSCFGEN);
 	SYSCFG_MEMRM &= ~3;
 	SYSCFG_MEMRM |=  1;
+}
+
+void platform_target_clk_output_enable(bool enable)
+{
+	(void)enable;
 }

@@ -37,7 +37,6 @@
 #include "target_internal.h"
 #include "cortexm.h"
 
-static bool stm32h7_cmd_erase_mass(target *t, int argc, const char **argv);
 /* static bool stm32h7_cmd_option(target *t, int argc, char *argv[]); */
 static bool stm32h7_uid(target *t, int argc, const char **argv);
 static bool stm32h7_crc(target *t, int argc, const char **argv);
@@ -45,29 +44,21 @@ static bool stm32h7_cmd_psize(target *t, int argc, char *argv[]);
 static bool stm32h7_cmd_rev(target *t, int argc, const char **argv);
 
 const struct command_s stm32h7_cmd_list[] = {
-	{"erase_mass", (cmd_handler)stm32h7_cmd_erase_mass,
-	 "Erase entire flash memory"},
-/*	{"option", (cmd_handler)stm32h7_cmd_option,
-	"Manipulate option bytes"},*/
-	{"psize", (cmd_handler)stm32h7_cmd_psize,
-	 "Configure flash write parallelism: (x8|x16|x32|x64(default))"},
+	/*{"option", (cmd_handler)stm32h7_cmd_option, "Manipulate option bytes"},*/
+	{"psize", (cmd_handler)stm32h7_cmd_psize, "Configure flash write parallelism: (x8|x16|x32|x64(default))"},
 	{"uid", (cmd_handler)stm32h7_uid, "Print unique device ID"},
 	{"crc", (cmd_handler)stm32h7_crc, "Print CRC of both banks"},
-	{"revision", (cmd_handler)stm32h7_cmd_rev,
-	 "Returns the Device ID and Revision"},
+	{"revision", (cmd_handler)stm32h7_cmd_rev, "Returns the Device ID and Revision"},
 	{NULL, NULL, NULL}
 };
 
-
-static int stm32h7_flash_erase(struct target_flash *f, target_addr addr,
-							   size_t len);
-static int stm32h7_flash_write(struct target_flash *f,
-                               target_addr dest, const void *src, size_t len);
+static bool stm32h7_flash_erase(target_flash_s *f, target_addr_t addr, size_t len);
+static bool stm32h7_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len);
+static bool stm32h7_mass_erase(target *t);
 
 static const char stm32h7_driver_str[] = "STM32H7";
 
-enum stm32h7_regs
-{
+enum stm32h7_regs {
 	FLASH_ACR		= 0x00,
 	FLASH_KEYR		= 0x04,
 	FLASH_OPTKEYR	= 0x08,
@@ -154,13 +145,13 @@ enum stm32h7_regs
 #define FLASH_SECTOR_SIZE 	0x20000
 #define BANK2_START         0x08100000
 enum ID_STM32H7 {
-	ID_STM32H74x  = 0x450,      /* RM0433, RM0399 */
-	ID_STM32H7Bx  = 0x480,      /* RM0455 */
-	ID_STM32H72x  = 0x483,      /* RM0468 */
+	ID_STM32H74x  = 0x4500,      /* RM0433, RM0399 */
+	ID_STM32H7Bx  = 0x4800,      /* RM0455 */
+	ID_STM32H72x  = 0x4830,      /* RM0468 */
 };
 
 struct stm32h7_flash {
-	struct target_flash f;
+	target_flash_s f;
 	enum align psize;
 	uint32_t regbase;
 };
@@ -169,24 +160,21 @@ struct stm32h7_priv_s {
 	uint32_t dbg_cr;
 };
 
-static void stm32h7_add_flash(target *t,
-                              uint32_t addr, size_t length, size_t blocksize)
+static void stm32h7_add_flash(target *t, uint32_t addr, size_t length, size_t blocksize)
 {
 	struct stm32h7_flash *sf = calloc(1, sizeof(*sf));
-	struct target_flash *f;
-
-	if (!sf) {			/* calloc failed: heap exhaustion */
+	if (!sf) { /* calloc failed: heap exhaustion */
 		DEBUG_WARN("calloc: failed in %s\n", __func__);
 		return;
 	}
 
-	f = &sf->f;
+	target_flash_s *f = &sf->f;
 	f->start = addr;
 	f->length = length;
 	f->blocksize = blocksize;
 	f->erase = stm32h7_flash_erase;
 	f->write = stm32h7_flash_write;
-	f->buf_size = 2048;
+	f->writesize = 2048;
 	f->erased = 0xff;
 	sf->regbase = FPEC1_BASE;
 	if (addr >= BANK2_START)
@@ -235,8 +223,8 @@ static void stm32h7_detach(target *t)
 
 bool stm32h7_probe(target *t)
 {
-	uint32_t idcode = t->idcode;
-	if (idcode == ID_STM32H74x || idcode == ID_STM32H7Bx || idcode == ID_STM32H72x) {
+	if (t->part_id == ID_STM32H74x || t->part_id == ID_STM32H7Bx || t->part_id == ID_STM32H72x) {
+		t->mass_erase = stm32h7_mass_erase;
 		t->driver = stm32h7_driver_str;
 		t->attach = stm32h7_attach;
 		t->detach = stm32h7_detach;
@@ -255,197 +243,148 @@ bool stm32h7_probe(target *t)
 	return false;
 }
 
-static bool stm32h7_flash_unlock(target *t, uint32_t addr)
+static bool stm32h7_flash_busy_wait(target *t, uint32_t regbase)
+{
+	uint32_t sr;
+	do {
+		sr = target_mem_read32(t, regbase + FLASH_SR);
+		if ((sr & FLASH_SR_ERROR_MASK) || target_check_error(t)) {
+			DEBUG_WARN("stm32h7_flash_write: error sr %08" PRIx32 "\n", sr);
+			target_mem_write32(t, regbase + FLASH_CCR, sr & FLASH_SR_ERROR_MASK);
+			return false;
+		}
+	} while (sr & (FLASH_SR_BSY | FLASH_SR_QW));
+
+	return true;
+}
+
+static bool stm32h7_flash_unlock(target *t, const uint32_t addr)
 {
 	uint32_t regbase = FPEC1_BASE;
-	if (addr >= BANK2_START) {
+	if (addr >= BANK2_START)
 		regbase = FPEC2_BASE;
-	}
 
-	while(target_mem_read32(t, regbase + FLASH_SR) & FLASH_SR_BSY) {
-		if(target_check_error(t))
-			return false;
-	}
-	uint32_t sr = target_mem_read32(t, regbase + FLASH_SR) & FLASH_SR_ERROR_MASK;
-	if (sr) {
-		DEBUG_WARN("%s error 0x%08" PRIx32, __func__, sr);
-		target_mem_write32(t, regbase + FLASH_CCR, sr);
+	if (!stm32h7_flash_busy_wait(t, regbase))
 		return false;
-	}
+
 	if (target_mem_read32(t, regbase + FLASH_CR) & FLASH_CR_LOCK) {
 		/* Enable FLASH controller access */
 		target_mem_write32(t, regbase + FLASH_KEYR, KEY1);
 		target_mem_write32(t, regbase + FLASH_KEYR, KEY2);
 	}
-	if (target_mem_read32(t, regbase + FLASH_CR) & FLASH_CR_LOCK)
-		return false;
-	else
-		return true;
+	return !(target_mem_read32(t, regbase + FLASH_CR) & FLASH_CR_LOCK);
 }
 
-static int stm32h7_flash_erase(struct target_flash *f, target_addr addr,
-							   size_t len)
+static bool stm32h7_flash_erase(target_flash_s *f, target_addr_t addr, size_t len)
 {
 	target *t = f->t;
 	struct stm32h7_flash *sf = (struct stm32h7_flash *)f;
-	if (stm32h7_flash_unlock(t, addr) == false)
-		return -1;
+	if (!stm32h7_flash_unlock(t, addr))
+		return false;
 	/* We come out of reset with HSI 64 MHz. Adapt FLASH_ACR.*/
 	target_mem_write32(t, sf->regbase + FLASH_ACR, 0);
 	addr &= (NUM_SECTOR_PER_BANK * FLASH_SECTOR_SIZE) - 1;
-	int start_sector =  addr / FLASH_SECTOR_SIZE;
-	int end_sector   = (addr + len - 1) / FLASH_SECTOR_SIZE;
+	size_t start_sector =  addr / FLASH_SECTOR_SIZE;
+	const size_t end_sector = (addr + len - 1) / FLASH_SECTOR_SIZE;
 
 	enum align psize = ((struct stm32h7_flash *)f)->psize;
-	uint32_t sr;
 	while (start_sector <= end_sector) {
-		uint32_t cr = (psize * FLASH_CR_PSIZE16) | FLASH_CR_SER |
-			(start_sector * FLASH_CR_SNB_1);
-		target_mem_write32(t, sf->regbase + FLASH_CR, cr);
-		cr |= FLASH_CR_START;
-		target_mem_write32(t, sf->regbase + FLASH_CR, cr);
+		uint32_t ctrl_reg = (psize * FLASH_CR_PSIZE16) | FLASH_CR_SER | (start_sector * FLASH_CR_SNB_1);
+		target_mem_write32(t, sf->regbase + FLASH_CR, ctrl_reg);
+		ctrl_reg |= FLASH_CR_START;
+		target_mem_write32(t, sf->regbase + FLASH_CR, ctrl_reg);
 		DEBUG_INFO(" started cr %08" PRIx32 " sr %08" PRIx32 "\n",
-				   target_mem_read32(t, sf->regbase + FLASH_CR),
-				   target_mem_read32(t, sf->regbase + FLASH_SR));
-		do {
-			sr = target_mem_read32(t, sf->regbase + FLASH_SR);
-			if (target_check_error(t)) {
-				DEBUG_WARN("stm32h7_flash_erase: comm failed\n");
-				return -1;
-			}
-//			target_mem_write32(t, H7_IWDG_BASE, 0x0000aaaa);
-		}while (sr & (FLASH_SR_QW | FLASH_SR_BSY));
-		if (sr & FLASH_SR_ERROR_MASK) {
-			DEBUG_WARN("stm32h7_flash_erase: error, sr: %08" PRIx32 "\n", sr);
-			return -1;
-		}
-		start_sector++;
+			target_mem_read32(t, sf->regbase + FLASH_CR),
+			target_mem_read32(t, sf->regbase + FLASH_SR));
+
+		if (!stm32h7_flash_busy_wait(t, sf->regbase))
+			return false;
+
+		++start_sector;
 	}
-	return 0;
+	return true;
 }
 
-static int stm32h7_flash_write(struct target_flash *f, target_addr dest,
-                               const void *src, size_t len)
+static bool stm32h7_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len)
 {
 	target *t = f->t;
 	struct stm32h7_flash *sf = (struct stm32h7_flash *)f;
 	enum align psize = sf->psize;
-	if (stm32h7_flash_unlock(t, dest) == false)
-		return -1;
+	if (!stm32h7_flash_unlock(t, dest))
+		return false;
 	uint32_t cr = psize * FLASH_CR_PSIZE16;
 	target_mem_write32(t, sf->regbase + FLASH_CR, cr);
 	cr |= FLASH_CR_PG;
 	target_mem_write32(t, sf->regbase + FLASH_CR, cr);
 	/* does H7 stall?*/
-	uint32_t sr_reg = sf->regbase + FLASH_SR;
-	uint32_t sr;
+
 	target_mem_write(t, dest, src, len);
-	while ((sr = target_mem_read32(t, sr_reg)) & FLASH_SR_BSY) {
-		if(target_check_error(t)) {
-			DEBUG_WARN("stm32h7_flash_write: BSY comm failed\n");
-			return -1;
-		}
-	}
-	if (sr & FLASH_SR_ERROR_MASK) {
-		DEBUG_WARN("stm32h7_flash_write: error sr %08" PRIx32 "\n", sr);
-		return -1;
-	}
+
+	if (!stm32h7_flash_busy_wait(t, sf->regbase))
+		return false;
+
 	/* Close write windows.*/
 	target_mem_write32(t, sf->regbase + FLASH_CR, 0);
-	return 0;
+
+	return true;
+}
+
+static bool stm32h7_erase_bank(target *const t, const enum align psize,
+	const uint32_t start_addr, const uint32_t reg_base)
+{
+	if (!stm32h7_flash_unlock(t, start_addr)) {
+		DEBUG_WARN("mass erase: Unlock bank failed\n");
+		return false;
+	}
+	/* BER and start can be merged (3.3.10).*/
+	const uint32_t ctrl_reg = (psize * FLASH_CR_PSIZE16) | FLASH_CR_BER | FLASH_CR_START;
+	target_mem_write32(t, reg_base + FLASH_CR, ctrl_reg);
+	DEBUG_INFO("mass erase of bank started\n");
+	return true;
+}
+
+static bool stm32h7_wait_erase_bank(target *const t, platform_timeout *timeout, const uint32_t reg_base)
+{
+	while (target_mem_read32(t, reg_base + FLASH_SR) & FLASH_SR_QW) {
+		if (target_check_error(t)) {
+			DEBUG_WARN("mass erase bank: comm failed\n");
+			return false;
+		}
+		target_print_progress(timeout);
+	}
+	return true;
+}
+
+static bool stm32h7_check_bank(target *const t, const uint32_t reg_base)
+{
+	uint32_t status = target_mem_read32(t, reg_base + FLASH_SR);
+	if (status & FLASH_SR_ERROR_MASK)
+		DEBUG_WARN("mass erase bank: error sr %" PRIx32 "\n", status);
+	return !(status & FLASH_SR_ERROR_MASK);
 }
 
 /* Both banks are erased in parallel.*/
-static bool stm32h7_cmd_erase(target *t, int bank_mask)
+static bool stm32h7_mass_erase(target *t)
 {
-	const char spinner[] = "|/-\\";
-	int spinindex = 0;
-	bool do_bank1 = bank_mask & 1, do_bank2 = bank_mask & 2;
-	uint32_t cr;
-	bool result = false;
 	enum align psize = ALIGN_DWORD;
-	for (struct target_flash *f = t->flash; f; f = f->next) {
-		if (f->write == stm32h7_flash_write) {
-			psize = ((struct stm32h7_flash *)f)->psize;
-		}
+	for (target_flash_s *flash = t->flash; flash; flash = flash->next) {
+		if (flash->write == stm32h7_flash_write)
+			psize = ((struct stm32h7_flash *)flash)->psize;
 	}
-	cr = (psize * FLASH_CR_PSIZE16) | FLASH_CR_BER | FLASH_CR_START;
-	/* Flash mass erase start instruction */
-	if (do_bank1) {
-		if (stm32h7_flash_unlock(t, BANK1_START) == false) {
-			DEBUG_WARN("ME: Unlock bank1 failed\n");
-			goto done;
-		}
-		uint32_t regbase = FPEC1_BASE;
-		/* BER and start can be merged (3.3.10).*/
-		target_mem_write32(t, regbase + FLASH_CR, cr);
-		DEBUG_INFO("ME bank1 started\n");
-	}
-	if (do_bank2) {
-		if (stm32h7_flash_unlock(t, BANK2_START) == false) {
-			DEBUG_WARN("ME: Unlock bank2 failed\n");
-			goto done;
-		}
-		uint32_t regbase = FPEC2_BASE;
-		/* BER and start can be merged (3.3.10).*/
-		target_mem_write32(t, regbase + FLASH_CR, cr);
-		DEBUG_INFO("ME bank2 started\n");
-	}
+	/* Send mass erase Flash start instruction */
+	if (!stm32h7_erase_bank(t, psize, BANK1_START, FPEC1_BASE) ||
+		stm32h7_erase_bank(t, psize, BANK2_START, FPEC2_BASE))
+		return false;
 
-	/* Read FLASH_SR to poll for QW bit */
-	if (do_bank1) {
-		uint32_t regbase = FPEC1_BASE;
-		while (target_mem_read32(t, regbase + FLASH_SR) & FLASH_SR_QW) {
-//			target_mem_write32(t, H7_IWDG_BASE, 0x0000aaaa);
-			tc_printf(t, "\b%c", spinner[spinindex++ % 4]);
-			if(target_check_error(t)) {
-				DEBUG_WARN("ME bank1: comm failed\n");
-				goto done;
-			}
-		}
-	}
-	if (do_bank2) {
-		uint32_t regbase = FPEC2_BASE;
-		while (target_mem_read32(t, regbase + FLASH_SR) & FLASH_SR_QW) {
-//			target_mem_write32(t, H7_IWDG_BASE 0x0000aaaa);
-			tc_printf(t, "\b%c", spinner[spinindex++ % 4]);
-			if(target_check_error(t)) {
-				DEBUG_WARN("ME bank2: comm failed\n");
-				goto done;
-			}
-		}
-	}
+	platform_timeout timeout;
+	platform_timeout_set(&timeout, 500);
+	/* Wait for the banks to finish erasing */
+	if (!stm32h7_wait_erase_bank(t, &timeout, FPEC1_BASE) ||
+		!stm32h7_wait_erase_bank(t, &timeout, FPEC2_BASE))
+		return false;
 
-	if (do_bank1) {
-		/* Check for error */
-		uint32_t regbase = FPEC1_BASE;
-		uint32_t sr = target_mem_read32(t, regbase + FLASH_SR);
-		if (sr & FLASH_SR_ERROR_MASK) {
-			DEBUG_WARN("ME bank1, error sr %" PRIx32 "\n", sr);
-			goto done;
-		}
-	}
-	if (do_bank2) {
-		/* Check for error */
-		uint32_t regbase = FPEC2_BASE;
-		uint32_t sr = target_mem_read32(t, regbase + FLASH_SR);
-		if (sr & FLASH_SR_ERROR_MASK) {
-			DEBUG_WARN("ME bank2, error: sr %" PRIx32 "\n", sr);
-			goto done;
-		}
-	}
-	result = true;
-  done:
-	tc_printf(t, "\n");
-	return result;
-}
-
-static bool stm32h7_cmd_erase_mass(target *t, int argc, const char **argv)
-{
-	(void)argc;
-	(void)argv;
-	tc_printf(t, "Erasing flash... This may take a few seconds.  ");
-	return stm32h7_cmd_erase(t, 3);
+	/* Check the banks for final errors */
+	return stm32h7_check_bank(t, FPEC1_BASE) && stm32h7_check_bank(t, FPEC2_BASE);
 }
 
 /* Print the Unique device ID.
@@ -457,7 +396,7 @@ static bool stm32h7_uid(target *t, int argc, const char **argv)
 	(void)argv;
 
 	uint32_t uid = 0x1ff1e800;
-	if (t->idcode == ID_STM32H7Bx) {
+	if (t->part_id == ID_STM32H7Bx) {
 		uid = 0x08fff800;  /* 7B3/7A3/7B0 */
 	}
 
@@ -521,7 +460,7 @@ static bool stm32h7_cmd_psize(target *t, int argc, char *argv[])
 	(void)argv;
 	if (argc == 1) {
 		enum align psize = ALIGN_DWORD;
-		for (struct target_flash *f = t->flash; f; f = f->next) {
+		for (target_flash_s *f = t->flash; f; f = f->next) {
 			if (f->write == stm32h7_flash_write) {
 				psize = ((struct stm32h7_flash *)f)->psize;
 			}
@@ -544,7 +483,7 @@ static bool stm32h7_cmd_psize(target *t, int argc, char *argv[])
 			tc_printf(t, "usage: monitor psize (x8|x16|x32|x64)\n");
 			return false;
 		}
-		for (struct target_flash *f = t->flash; f; f = f->next) {
+		for (target_flash_s *f = t->flash; f; f = f->next) {
 			if (f->write == stm32h7_flash_write) {
 				((struct stm32h7_flash *)f)->psize = psize;
 			}

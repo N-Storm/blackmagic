@@ -23,8 +23,8 @@
  */
 
 #include "general.h"
-#include "cdcacm.h"
-#include "usbuart.h"
+#include "usb.h"
+#include "aux_serial.h"
 #include "morse.h"
 
 #include <libopencm3/stm32/rcc.h>
@@ -37,10 +37,6 @@
 #include <libopencm3/cm3/systick.h>
 #include <libopencm3/cm3/cortex.h>
 
-#ifdef BLACKPILL
-#include <libopencm3/usb/dwc/otg_fs.h>
-#endif
-
 
 jmp_buf fatal_error_jmpbuf;
 extern char _ebss[];
@@ -51,11 +47,8 @@ void platform_init(void)
 	/* Enable GPIO peripherals */
 	rcc_periph_clock_enable(RCC_GPIOA);
 	rcc_periph_clock_enable(RCC_GPIOC);
-#ifdef BLACKPILL
-	rcc_periph_clock_enable(RCC_GPIOB);
-#else
 	rcc_periph_clock_enable(RCC_GPIOD);
-#endif
+
 	/* Check the USER button*/
 	if (gpio_get(GPIOA, GPIO0) ||
 		((magic[0] == BOOTMAGIC0) && (magic[1] == BOOTMAGIC1)))
@@ -73,11 +66,7 @@ void platform_init(void)
 		SYSCFG_MEMRM |= 1;
 		scb_reset_core();
 	}
-#ifdef BLACKPILL
-	rcc_clock_setup_pll(&rcc_hse_25mhz_3v3[RCC_CLOCK_3V3_84MHZ]);
-#else
 	rcc_clock_setup_pll(&rcc_hse_8mhz_3v3[RCC_CLOCK_3V3_168MHZ]);
-#endif
 
 	/* Enable peripherals */
 	rcc_periph_clock_enable(RCC_OTGFS);
@@ -87,13 +76,8 @@ void platform_init(void)
 	gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO9 | GPIO11 | GPIO12);
 	gpio_set_af(GPIOA, GPIO_AF10, GPIO9 | GPIO10 | GPIO11 | GPIO12);
 
-#ifdef BLACKPILL
-	GPIOA_OSPEEDR &= 0x3C00000C;
-	GPIOA_OSPEEDR |= 0x28000008;
-#else
 	GPIOC_OSPEEDR &= ~0xF30;
 	GPIOC_OSPEEDR |= 0xA20;
-#endif
 
 	gpio_mode_setup(JTAG_PORT, GPIO_MODE_OUTPUT,
 					GPIO_PUPD_NONE,
@@ -122,17 +106,12 @@ void platform_init(void)
 #endif
 
 	platform_timing_init();
-	usbuart_init();
-	cdcacm_init();
-#ifdef BLACKPILL
-	// https://github.com/libopencm3/libopencm3/pull/1256#issuecomment-779424001
-	OTG_FS_GCCFG |= OTG_GCCFG_NOVBUSSENS | OTG_GCCFG_PWRDWN;
-	OTG_FS_GCCFG &= ~(OTG_GCCFG_VBUSBSEN | OTG_GCCFG_VBUSASEN);
-#endif
+	blackmagic_usb_init();
+	aux_serial_init();
 }
 
-void platform_srst_set_val(bool assert) { (void)assert; }
-bool platform_srst_get_val(void) { return false; }
+void platform_nrst_set_val(bool assert) { (void)assert; }
+bool platform_nrst_get_val(void) { return false; }
 
 const char *platform_target_voltage(void)
 {
@@ -153,8 +132,13 @@ bool platform_target_get_power(void)
 	return !gpio_get(PWR_BR_PORT, PWR_BR_PIN);
 }
 
-void platform_target_set_power(bool power)
+void platform_target_set_power(const bool power)
 {
 	gpio_set_val(PWR_BR_PORT, PWR_BR_PIN, !power);
 }
 #endif
+
+void platform_target_clk_output_enable(bool enable)
+{
+	(void)enable;
+}

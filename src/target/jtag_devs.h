@@ -18,6 +18,9 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#ifndef TARGET_JTAG_DEVS_H
+#define TARGET_JTAG_DEVS_H
+
 typedef const struct jtag_dev_descr_s {
 	const uint32_t idcode;
 	const uint32_t idmask;
@@ -26,3 +29,4 @@ typedef const struct jtag_dev_descr_s {
 } jtag_dev_descr_t;
 extern jtag_dev_descr_t dev_descr[];
 
+#endif /* TARGET_JTAG_DEVS_H */

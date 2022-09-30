@@ -21,9 +21,19 @@ ifndef NO_LIBOPENCM3
 endif
 	$(Q)$(MAKE) $(MFLAGS) -C src
 
+all_platforms:
+	$(Q)$(MAKE) $(MFLAGS) -C src $@
+
 clean:
 ifndef NO_LIBOPENCM3
 	$(Q)$(MAKE) $(MFLAGS) -C libopencm3 $@
 endif
 	$(Q)$(MAKE) $(MFLAGS) -C src $@
 
+clang-tidy:
+	$(Q)scripts/run-clang-tidy.py -s "$(PWD)"
+
+clang-format:
+	$(Q)$(MAKE) $(MFLAGS) -C src $@
+
+.PHONY: clean all_platforms clang-tidy clang-format

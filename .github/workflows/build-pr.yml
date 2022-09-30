@@ -4,7 +4,7 @@ name: build PR
 on:
   # Triggers the workflow on push or pull request events but only for the main branch
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -24,15 +24,40 @@ jobs:
       # Use embedded toolchain
       - uses: numworks/setup-arm-toolchain@2020-q4
 
-      # Run some of the most common build types
-      - name: Build native fw
-        run: make
+      # Build all the firmwares
+      - name: Build all platform firmwares and BMP only BMPA
+        run: make all_platforms HOSTED_BMP_ONLY=1
 
       - name: Clean
         run: make clean
 
-      - name: Install BMP PC hosted dependencies
-        run: sudo apt-get -y install libftdi1-dev libhidapi-dev
+      - name: Install BMDA dependencies
+        run: sudo apt-get -y install libusb-dev libftdi1-dev libhidapi-dev
 
-      - name: Build PC hosted binary
-        run: make PROBE_HOST=hosted 
+      - name: Build full BMDA binary
+        run: make PROBE_HOST=hosted
+
+  size-diff:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: numworks/setup-arm-toolchain@2020-q4
+
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.base_ref }}
+          path: base
+
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+
+      - name: Build base
+        run: make -C base > base/build.log
+
+      - name: Build head
+        run: make -C head > head/build.log
+
+      - name: Diff
+        run: head/scripts/diff_size.py base/build.log head/build.log

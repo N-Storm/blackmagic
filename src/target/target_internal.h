@@ -18,45 +18,54 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef __TARGET_INTERNAL_H
-#define __TARGET_INTERNAL_H
+#ifndef TARGET_TARGET_INTERNAL_H
+#define TARGET_TARGET_INTERNAL_H
+
+#include "platform_support.h"
 
 extern target *target_list;
 target *target_new(void);
 
 struct target_ram {
-	target_addr start;
+	target_addr_t start;
 	size_t length;
 	struct target_ram *next;
 };
 
-struct target_flash;
-typedef int (*flash_erase_func)(struct target_flash *f, target_addr addr, size_t len);
-typedef int (*flash_write_func)(struct target_flash *f, target_addr dest,
-                                const void *src, size_t len);
-typedef int (*flash_done_func)(struct target_flash *f);
+typedef struct target_flash target_flash_s;
+
+typedef bool (*flash_prepare_func)(target_flash_s *f);
+typedef bool (*flash_erase_func)(target_flash_s *f, target_addr_t addr, size_t len);
+typedef bool (*flash_write_func)(target_flash_s *f, target_addr_t dest, const void *src, size_t len);
+typedef bool (*flash_done_func)(target_flash_s *f);
+
 struct target_flash {
-	target_addr start;
-	size_t length;
-	size_t blocksize;
-	flash_erase_func erase;
-	flash_write_func write;
-	flash_done_func done;
-	target *t;
-	uint8_t erased;
-	size_t buf_size;
-	struct target_flash *next;
-	target_addr buf_addr;
-	void *buf;
+	target *t;                   /* Target this flash is attached to */
+	target_addr_t start;         /* start address of flash */
+	size_t length;               /* flash length */
+	size_t blocksize;            /* erase block size */
+	size_t writesize;            /* write operation size, must be <= blocksize/writebufsize */
+	size_t writebufsize;         /* size of write buffer */
+	uint8_t erased;              /* byte erased state */
+	bool ready;                  /* true if flash is in flash mode/prepared */
+	flash_prepare_func prepare;  /* prepare for flash operations */
+	flash_erase_func erase;      /* erase a range of flash */
+	flash_write_func write;      /* write to flash */
+	flash_done_func done;        /* finish flash operations */
+	void *buf;                   /* buffer for flash operations */
+	target_addr_t buf_addr_base; /* address of block this buffer is for */
+	target_addr_t buf_addr_low;  /* address of lowest byte written */
+	target_addr_t buf_addr_high; /* address of highest byte written */
+	target_flash_s *next;        /* next flash in list */
 };
 
 typedef bool (*cmd_handler)(target *t, int argc, const char **argv);
 
-struct command_s {
+typedef struct command_s {
 	const char *cmd;
 	cmd_handler handler;
 	const char *help;
-};
+} command_t;
 
 struct target_command_s {
 	const char *specific_name;
@@ -67,7 +76,7 @@ struct target_command_s {
 struct breakwatch {
 	struct breakwatch *next;
 	enum target_breakwatch type;
-	target_addr addr;
+	target_addr_t addr;
 	size_t size;
 	uint32_t reserved[4]; /* for use by the implementing driver */
 };
@@ -84,14 +93,12 @@ struct target_s {
 	bool (*check_error)(target *t);
 
 	/* Memory access functions */
-	void (*mem_read)(target *t, void *dest, target_addr src,
-	                 size_t len);
-	void (*mem_write)(target *t, target_addr dest,
-	                  const void *src, size_t len);
+	void (*mem_read)(target *t, void *dest, target_addr_t src, size_t len);
+	void (*mem_write)(target *t, target_addr_t dest, const void *src, size_t len);
 
 	/* Register access functions */
 	size_t regs_size;
-	const char *tdesc;
+	char *tdesc;
 	void (*regs_read)(target *t, void *data);
 	void (*regs_write)(target *t, const void *data);
 	ssize_t (*reg_read)(target *t, int reg, void *data, size_t max);
@@ -101,18 +108,25 @@ struct target_s {
 	void (*reset)(target *t);
 	void (*extended_reset)(target *t);
 	void (*halt_request)(target *t);
-	enum target_halt_reason (*halt_poll)(target *t, target_addr *watch);
+	enum target_halt_reason (*halt_poll)(target *t, target_addr_t *watch);
 	void (*halt_resume)(target *t, bool step);
 
 	/* Break-/watchpoint functions */
-	int (*breakwatch_set)(target *t, struct breakwatch*);
-	int (*breakwatch_clear)(target *t, struct breakwatch*);
+	int (*breakwatch_set)(target *t, struct breakwatch *);
+	int (*breakwatch_clear)(target *t, struct breakwatch *);
 	struct breakwatch *bw_list;
+
+	/* Recovery functions */
+	bool (*mass_erase)(target *t);
+
+	/* Flash functions */
+	bool (*enter_flash_mode)(target *t);
+	bool (*exit_flash_mode)(target *t);
+	bool flash_mode;
 
 	/* target-defined options */
 	unsigned target_options;
-	uint16_t t_designer;
-	uint16_t idcode;
+
 	void *target_storage;
 	union {
 		bool unsafe_enabled;
@@ -120,26 +134,41 @@ struct target_s {
 	};
 
 	struct target_ram *ram;
-	struct target_flash *flash;
+	target_flash_s *flash;
 
 	/* Other stuff */
 	const char *driver;
 	uint32_t cpuid;
 	char *core;
 	char cmdline[MAX_CMDLINE];
-	target_addr heapinfo[4];
+	target_addr_t heapinfo[4];
 	struct target_command_s *commands;
+#ifdef PLATFORM_HAS_USBUART
+	bool stdout_redirected;
+#endif
 
 	struct target_s *next;
 
 	void *priv;
 	void (*priv_free)(void *);
+
+	/* Target designer and id / partno */
+	uint16_t designer_code;
+	/* targetid partno if available (>= DPv2)
+	 * fallback to ap partno
+	 */
+	uint16_t part_id;
 };
 
+void target_print_progress(platform_timeout *timeout);
+void target_ram_map_free(target *t);
+void target_flash_map_free(target *t);
 void target_mem_map_free(target *t);
 void target_add_commands(target *t, const struct command_s *cmds, const char *name);
-void target_add_ram(target *t, target_addr start, uint32_t len);
-void target_add_flash(target *t, struct target_flash *f);
+void target_add_ram(target *t, target_addr_t start, uint32_t len);
+void target_add_flash(target *t, target_flash_s *f);
+
+target_flash_s *target_flash_for_addr(target *t, uint32_t addr);
 
 /* Convenience function for MMIO access */
 uint32_t target_mem_read32(target *t, uint32_t addr);
@@ -154,47 +183,17 @@ bool target_check_error(target *t);
 void tc_printf(target *t, const char *fmt, ...);
 
 /* Interface to host system calls */
-int tc_open(target *, target_addr path, size_t plen,
-            enum target_open_flags flags, mode_t mode);
+int tc_open(target *, target_addr_t path, size_t plen, enum target_open_flags flags, mode_t mode);
 int tc_close(target *t, int fd);
-int tc_read(target *t, int fd, target_addr buf, unsigned int count);
-int tc_write(target *t, int fd, target_addr buf, unsigned int count);
-long tc_lseek(target *t, int fd, long offset,
-              enum target_seek_flag flag);
-int tc_rename(target *t, target_addr oldpath, size_t oldlen,
-                         target_addr newpath, size_t newlen);
-int tc_unlink(target *t, target_addr path, size_t plen);
-int tc_stat(target *t, target_addr path, size_t plen, target_addr buf);
-int tc_fstat(target *t, int fd, target_addr buf);
-int tc_gettimeofday(target *t, target_addr tv, target_addr tz);
+int tc_read(target *t, int fd, target_addr_t buf, unsigned int count);
+int tc_write(target *t, int fd, target_addr_t buf, unsigned int count);
+long tc_lseek(target *t, int fd, long offset, enum target_seek_flag flag);
+int tc_rename(target *t, target_addr_t oldpath, size_t oldlen, target_addr_t newpath, size_t newlen);
+int tc_unlink(target *t, target_addr_t path, size_t plen);
+int tc_stat(target *t, target_addr_t path, size_t plen, target_addr_t buf);
+int tc_fstat(target *t, int fd, target_addr_t buf);
+int tc_gettimeofday(target *t, target_addr_t tv, target_addr_t tz);
 int tc_isatty(target *t, int fd);
-int tc_system(target *t, target_addr cmd, size_t cmdlen);
+int tc_system(target *t, target_addr_t cmd, size_t cmdlen);
 
-/* Probe for various targets.
- * Actual functions implemented in their respective drivers.
- */
-bool gd32f1_probe(target *t);
-bool stm32f1_probe(target *t);
-bool stm32f4_probe(target *t);
-bool stm32h7_probe(target *t);
-bool stm32l0_probe(target *t);
-bool stm32l1_probe(target *t);
-bool stm32l4_probe(target *t);
-bool stm32g0_probe(target *t);
-bool lmi_probe(target *t);
-bool lpc11xx_probe(target *t);
-bool lpc15xx_probe(target *t);
-bool lpc17xx_probe(target *t);
-bool lpc43xx_probe(target *t);
-bool lpc546xx_probe(target *t);
-bool sam3x_probe(target *t);
-bool sam4l_probe(target *t);
-bool nrf51_probe(target *t);
-bool samd_probe(target *t);
-bool samx5x_probe(target *t);
-bool kinetis_probe(target *t);
-bool efm32_probe(target *t);
-bool msp432_probe(target *t);
-bool ke04_probe(target *t);
-bool rp_probe(target *t);
-#endif
+#endif /* TARGET_TARGET_INTERNAL_H */

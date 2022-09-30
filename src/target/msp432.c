@@ -99,29 +99,27 @@
 #define WDT_A_HOLD 0x5A88u       /* Clears and halts the watchdog */
 
 /* Support variables to call code in ROM */
-struct msp432_flash
-{
-	struct target_flash f;
-	target_addr flash_protect_register; /* Address of the WEPROT register*/
-	target_addr FlashCtl_eraseSector;   /* Erase flash sector routine in ROM*/
-	target_addr FlashCtl_programMemory; /* Flash programming routine in ROM */
+struct msp432_flash {
+	target_flash_s f;
+	target_addr_t flash_protect_register; /* Address of the WEPROT register*/
+	target_addr_t FlashCtl_eraseSector;   /* Erase flash sector routine in ROM*/
+	target_addr_t FlashCtl_programMemory; /* Flash programming routine in ROM */
 };
 
 /* Flash operations */
-static bool msp432_sector_erase(struct target_flash *f, target_addr addr);
-static int msp432_flash_erase(struct target_flash *f, target_addr addr, size_t len);
-static int msp432_flash_write(struct target_flash *f, target_addr dest,
-			      const void *src, size_t len);
+static bool msp432_sector_erase(target_flash_s *f, target_addr_t addr);
+static bool msp432_flash_erase(target_flash_s *f, target_addr_t addr, size_t len);
+static bool msp432_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len);
 
 /* Utility functions */
 /* Find the the target flash that conatins a specific address */
-static struct target_flash *get_target_flash(target *t, target_addr addr);
+static target_flash_s *get_target_flash(target *t, target_addr_t addr);
 
 /* Call a subroutine in the MSP432 ROM (or anywhere else...)*/
 static void msp432_call_ROM(target *t, uint32_t address, uint32_t regs[]);
 
 /* Protect or unprotect the sector containing address */
-static inline uint32_t msp432_sector_unprotect(struct msp432_flash *mf, target_addr addr)
+static inline uint32_t msp432_sector_unprotect(struct msp432_flash *mf, target_addr_t addr)
 {
 	/* Read the old protection register */
 	uint32_t old_mask = target_mem_read32(mf->f.t, mf->flash_protect_register);
@@ -145,11 +143,11 @@ const struct command_s msp432_cmd_list[] = {
 	{"sector_erase", (cmd_handler)msp432_cmd_sector_erase, "Erase sector containing given address"},
 	{NULL, NULL, NULL}};
 
-static void msp432_add_flash(target *t, uint32_t addr, size_t length, target_addr prot_reg)
+static void msp432_add_flash(target *t, uint32_t addr, size_t length, target_addr_t prot_reg)
 {
 	struct msp432_flash *mf = calloc(1, sizeof(*mf));
-	struct target_flash *f;
-	if (!mf) {			/* calloc failed: heap exhaustion */
+	target_flash_s *f;
+	if (!mf) { /* calloc failed: heap exhaustion */
 		DEBUG_WARN("calloc: failed in %s\n", __func__);
 		return;
 	}
@@ -160,16 +158,13 @@ static void msp432_add_flash(target *t, uint32_t addr, size_t length, target_add
 	f->blocksize = SECTOR_SIZE;
 	f->erase = msp432_flash_erase;
 	f->write = msp432_flash_write;
-	f->buf_size = SRAM_WRITE_BUF_SIZE;
+	f->writesize = SRAM_WRITE_BUF_SIZE;
 	f->erased = 0xff;
 	target_add_flash(t, f);
 	/* Initialize ROM call pointers. Silicon rev B is not supported */
-	uint32_t flashctltable =
-		target_mem_read32(t, ROM_APITABLE + OFS_FLASHCTLTABLE);
-	mf->FlashCtl_eraseSector =
-		target_mem_read32(t, flashctltable + OFS_FlashCtl_eraseSector);
-	mf->FlashCtl_programMemory =
-		target_mem_read32(t, flashctltable + OFS_FlashCtl_programMemory);
+	uint32_t flashctltable = target_mem_read32(t, ROM_APITABLE + OFS_FLASHCTLTABLE);
+	mf->FlashCtl_eraseSector = target_mem_read32(t, flashctltable + OFS_FlashCtl_eraseSector);
+	mf->FlashCtl_programMemory = target_mem_read32(t, flashctltable + OFS_FlashCtl_programMemory);
 	mf->flash_protect_register = prot_reg;
 }
 
@@ -232,7 +227,7 @@ bool msp432_probe(target *t)
 
 /* Flash operations */
 /* Erase a single sector at addr calling the ROM routine*/
-static bool msp432_sector_erase(struct target_flash *f, target_addr addr)
+static bool msp432_sector_erase(target_flash_s *f, target_addr_t addr)
 {
 	target *t = f->t;
 	struct msp432_flash *mf = (struct msp432_flash *)f;
@@ -258,15 +253,15 @@ static bool msp432_sector_erase(struct target_flash *f, target_addr addr)
 	/* Restore original protection */
 	target_mem_write32(t, mf->flash_protect_register, old_prot);
 
-	return !regs[0];
+	return !!regs[0];
 }
 
 /* Erase from addr for len bytes */
-static int msp432_flash_erase(struct target_flash *f, target_addr addr, size_t len)
+static bool msp432_flash_erase(target_flash_s *f, target_addr_t addr, size_t len)
 {
-	int ret = 0;
+	bool ret = true;
 	while (len) {
-		ret |= msp432_sector_erase(f, addr);
+		ret &= msp432_sector_erase(f, addr);
 
 		/* update len and addr */
 		len -= f->blocksize;
@@ -280,8 +275,7 @@ static int msp432_flash_erase(struct target_flash *f, target_addr addr, size_t l
 }
 
 /* Program flash */
-static int msp432_flash_write(struct target_flash *f, target_addr dest,
-			      const void *src, size_t len)
+static bool msp432_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len)
 {
 	struct msp432_flash *mf = (struct msp432_flash *)f;
 	target *t = f->t;
@@ -310,8 +304,9 @@ static int msp432_flash_write(struct target_flash *f, target_addr dest,
 	target_mem_write32(t, mf->flash_protect_register, old_prot);
 
 	DEBUG_INFO("ROM return value: %"PRIu32"\n", regs[0]);
+
 	// Result value in R0 is true for success
-	return !regs[0];
+	return !!regs[0];
 }
 
 /* Optional commands handlers */
@@ -326,12 +321,12 @@ static bool msp432_cmd_erase_main(target *t, int argc, const char **argv)
 	DEBUG_INFO("Bank Size: 0x%08"PRIX32"\n", banksize);
 
 	/* Erase first bank */
-	struct target_flash *f = get_target_flash(t, MAIN_FLASH_BASE);
-	bool ret = msp432_flash_erase(f, MAIN_FLASH_BASE, banksize);
+	target_flash_s *f = get_target_flash(t, MAIN_FLASH_BASE);
+	bool ret = !msp432_flash_erase(f, MAIN_FLASH_BASE, banksize);
 
 	/* Erase second bank */
 	f = get_target_flash(t, MAIN_FLASH_BASE + banksize);
-	ret |= msp432_flash_erase(f, MAIN_FLASH_BASE + banksize, banksize);
+	ret |= !msp432_flash_erase(f, MAIN_FLASH_BASE + banksize, banksize);
 
 	return ret;
 }
@@ -344,18 +339,18 @@ static bool msp432_cmd_sector_erase(target *t, int argc, const char **argv)
 	uint32_t addr = strtoul(argv[1], NULL, 0);
 
 	/* Find the flash structure (for the rigth protect register) */
-	struct target_flash *f = get_target_flash(t, addr);
+	target_flash_s *f = get_target_flash(t, addr);
 
 	if (f)
-		return msp432_sector_erase(f, addr);
+		return !msp432_sector_erase(f, addr);
 	tc_printf(t, "Invalid sector address\n");
 	return false;
 }
 
 /* Returns flash bank containing addr, or NULL if not found */
-static struct target_flash *get_target_flash(target *t, target_addr addr)
+static target_flash_s *get_target_flash(target *t, target_addr_t addr)
 {
-	struct target_flash *f = t->flash;
+	target_flash_s *f = t->flash;
 	while (f) {
 		if ((f->start <= addr) && (addr < f->start + f->length))
 			break;

@@ -23,8 +23,8 @@
  */
 
 #include "general.h"
-#include "cdcacm.h"
-#include "usbuart.h"
+#include "usb.h"
+#include "aux_serial.h"
 
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/cm3/scb.h>
@@ -35,7 +35,7 @@
 #include <libopencm3/stm32/adc.h>
 
 uint16_t led_idle_run;
-uint16_t srst_pin;
+uint16_t nrst_pin;
 static uint32_t rev;
 static void adc_init(void);
 
@@ -48,17 +48,13 @@ void platform_init(void)
 {
 	rev = detect_rev();
 	SCS_DEMCR |= SCS_DEMCR_VC_MON_EN;
-#ifdef ENABLE_DEBUG
-	void initialise_monitor_handles(void);
-	initialise_monitor_handles();
-#endif
 	rcc_clock_setup_pll(&rcc_hse_configs[RCC_CLOCK_HSE8_72MHZ]);
 	if (rev == 0) {
 		led_idle_run = GPIO8;
-		srst_pin = SRST_PIN_V1;
+		nrst_pin = NRST_PIN_V1;
 	} else {
 		led_idle_run = GPIO9;
-		srst_pin = SRST_PIN_V2;
+		nrst_pin = NRST_PIN_V2;
 	}
 	/* Setup GPIO ports */
 	gpio_set_mode(TMS_PORT, GPIO_MODE_OUTPUT_2_MHZ,
@@ -68,7 +64,7 @@ void platform_init(void)
 	gpio_set_mode(TDI_PORT, GPIO_MODE_OUTPUT_2_MHZ,
 	              GPIO_CNF_OUTPUT_PUSHPULL, TDI_PIN);
 
-	platform_srst_set_val(false);
+	platform_nrst_set_val(false);
 
 	gpio_set_mode(LED_PORT, GPIO_MODE_OUTPUT_2_MHZ,
 	              GPIO_CNF_OUTPUT_PUSHPULL, led_idle_run);
@@ -80,29 +76,35 @@ void platform_init(void)
 	platform_timing_init();
 	if (rev > 1) /* Reconnect USB */
 		gpio_set(GPIOA, GPIO15);
-	cdcacm_init();
+	blackmagic_usb_init();
+
+#ifdef SWIM_AS_UART
+	gpio_primary_remap(AFIO_MAPR_SWJ_CFG_FULL_SWJ,
+			   AFIO_MAPR_USART1_REMAP);
+#endif
+
 	/* Don't enable UART if we're being debugged. */
 	if (!(SCS_DEMCR & SCS_DEMCR_TRCENA))
-		usbuart_init();
-        adc_init();
+		aux_serial_init();
+	adc_init();
 }
 
-void platform_srst_set_val(bool assert)
+void platform_nrst_set_val(bool assert)
 {
 	if (assert) {
-		gpio_set_mode(SRST_PORT, GPIO_MODE_OUTPUT_2_MHZ,
-		              GPIO_CNF_OUTPUT_OPENDRAIN, srst_pin);
-		gpio_clear(SRST_PORT, srst_pin);
+		gpio_set_mode(NRST_PORT, GPIO_MODE_OUTPUT_2_MHZ,
+		              GPIO_CNF_OUTPUT_OPENDRAIN, nrst_pin);
+		gpio_clear(NRST_PORT, nrst_pin);
 	} else {
-		gpio_set_mode(SRST_PORT, GPIO_MODE_INPUT,
-			GPIO_CNF_INPUT_PULL_UPDOWN, srst_pin);
-		gpio_set(SRST_PORT, srst_pin);
+		gpio_set_mode(NRST_PORT, GPIO_MODE_INPUT,
+			GPIO_CNF_INPUT_PULL_UPDOWN, nrst_pin);
+		gpio_set(NRST_PORT, nrst_pin);
 	}
 }
 
-bool platform_srst_get_val()
+bool platform_nrst_get_val()
 {
-	return gpio_get(SRST_PORT, srst_pin) == 0;
+	return gpio_get(NRST_PORT, nrst_pin) == 0;
 }
 
 static void adc_init(void)
@@ -153,4 +155,9 @@ const char *platform_target_voltage(void)
 	ret[3] = '0' + (val /	10) % 10;
 
 	return ret;
+}
+
+void platform_target_clk_output_enable(bool enable)
+{
+	(void)enable;
 }

@@ -41,7 +41,8 @@ data_desc_t active_state;
 cable_desc_t cable_desc[] = {
 	{
 		/* Direct connection from FTDI to Jtag/Swd.
-		 Pin 6 direct connected to RST.*/
+		 * Pin 6 direct connected to RST.
+		 */
 		.vendor = 0x0403,
 		.product = 0x6014,
 		.interface = INTERFACE_A,
@@ -53,17 +54,18 @@ cable_desc_t cable_desc[] = {
 	},
 	{
 		/* Direct connection from FTDI to Jtag/Swd.
-		 Pin 6 direct connected to RST.*/
+		 * Pin 6 direct connected to RST.
+		 */
 		.vendor = 0x0403,
 		.product = 0x6010,
 		.interface = INTERFACE_A,
 		.init.data_low = PIN6, /* PULL nRST high*/
 		.bb_swdio_in_port_cmd = GET_BITS_LOW,
 		.bb_swdio_in_pin = MPSSE_CS,
-		.assert_srst.data_low   = ~PIN6,
-		.assert_srst.ddr_low    =  PIN6,
-		.deassert_srst.data_low =  PIN6,
-		.deassert_srst.ddr_low  = ~PIN6,
+		.assert_nrst.data_low   = ~PIN6,
+		.assert_nrst.ddr_low    =  PIN6,
+		.deassert_nrst.data_low =  PIN6,
+		.deassert_nrst.ddr_low  = ~PIN6,
 		.description = "FLOSS-JTAG",
 		.name = "flossjtag"
 	},
@@ -75,7 +77,8 @@ cable_desc_t cable_desc[] = {
 		 * resistor is not necessary, but protects
 		 * from contentions in case of errors.
 		 * JTAG not possible
-		 * PIN6     (DB6) ----------- NRST */
+		 * PIN6     (DB6) ----------- NRST
+		 */
 		.vendor  = 0x0403,
 		.product = 0x6010,/*FT2232H*/
 		.interface = INTERFACE_B,
@@ -83,10 +86,10 @@ cable_desc_t cable_desc[] = {
 		.init.ddr_low  = PIN4, /* Pull up pin 4 */
 		.mpsse_swd_read.set_data_low  = MPSSE_DO,
 		.mpsse_swd_write.set_data_low = MPSSE_DO,
-		.assert_srst.data_low   = ~PIN6,
-		.assert_srst.ddr_low    =  PIN6,
-		.deassert_srst.data_low =  PIN6,
-		.deassert_srst.ddr_low  = ~PIN6,
+		.assert_nrst.data_low   = ~PIN6,
+		.assert_nrst.ddr_low    =  PIN6,
+		.deassert_nrst.data_low =  PIN6,
+		.deassert_nrst.ddr_low  = ~PIN6,
 		.target_voltage_cmd  = GET_BITS_LOW,
 		.target_voltage_pin  = PIN4, /* Always read as target voltage present.*/
 		.description = "USBMATE",
@@ -99,7 +102,8 @@ cable_desc_t cable_desc[] = {
 		 * DO is tristated with SWD read, so
 		 * resistor is not necessary, but protects
 		 * from contentions in case of errors.
-		 * JTAG not possible.*/
+		 * JTAG not possible.
+		 */
 		.vendor  = 0x0403,
 		.product = 0x6014,/*FT232H*/
 		.interface = INTERFACE_A,
@@ -113,9 +117,9 @@ cable_desc_t cable_desc[] = {
 		 * SWD not possible.
 		 * PIN4 low enables buffers
 		 * PIN5 Low indicates VRef applied
-		 * PIN6 reads back SRST
-		 * CBUS PIN1 Sets SRST
-		 * CBUS PIN2 low drives SRST
+		 * PIN6 reads back nRST
+		 * CBUS PIN1 Sets nRST
+		 * CBUS PIN2 low drives nRST
 		 */
 		.vendor = 0x0403,
 		.product = 0x6010,
@@ -123,38 +127,38 @@ cable_desc_t cable_desc[] = {
 		.init.ddr_low = PIN4,
 		.init.data_high = PIN4 | PIN3 | PIN2,
 		.init.ddr_high = PIN4 | PIN3 | PIN2 | PIN1 | PIN0,
-		.assert_srst.data_high   = ~PIN3,
-		.deassert_srst.data_high =  PIN3,
-		.srst_get_port_cmd = GET_BITS_LOW,
-		.srst_get_pin = PIN6,
+		.assert_nrst.data_high   = ~PIN3,
+		.deassert_nrst.data_high =  PIN3,
+		.nrst_get_port_cmd = GET_BITS_LOW,
+		.nrst_get_pin = PIN6,
 		.description = "FTDIJTAG",
 		.name = "ftdijtag"
 	},
 	{
-/* UART/SWO on Interface A
- * JTAG and control on INTERFACE_B
- * Bit 5 high selects SWD-WRITE (TMS routed to MPSSE_DI)
- * Bit 6 high selects JTAG vs SWD (TMS routed to MPSSE_CS)
- * BCBUS 1 (Output) N_SRST
- * BCBUS 2 (Input/ Internal Pull Up) V_ISO available
- *
- * For bitbanged SWD, set Bit 5 low and select SWD read with
- * Bit 6 low. Read Connector TMS as MPSSE_DI.
- *
- * TDO is routed to Interface 0 RXD as SWO or with Uart
- * Connector pin 10 pulled to ground will connect Interface 0 RXD
- * to UART connector RXD
- */
+		/* UART/SWO on Interface A
+		 * JTAG and control on INTERFACE_B
+		 * Bit 5 high selects SWD-WRITE (TMS routed to MPSSE_DI)
+		 * Bit 6 high selects JTAG vs SWD (TMS routed to MPSSE_CS)
+		 * BCBUS 1 (Output) N_RST
+		 * BCBUS 2 (Input/ Internal Pull Up) V_ISO available
+		 *
+		 * For bitbanged SWD, set Bit 5 low and select SWD read with
+		 * Bit 6 low. Read Connector TMS as MPSSE_DI.
+		 *
+		 * TDO is routed to Interface 0 RXD as SWO or with Uart
+		 * Connector pin 10 pulled to ground will connect Interface 0 RXD
+		 * to UART connector RXD
+		 */
 		.vendor = 0x0403,
 		.product = 0x6010,
 		.interface = INTERFACE_B,
 		.init.data_low = PIN6 | PIN5,
 		.init.ddr_low  = PIN6 | PIN5,
 		.init.data_high = PIN1 | PIN2,
-		.assert_srst.data_high     = ~PIN1,
-		.assert_srst.ddr_high      =  PIN1,
-		.deassert_srst.data_high   =  PIN1,
-		.deassert_srst.ddr_high    = ~PIN1,
+		.assert_nrst.data_high     = ~PIN1,
+		.assert_nrst.ddr_high      =  PIN1,
+		.deassert_nrst.data_high   =  PIN1,
+		.deassert_nrst.ddr_high    = ~PIN1,
 		.mpsse_swd_read.clr_data_low  = PIN5 | PIN6,
 		.mpsse_swd_write.set_data_low = PIN5,
 		.mpsse_swd_write.clr_data_low = PIN6,
@@ -177,8 +181,8 @@ cable_desc_t cable_desc[] = {
 		 * => SWD not possible.
 		 * DBUS PIN4 / JTAGOE low enables buffers
 		 * DBUS PIN5 / TRST high drives nTRST low OC
-		 * DBUS PIN6 / RST high drives nSRST low OC
-		 * CBUS PIN0 reads back SRST
+		 * DBUS PIN6 / RST high drives nRST low OC
+		 * CBUS PIN0 reads back nRST
 		 */
 		.vendor = 0x0403,
 		.product = 0xbdc8,
@@ -187,10 +191,10 @@ cable_desc_t cable_desc[] = {
 		.init.data_low  = 0,
 		.init.ddr_low  = PIN6 | PIN5 | PIN4,
 		.init.ddr_high = PIN2, /* ONE LED */
-		.assert_srst.data_low = PIN6,
-		.deassert_srst.data_low = ~PIN6,
-		.srst_get_port_cmd = GET_BITS_HIGH,
-		.srst_get_pin = PIN0,
+		.assert_nrst.data_low = PIN6,
+		.deassert_nrst.data_low = ~PIN6,
+		.nrst_get_port_cmd = GET_BITS_HIGH,
+		.nrst_get_pin = PIN0,
 		.name = "turtelizer",
 		.description = "Turtelizer JTAG/RS232 Adapter"
 	},
@@ -261,6 +265,86 @@ cable_desc_t cable_desc[] = {
 		.name = "arm-usb-ocd-h"
 	},
 	{
+		/* ESP Prog:
+		 *
+		 * JTAG buffered on Interface A -> No SWD
+		 * Standard VID/PID/Product
+		 * No nRST on the 10 pin connectors
+		 *
+		 * JTAG enabled by default, ESP_EN pulled up,
+		 * inverted by U4 and enabling JTAG by U5
+		 */
+		.vendor = 0x0403,
+		.product = 0x6010,
+		.interface = INTERFACE_A,
+		.name = "esp-prog"
+		// No explicit reset
+		// SWD not possible
+	},
+	{
+		/* MPSSE_SK (DB0) ----------- SWDCK/JTCK
+		 * Mode-Switch 1-2/4-5: JTAG
+		 * MPSSE-DO (DB1) ----------- JTAG/TDI
+		 * MPSSE-DI (DB2) ----------- JTAG/TDO
+		 * MPSSE-CS (DB3) ----------- JTAG/TMS
+		 * Mode-Switch 3-2/6-5: SWD
+		 * MPSSE-DO (DB1) -- 330 R -- SWD/SWDIO
+		 * MPSSE-DI (DB2) ----------- SWD/SWDIO
+		 * Indicate Mode-SW set to SWD with "-e" on the command line
+		 * TRST is Push/Pull, not OD!
+		 * PIN4     (DB5) ----------- TRST
+		 * nRST is Push/Pull, not OD! Keep DDR set.
+		 * PIN5     (DB5) ----------- NRST */
+		.vendor  = 0x0403,
+		.product = 0x6010,/*FT2232H*/
+		.interface = INTERFACE_B,
+		.init.data_high = PIN4 | PIN5, /* High   on PIN4/5 */
+		.init.ddr_high = PIN4 | PIN5,  /* Output on PIN4/5 */
+		.assert_nrst.data_low   = ~PIN5,
+		.assert_nrst.ddr_low    =  PIN5,
+		.deassert_nrst.data_low =  PIN5,
+		.deassert_nrst.ddr_low  =  PIN5,
+		.target_voltage_cmd  = GET_BITS_LOW,
+		.description = "Tigard",
+		.name = "tigard"
+	},
+	{
+		/* https://sifive.cdn.prismic.io/sifive/b5c95ddd-22af-4be0-8021-50327e186b07_hifive1-a-schematics.pdf
+		 * Direct Connection on Interface-A
+		 * Reset on PIN5, Open-Drain, pulled up tp 3.3 Volt
+		 * and decoupled from FE310 reset voa Schottky
+		 */
+		.vendor = 0x0403,
+		.product = 0x6010,
+		.interface = INTERFACE_A,
+		.assert_nrst.data_low    = ~PIN5,
+		.assert_nrst.ddr_low     =  PIN5,
+		.deassert_nrst.data_low  =  PIN5,
+		.deassert_nrst.ddr_low   = ~PIN5,
+		.bb_swdio_in_port_cmd = GET_BITS_LOW,
+		.bb_swdio_in_pin = MPSSE_CS,
+		.name = "hifive1"
+	},
+	{
+		/* https://www.olimex.com/Products/ARM/JTAG/ARM-USB-TINY-H/
+		 *
+		 * schematics not available
+		 */
+		.vendor = 0x15b1,
+		.product = 0x002a,
+		.interface = INTERFACE_A,
+		.init.data_low  = PIN4,
+		.init.ddr_low  = PIN4 | PIN5,
+		.init.data_high = PIN2 | PIN4,
+		.init.ddr_high  = PIN4,
+		.assert_nrst.data_high   = ~PIN2,
+		.assert_nrst.ddr_high    =  PIN2,
+		.deassert_nrst.data_high =  PIN2,
+		.deassert_nrst.ddr_high  = ~PIN2,
+		.name = "arm-usb-tiny-h",
+		.description = "Olimex OpenOCD JTAG ARM-USB-TINY-H",
+	},
+	{
 	}
 };
 
@@ -268,7 +352,7 @@ int ftdi_bmp_init(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
 {
 	int err;
 	cable_desc_t *cable = &cable_desc[0];
-	for(;  cable->name; cable++) {
+	for (; cable->name; cable++) {
 		if (strncmp(cable->name, cl_opts->opt_cable, strlen(cable->name)) == 0)
 		 break;
 	}
@@ -296,27 +380,27 @@ int ftdi_bmp_init(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
 			active_cable->mpsse_swd_read.set_data_low = MPSSE_DO;
 			active_cable->mpsse_swd_write.set_data_low = MPSSE_DO;
 	} else if (!libftdi_swd_possible(NULL, NULL) &&
-			   !cl_opts->opt_usejtag) {
+			   cl_opts->opt_scanmode != BMP_SCAN_JTAG) {
 		DEBUG_WARN("SWD with cable not possible, trying JTAG\n");
-		cl_opts->opt_usejtag = true;
+		cl_opts->opt_scanmode = BMP_SCAN_JTAG;
 	}
-	if(ftdic) {
+	if (ftdic) {
 		ftdi_usb_close(ftdic);
 		ftdi_free(ftdic);
 		ftdic = NULL;
 	}
-	if((ftdic = ftdi_new()) == NULL) {
+	if ((ftdic = ftdi_new()) == NULL) {
 		DEBUG_WARN( "ftdi_new: %s\n",
 			ftdi_get_error_string(ftdic));
 		abort();
 	}
 	info->ftdic = ftdic;
-	if((err = ftdi_set_interface(ftdic, active_cable->interface)) != 0) {
+	if ((err = ftdi_set_interface(ftdic, active_cable->interface)) != 0) {
 		DEBUG_WARN( "ftdi_set_interface: %d: %s\n",
 			err, ftdi_get_error_string(ftdic));
 		goto error_1;
 	}
-	if((err = ftdi_usb_open_desc(
+	if ((err = ftdi_usb_open_desc(
 		ftdic, active_cable->vendor, active_cable->product,
 		active_cable->description, cl_opts->opt_serial)) != 0) {
 		DEBUG_WARN( "unable to open ftdi device: %d (%s)\n",
@@ -324,17 +408,17 @@ int ftdi_bmp_init(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
 		goto error_1;
 	}
 
-	if((err = ftdi_set_latency_timer(ftdic, 1)) != 0) {
+	if ((err = ftdi_set_latency_timer(ftdic, 1)) != 0) {
 		DEBUG_WARN( "ftdi_set_latency_timer: %d: %s\n",
 			err, ftdi_get_error_string(ftdic));
 		goto error_2;
 	}
-	if((err = ftdi_set_baudrate(ftdic, 1000000)) != 0) {
+	if ((err = ftdi_set_baudrate(ftdic, 1000000)) != 0) {
 		DEBUG_WARN( "ftdi_set_baudrate: %d: %s\n",
 			err, ftdi_get_error_string(ftdic));
 		goto error_2;
 	}
-	if((err = ftdi_write_data_set_chunksize(ftdic, BUF_SIZE)) != 0) {
+	if ((err = ftdi_write_data_set_chunksize(ftdic, BUF_SIZE)) != 0) {
 		DEBUG_WARN( "ftdi_write_data_set_chunksize: %d: %s\n",
 			err, ftdi_get_error_string(ftdic));
 		goto error_2;
@@ -375,7 +459,7 @@ int ftdi_bmp_init(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
 	}
 	int index = 0;
 	ftdi_init[index++]= LOOPBACK_END; /* FT2232D gets upset otherwise*/
-	switch(ftdic->type) {
+	switch (ftdic->type) {
 	case TYPE_2232H:
 	case TYPE_4232H:
 	case TYPE_232H:
@@ -450,37 +534,37 @@ static void libftdi_set_data(data_desc_t* data)
 	}
 }
 
-void libftdi_srst_set_val(bool assert)
+void libftdi_nrst_set_val(bool assert)
 {
 	if (assert)
-		libftdi_set_data(&active_cable->assert_srst);
+		libftdi_set_data(&active_cable->assert_nrst);
 	else
-		libftdi_set_data(&active_cable->deassert_srst);
+		libftdi_set_data(&active_cable->deassert_nrst);
 }
 
-bool libftdi_srst_get_val(void)
+bool libftdi_nrst_get_val(void)
 {
 	uint8_t cmd[1] = {0};
 	uint8_t pin = 0;
-	if (active_cable->srst_get_port_cmd && active_cable->srst_get_pin) {
-		cmd[0]= active_cable->srst_get_port_cmd;
-		pin   =  active_cable->srst_get_pin;
-	} else if (active_cable->assert_srst.data_low &&
-			   active_cable->assert_srst.ddr_low) {
-		cmd[0]= GET_BITS_LOW;
-		pin   = active_cable->assert_srst.data_low;
-	} else if (active_cable->assert_srst.data_high &&
-			   active_cable->assert_srst.ddr_high) {
-		cmd[0]= GET_BITS_HIGH;
-		pin   = active_cable->assert_srst.data_high;
-	}else {
+	if (active_cable->nrst_get_port_cmd && active_cable->nrst_get_pin) {
+		cmd[0] = active_cable->nrst_get_port_cmd;
+		pin    = active_cable->nrst_get_pin;
+	} else if (active_cable->assert_nrst.data_low &&
+			   active_cable->assert_nrst.ddr_low) {
+		cmd[0] = GET_BITS_LOW;
+		pin    = active_cable->assert_nrst.data_low;
+	} else if (active_cable->assert_nrst.data_high &&
+			   active_cable->assert_nrst.ddr_high) {
+		cmd[0] = GET_BITS_HIGH;
+		pin    = active_cable->assert_nrst.data_high;
+	} else {
 		return false;
 	}
 	libftdi_buffer_write(cmd, 1);
 	uint8_t data[1];
 	libftdi_buffer_read(data, 1);
 	bool res = false;
-	if (((pin < 0x7f) || (pin == PIN7)))
+	if (pin < 0x7f || pin == PIN7)
 		res = data[0] & pin;
 	else
 		res = !(data[0] & ~pin);
@@ -504,13 +588,14 @@ static struct ftdi_transfer_control *tc_write = NULL;
 	bufptr = 0;
 }
 
-int libftdi_buffer_write(const uint8_t *data, int size)
+size_t libftdi_buffer_write(const uint8_t *data, size_t size)
 {
-	if((bufptr + size) / BUF_SIZE > 0) libftdi_buffer_flush();
+	if ((bufptr + size) / BUF_SIZE > 0)
+		libftdi_buffer_flush();
 	DEBUG_WIRE("Write %d bytes:", size);
-	for (int i = 0; i < size; i++) {
+	for (size_t i = 0; i < size; i++) {
 		DEBUG_WIRE(" %02x", data[i]);
-		if (i && ((i & 0xf) == 0xf))
+		if (i && (i & 0xf) == 0xf)
 			DEBUG_WIRE("\n\t");
 	}
 	DEBUG_WIRE("\n");
@@ -537,31 +622,33 @@ int libftdi_buffer_read(uint8_t *data, int size)
 	DEBUG_WIRE("Read  %d bytes:", size);
 	for (int i = 0; i < size; i++) {
 		DEBUG_WIRE(" %02x", data[i]);
-		if (i && ((i & 0xf) == 0xf))
+		if (i && (i & 0xf) == 0xf)
 			DEBUG_WIRE("\n\t");
 	}
 	DEBUG_WIRE("\n");
 	return size;
 }
 
-void libftdi_jtagtap_tdi_tdo_seq(
-	uint8_t *DO, const uint8_t final_tms, const uint8_t *DI, int ticks)
+void libftdi_jtagtap_tdi_tdo_seq(uint8_t *DO, const bool final_tms, const uint8_t *DI, size_t ticks)
 {
 	int rsize, rticks;
 
-	if(!ticks) return;
-	if (!DI && !DO) return;
+	if (!ticks)
+		return;
+	if (!DI && !DO)
+		return;
 
 	DEBUG_WIRE("libftdi_jtagtap_tdi_tdo_seq %s ticks: %d\n",
 			   (DI && DO) ? "read/write" : ((DI) ? "write" : "read"), ticks);
-	if(final_tms) ticks--;
+	if (final_tms)
+		--ticks;
 	rticks = ticks & 7;
 	ticks >>= 3;
 	uint8_t data[8];
 	uint8_t cmd =  ((DO)? MPSSE_DO_READ : 0) |
 		((DI)? (MPSSE_DO_WRITE | MPSSE_WRITE_NEG) : 0) | MPSSE_LSB;
 	rsize = ticks;
-	if(ticks) {
+	if (ticks) {
 		data[0] = cmd;
 		data[1] = ticks - 1;
 		data[2] = 0;
@@ -570,14 +657,14 @@ void libftdi_jtagtap_tdi_tdo_seq(
 			libftdi_buffer_write(DI, ticks);
 	}
 	int index = 0;
-	if(rticks) {
+	if (rticks) {
 		rsize++;
 		data[index++] = cmd | MPSSE_BITMODE;
 		data[index++] = rticks - 1;
 		if (DI)
 			data[index++] = DI[ticks];
 	}
-	if(final_tms) {
+	if (final_tms) {
 		rsize++;
 		data[index++] = MPSSE_WRITE_TMS | ((DO)? MPSSE_DO_READ : 0) |
 			MPSSE_LSB | MPSSE_BITMODE | MPSSE_WRITE_NEG;
@@ -593,19 +680,20 @@ void libftdi_jtagtap_tdi_tdo_seq(
 		libftdi_buffer_read(tmp, rsize);
 		if(final_tms) rsize--;
 
-		while(rsize--) {
+		while (rsize--)
 			*DO++ = tmp[index++];
-		}
 		if (rticks == 0)
 			*DO++ = 0;
-		if(final_tms) {
+
+		if (final_tms) {
 			rticks++;
 			*(--DO) >>= 1;
 			*DO |= tmp[index] & 0x80;
-		} else DO--;
-		if(rticks) {
+		} else
+			--DO;
+
+		if (rticks)
 			*DO >>= (8-rticks);
-		}
 	}
 }
 
@@ -617,7 +705,7 @@ const char *libftdi_target_voltage(void)
 		uint8_t data[1];
 		libftdi_buffer_read(data, 1);
 		bool res = false;
-		if (((pin < 0x7f) || (pin == PIN7)))
+		if (pin < 0x7f || pin == PIN7)
 			res = data[0] & pin;
 		else
 			res = !(data[0] & ~pin);
@@ -639,7 +727,7 @@ void libftdi_max_frequency_set(uint32_t freq)
 		/* Undivided clock set during startup*/
 		clock = 60 * 1000 * 1000;
 	uint32_t div = (clock  + 2 * freq - 1)/ freq;
-	if ((div < 4) && (ftdic->type = TYPE_2232C))
+	if (div < 4 && ftdic->type == TYPE_2232C)
 		div = 4; /* Avoid bad unsymetrict FT2232C clock at 6 MHz*/
 	divisor = div / 2 - 1;
 	uint8_t buf[3];

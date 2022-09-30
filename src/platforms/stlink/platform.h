@@ -21,8 +21,9 @@
 /* This file implements the platform specific functions for the STM32
  * implementation.
  */
-#ifndef __PLATFORM_H
-#define __PLATFORM_H
+
+#ifndef PLATFORMS_STLINK_PLATFORM_H
+#define PLATFORMS_STLINK_PLATFORM_H
 
 #include "gpio.h"
 #include "timing.h"
@@ -33,12 +34,11 @@
 #include <libopencm3/usb/usbd.h>
 
 #ifdef ENABLE_DEBUG
-# define PLATFORM_HAS_DEBUG
-# define USBUART_DEBUG
+#define PLATFORM_HAS_DEBUG
 extern bool debug_bmp;
-int usbuart_debug_write(const char *buf, size_t len);
 #endif
 
+#define PLATFORM_HAS_USBUART
 #define PLATFORM_IDENT   "(STLINK/V2) "
 
 /* Hardware definitions... */
@@ -56,14 +56,14 @@ int usbuart_debug_write(const char *buf, size_t len);
 #define SWDIO_PIN	TMS_PIN
 #define SWCLK_PIN	TCK_PIN
 
-#define SRST_PORT	GPIOB
-#define SRST_PIN_V1	GPIO1
-#define SRST_PIN_V2	GPIO0
+#define NRST_PORT	GPIOB
+#define NRST_PIN_V1	GPIO1
+#define NRST_PIN_V2	GPIO0
 
 #define LED_PORT	GPIOA
 /* Use PC14 for a "dummy" uart led. So we can observere at least with scope*/
-#define LED_PORT_UART	GPIOC
-#define LED_UART	GPIO14
+#define LED_PORT_UART	GPIOA
+#define LED_UART	GPIO9
 
 #define PLATFORM_HAS_TRACESWO	1
 #define NUM_TRACE_PACKETS		(128)		/* This is an 8K buffer */
@@ -105,15 +105,25 @@ int usbuart_debug_write(const char *buf, size_t len);
 #define IRQ_PRI_USB_VBUS	(14 << 4)
 #define IRQ_PRI_SWO_DMA			(0 << 4)
 
+#ifdef SWIM_AS_UART
+#define USBUSART USART1
+#define USBUSART_CR1 USART1_CR1
+#define USBUSART_DR USART1_DR
+#define USBUSART_IRQ NVIC_USART1_IRQ
+#define USBUSART_CLK RCC_USART1
+#define USBUSART_ISR(x) usart1_isr(x)
+#else
 #define USBUSART USART2
 #define USBUSART_CR1 USART2_CR1
 #define USBUSART_DR USART2_DR
 #define USBUSART_IRQ NVIC_USART2_IRQ
 #define USBUSART_CLK RCC_USART2
+#define USBUSART_ISR(x) usart2_isr(x)
+#endif
 #define USBUSART_PORT GPIOA
 #define USBUSART_TX_PIN GPIO2
 #define USBUSART_RX_PIN GPIO3
-#define USBUSART_ISR(x) usart2_isr(x)
+
 #define USBUSART_DMA_BUS DMA1
 #define USBUSART_DMA_CLK RCC_DMA1
 #define USBUSART_DMA_TX_CHAN DMA_CHANNEL7
@@ -178,5 +188,4 @@ extern uint32_t detect_rev(void);
 #define snprintf sniprintf
 #endif
 
-
-#endif
+#endif /* PLATFORMS_STLINK_PLATFORM_H */

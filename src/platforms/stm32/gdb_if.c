@@ -22,8 +22,11 @@
  * Serial Debugging protocol is implemented.  This implementation for STM32
  * uses the USB CDC-ACM device bulk endpoints to implement the channel.
  */
+
+#include <libopencmsis/core_cm3.h>
+
 #include "general.h"
-#include "cdcacm.h"
+#include "usb_serial.h"
 #include "gdb_if.h"
 
 static uint32_t count_out;
@@ -39,15 +42,15 @@ static uint8_t double_buffer_out[CDCACM_PACKET_SIZE];
 void gdb_if_putchar(unsigned char c, int flush)
 {
 	buffer_in[count_in++] = c;
-	if(flush || (count_in == CDCACM_PACKET_SIZE)) {
+	if (flush || (count_in == CDCACM_PACKET_SIZE)) {
 		/* Refuse to send if USB isn't configured, and
 		 * don't bother if nobody's listening */
-		if((cdcacm_get_config() != 1) || !cdcacm_get_dtr()) {
+		if (usb_get_config() != 1 || !gdb_serial_get_dtr()) {
 			count_in = 0;
 			return;
 		}
-		while(usbd_ep_write_packet(usbdev, CDCACM_GDB_ENDPOINT,
-			buffer_in, count_in) <= 0);
+		while (usbd_ep_write_packet(usbdev, CDCACM_GDB_ENDPOINT, buffer_in, count_in) <= 0)
+			continue;
 
 		if (flush && (count_in == CDCACM_PACKET_SIZE)) {
 			/* We need to send an empty packet for some hosts
@@ -56,8 +59,8 @@ void gdb_if_putchar(unsigned char c, int flush)
 			 * that transfer is complete, so we just send a packet
 			 * containing a null byte for now.
 			 */
-			while (usbd_ep_write_packet(usbdev, CDCACM_GDB_ENDPOINT,
-				"\0", 1) <= 0);
+			while (usbd_ep_write_packet(usbdev, CDCACM_GDB_ENDPOINT, "\0", 1) <= 0)
+				continue;
 		}
 
 		count_in = 0;
@@ -79,9 +82,9 @@ void gdb_usb_out_cb(usbd_device *dev, uint8_t ep)
 
 static void gdb_if_update_buf(void)
 {
-	while (cdcacm_get_config() != 1);
+	while (usb_get_config() != 1);
 #ifdef STM32F4
-	asm volatile ("cpsid i; isb");
+	__asm__ volatile("cpsid i; isb");
 	if (count_new) {
 		memcpy(buffer_out, double_buffer_out, count_new);
 		count_out = count_new;
@@ -89,12 +92,14 @@ static void gdb_if_update_buf(void)
 		out_ptr = 0;
 		usbd_ep_nak_set(usbdev, CDCACM_GDB_ENDPOINT, 0);
 	}
-	asm volatile ("cpsie i; isb");
+	__asm__ volatile("cpsie i; isb");
 #else
 	count_out = usbd_ep_read_packet(usbdev, CDCACM_GDB_ENDPOINT,
 	                                buffer_out, CDCACM_PACKET_SIZE);
 	out_ptr = 0;
 #endif
+	if (!count_out)
+		__WFI();
 }
 
 unsigned char gdb_if_getchar(void)
@@ -102,8 +107,10 @@ unsigned char gdb_if_getchar(void)
 
 	while (!(out_ptr < count_out)) {
 		/* Detach if port closed */
-		if (!cdcacm_get_dtr())
+		if (!gdb_serial_get_dtr()) {
+			__WFI();
 			return 0x04;
+		}
 
 		gdb_if_update_buf();
 	}
@@ -118,8 +125,10 @@ unsigned char gdb_if_getchar_to(int timeout)
 
 	if (!(out_ptr < count_out)) do {
 		/* Detach if port closed */
-		if (!cdcacm_get_dtr())
-			return 0x04;
+			if (!gdb_serial_get_dtr()) {
+				__WFI(); /* systick will wake up too!*/
+				return 0x04;
+			}
 
 		gdb_if_update_buf();
 	} while (!platform_timeout_is_expired(&t) && !(out_ptr < count_out));
@@ -129,4 +138,3 @@ unsigned char gdb_if_getchar_to(int timeout)
 
 	return -1;
 }
-

@@ -252,16 +252,16 @@ void dap_swd_configure(uint8_t cfg)
 }
 
 //-----------------------------------------------------------------------------
-int dap_info(int info, uint8_t *data, int size)
+size_t dap_info(const dap_info_t info, uint8_t *const data, const size_t size)
 {
 	uint8_t buf[256];
-	int rsize;
+	size_t rsize;
 
 	buf[0] = ID_DAP_INFO;
 	buf[1] = info;
 	dbg_dap_cmd(buf, sizeof(buf), 2);
 
-	rsize = (size < buf[0]) ? size : buf[0];
+	rsize = size < buf[0] ? size : buf[0];
 	memcpy(data, &buf[1], rsize);
 
 	if (rsize < size)
@@ -278,7 +278,10 @@ void dap_reset_pin(int state)
 	buf[1] = state ? DAP_SWJ_nRESET : 0; // Value
 	buf[2] = DAP_SWJ_nRESET; // Select
 	buf[3] = 0; // Wait
-	dbg_dap_cmd(buf, sizeof(buf), 4);
+	buf[4] = 0; // Wait
+	buf[5] = 0; // Wait
+	buf[6] = 0; // Wait
+	dbg_dap_cmd(buf, sizeof(buf), 7);
 }
 
 void dap_trst_reset(void)
@@ -369,7 +372,7 @@ void dap_write_reg(ADIv5_DP_t *dp, uint8_t reg, uint32_t data)
 	dap_index = dp->dp_jd_index;
 	buf[1] = dap_index;
 	buf[2] = 0x01; // Request size
-	buf[3] = reg & ~DAP_TRANSFER_RnW;;
+	buf[3] = reg & ~DAP_TRANSFER_RnW;
 	buf[4] = data & 0xff;
 	buf[5] = (data >> 8) & 0xff;
 	buf[6] = (data >> 16) & 0xff;
@@ -412,11 +415,12 @@ unsigned int dap_read_block(ADIv5_AP_t *ap, void *dest, uint32_t src,
 		DEBUG_WARN("dap_read_block @ %08" PRIx32 " fault -> line reset\n", src);
 		dap_line_reset();
 	}
-	if (sz != transferred) {
+	if (sz != transferred)
 		return 1;
-	} else if (align > ALIGN_HALFWORD) {
+
+	if (align > ALIGN_HALFWORD)
 		memcpy(dest, &buf[3], len);
-	} else {
+	else {
 		uint32_t *p = (uint32_t *)&buf[3];
 		while(sz) {
 			dest = extract(dest, src, *p, align);
@@ -440,9 +444,9 @@ unsigned int dap_write_block(ADIv5_AP_t *ap, uint32_t dest, const void *src,
     buf[2] =  sz & 0xff;
     buf[3] = (sz >> 8) & 0xff;
     buf[4] = SWD_AP_DRW;
-	if (align > ALIGN_HALFWORD) {
+	if (align > ALIGN_HALFWORD)
 		memcpy(&buf[5], src, len);
-	} else {
+	else {
 		unsigned int size = len;
 		uint32_t *p = (uint32_t *)&buf[5];
 		while (size) {
@@ -459,7 +463,7 @@ unsigned int dap_write_block(ADIv5_AP_t *ap, uint32_t dest, const void *src,
 			*p++ = tmp;
 		}
 	}
-	dbg_dap_cmd(buf, 1023, 5 + (sz << 2));
+	dbg_dap_cmd(buf, 1023, 5 + (sz << 2U));
 	if (buf[2] > DAP_TRANSFER_FAULT) {
 		dap_line_reset();
 	}
@@ -485,7 +489,7 @@ void dap_reset_link(bool jtag)
 		*p++ = 0x3c;
 		*p++ = 0xe7;
 		*p++ = 0x1f;
-		buf[1] = ((p - &buf[2]) * 8) - 2;
+		buf[1] = ((p - buf + 2) * 8) - 2;
 	} else {
 		*p++ = 0x9e;
 		*p++ = 0xe7;
@@ -497,7 +501,7 @@ void dap_reset_link(bool jtag)
 		*p++ = 0xff;
 		*p++ = 0xff;
 		*p++ = 0x00;
-		buf[1] = (p - &buf[2]) * 8;
+		buf[1] = (p - buf + 2) * 8;
 	}
 	dbg_dap_cmd(buf, sizeof(buf), p - buf);
 
@@ -651,19 +655,18 @@ void dap_write_single(ADIv5_AP_t *ap, uint32_t dest, const void *src,
 	dbg_dap_cmd(buf, sizeof(buf), p - buf);
 }
 
-void dap_jtagtap_tdi_tdo_seq(uint8_t *DO, bool final_tms, const uint8_t *TMS,
-							 const uint8_t *DI, int ticks)
+void dap_jtagtap_tdi_tdo_seq(
+	uint8_t *data_out, bool const final_tms, const uint8_t *tms, const uint8_t *data_in, size_t ticks)
 {
-	DEBUG_PROBE("dap_jtagtap_tdi_tdo_seq %s %d ticks\n",
-				(final_tms) ? "final" : "", ticks);
+	DEBUG_PROBE("dap_jtagtap_tdi_tdo_seq %s %d ticks\n", final_tms ? "final" : "", ticks);
 	uint8_t buf[64];
-	const uint8_t *din = DI;
-	uint8_t *dout = DO;
-	if (!TMS) {
+	const uint8_t *din = data_in;
+	uint8_t *dout = data_out;
+	if (!tms) {
 		int last_byte = last_byte = (ticks - 1) >> 3;
 		int last_bit = (ticks - 1) & 7;
 		if (final_tms)
-			ticks --;
+			ticks--;
 		while (ticks) {
 			int transfers = ticks;
 			if (transfers > 64)
@@ -671,8 +674,7 @@ void dap_jtagtap_tdi_tdo_seq(uint8_t *DO, bool final_tms, const uint8_t *TMS,
 			uint8_t *p = buf;
 			*p++ = ID_DAP_JTAG_SEQUENCE;
 			*p++ = 1;
-			*p++ = ((transfers == 64) ? 0 : transfers) |
-				((DO) ? DAP_JTAG_TDO_CAPTURE : 0);
+			*p++ = ((transfers == 64) ? 0 : transfers) | ((data_out) ? DAP_JTAG_TDO_CAPTURE : 0);
 			int n_di_bytes = (transfers + 7) >> 3;
 			if (din) {
 				p = memcpy(p, din, n_di_bytes);
@@ -696,7 +698,7 @@ void dap_jtagtap_tdi_tdo_seq(uint8_t *DO, bool final_tms, const uint8_t *TMS,
 			*p++ = 1;
 			*p++ = 1 | ((dout) ? DAP_JTAG_TDO_CAPTURE : 0) | DAP_JTAG_TMS;
 			if (din) {
-				*p++ = ((DI[last_byte] & (1 << last_bit)) ? 1 : 0);
+				*p++ = ((data_in[last_byte] & (1 << last_bit)) ? 1 : 0);
 			} else {
 				*p++ = 0;
 			}
@@ -705,13 +707,13 @@ void dap_jtagtap_tdi_tdo_seq(uint8_t *DO, bool final_tms, const uint8_t *TMS,
 				DEBUG_WARN("dap_jtagtap_tdi_tdo_seq failed %02x\n", buf[0]);
 			if (dout) {
 				if (buf[1] & 1)
-					DO[last_byte] |= (1 << last_bit);
+					data_out[last_byte] |= (1 << last_bit);
 				else
-					DO[last_byte] &= ~(1 << last_bit);
+					data_out[last_byte] &= ~(1 << last_bit);
 			}
 		}
 	} else {
-		while(ticks) {
+		while (ticks) {
 			uint8_t *p = buf;
 			int transfers = ticks;
 			if (transfers > 64)
@@ -720,22 +722,22 @@ void dap_jtagtap_tdi_tdo_seq(uint8_t *DO, bool final_tms, const uint8_t *TMS,
 			*p++ = ID_DAP_JTAG_SEQUENCE;
 			*p++ = transfers;
 			for (int i = 0; i < transfers; i++) {
-				*p++ = 1 | ((DO) ? DAP_JTAG_TDO_CAPTURE : 0) |
-					((TMS[i >> 3] & (1 << (i & 7))) ? DAP_JTAG_TMS : 0);
-				if (DI)
-					*p++ = (DI[i >> 3] & (1 << (i & 7))) ? 1 : 0;
+				*p++ =
+					1 | ((data_out) ? DAP_JTAG_TDO_CAPTURE : 0) | ((tms[i >> 3] & (1 << (i & 7))) ? DAP_JTAG_TMS : 0);
+				if (data_in)
+					*p++ = (data_in[i >> 3] & (1 << (i & 7))) ? 1 : 0;
 				else
 					*p++ = 1;
 			}
 			dbg_dap_cmd(buf, sizeof(buf), p - buf);
 			if (buf[0] == DAP_ERROR)
 				DEBUG_WARN("dap_jtagtap_tdi_tdo_seq failed %02x\n", buf[0]);
-			if (DO) {
+			if (data_out) {
 				for (int i = 0; i < transfers; i++) {
 					if (buf[i + 1])
-						DO[i >> 3] |= (1 << (i & 7));
+						data_out[i >> 3] |= (1 << (i & 7));
 					else
-						DO[i >> 3] &= ~(1 << (i & 7));
+						data_out[i >> 3] &= ~(1 << (i & 7));
 				}
 			}
 			ticks -= transfers;
@@ -746,7 +748,7 @@ void dap_jtagtap_tdi_tdo_seq(uint8_t *DO, bool final_tms, const uint8_t *TMS,
 int dap_jtag_configure(void)
 {
 	uint8_t buf[64], *p = &buf[2];
-	int i = 0;
+	uint32_t i = 0;
 	for (; i < jtag_dev_count; i++) {
 		struct jtag_dev_s *jtag_dev = &jtag_devs[i];
 		*p++ = jtag_dev->ir_len;
@@ -762,46 +764,39 @@ int dap_jtag_configure(void)
 	return 0;
 }
 
-void dap_swdptap_seq_out(uint32_t MS, int ticks)
+void dap_swdptap_seq_out(uint32_t tms_states, size_t clock_cycles)
 {
+	/* clang-format off */
 	uint8_t buf[64] = {
 		ID_DAP_SWJ_SEQUENCE,
-		ticks,
-		(MS >>  0) & 0xff,
-		(MS >>  8) & 0xff,
-		(MS >> 16) & 0xff,
-		(MS >> 24) & 0xff
+		clock_cycles,
+		(tms_states >> 0) & 0xff,
+		(tms_states >> 8) & 0xff,
+		(tms_states >> 16) & 0xff,
+		(tms_states >> 24) & 0xff
 	};
-	dbg_dap_cmd(buf, 64, 2 + ((ticks +7) >> 3));
+	/* clang-format on */
+	dbg_dap_cmd(buf, 64, 2U + ((clock_cycles + 7U) >> 3U));
 	if (buf[0])
 		DEBUG_WARN("dap_swdptap_seq_out error\n");
 }
 
-void dap_swdptap_seq_out_parity(uint32_t MS, int ticks)
+void dap_swdptap_seq_out_parity(uint32_t tms_states, size_t clock_cycles)
 {
+	/* clang-format off */
 	uint8_t buf[] = {
 		ID_DAP_SWJ_SEQUENCE,
-		ticks + 1,
-		(MS >>  0) & 0xff,
-		(MS >>  8) & 0xff,
-		(MS >> 16) & 0xff,
-		(MS >> 24) & 0xff,
-		__builtin_parity(MS) & 1
+		clock_cycles + 1,
+		(tms_states >> 0) & 0xff,
+		(tms_states >> 8) & 0xff,
+		(tms_states >> 16) & 0xff,
+		(tms_states >> 24) & 0xff,
+		__builtin_parity(tms_states)
 	};
+	/* clang-format on */
 	dbg_dap_cmd(buf, 1, sizeof(buf));
 	if (buf[0])
 		DEBUG_WARN("dap_swdptap_seq_out error\n");
-}
-
-bool dap_sequence_test(void)
-{
-	uint8_t buf[4] = {
-		ID_DAP_SWD_SEQUENCE,
-		1,
-		0 /* one idle cycle */
-	};
-	dbg_dap_cmd(buf, sizeof(buf), 3);
-	return (buf[0] == DAP_OK);
 }
 
 #define SWD_SEQUENCE_IN 0x80

@@ -25,13 +25,14 @@
 #include "target.h"
 #include "target_internal.h"
 #include "cortexm.h"
+#include "adiv5.h"
 
-static int nrf51_flash_erase(struct target_flash *f, target_addr addr, size_t len);
-static int nrf51_flash_write(struct target_flash *f,
-                             target_addr dest, const void *src, size_t len);
+static bool nrf51_flash_erase(target_flash_s *f, target_addr_t addr, size_t len);
+static bool nrf51_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len);
+static bool nrf51_mass_erase(target *t);
 
-static bool nrf51_cmd_erase_all(target *t, int argc, const char **argv);
 static bool nrf51_cmd_erase_uicr(target *t, int argc, const char **argv);
+static bool nrf51_cmd_protect_flash(target *t, int argc, const char **argv);
 static bool nrf51_cmd_read_hwid(target *t, int argc, const char **argv);
 static bool nrf51_cmd_read_fwid(target *t, int argc, const char **argv);
 static bool nrf51_cmd_read_deviceid(target *t, int argc, const char **argv);
@@ -41,8 +42,8 @@ static bool nrf51_cmd_read_help(target *t, int argc, const char **argv);
 static bool nrf51_cmd_read(target *t, int argc, const char **argv);
 
 const struct command_s nrf51_cmd_list[] = {
-	{"erase_mass", (cmd_handler)nrf51_cmd_erase_all, "Erase entire flash memory"},
 	{"erase_uicr", (cmd_handler)nrf51_cmd_erase_uicr, "Erase UICR registers"},
+	{"protect_flash", (cmd_handler)nrf51_cmd_protect_flash, "Enable flash read/write protection"},
 	{"read", (cmd_handler)nrf51_cmd_read, "Read device parameters"},
 	{NULL, NULL, NULL}
 };
@@ -93,13 +94,16 @@ const struct command_s nrf51_read_cmd_list[] = {
 /* User Information Configuration Registers (UICR) */
 #define NRF51_UICR				0x10001000
 
+/* Flash R/W Protection Register */
+#define NRF51_APPROTECT	0x10001208
+
 #define NRF51_PAGE_SIZE 1024
 #define NRF52_PAGE_SIZE 4096
 
 static void nrf51_add_flash(target *t,
                             uint32_t addr, size_t length, size_t erasesize)
 {
-	struct target_flash *f = calloc(1, sizeof(*f));
+	target_flash_s *f = calloc(1, sizeof(*f));
 	if (!f) {			/* calloc failed: heap exhaustion */
 		DEBUG_WARN("calloc: failed in %s\n", __func__);
 		return;
@@ -129,34 +133,33 @@ bool nrf51_probe(target *t)
 	if ((uid0 == 0xffffffff) || (uid1 == 0xffffffff) ||
 		(uid0 ==  0) || (uid1 ==  0))
 		return false;
+	t->mass_erase = nrf51_mass_erase;
 	/* Test for NRF52 device*/
 	uint32_t info_part = target_mem_read32(t, NRF52_PART_INFO);
 	if ((info_part != 0xffffffff) && (info_part != 0) &&
 		((info_part & 0x00ff000) == 0x52000)) {
 		uint32_t ram_size = target_mem_read32(t, NRF52_INFO_RAM);
 		t->driver = "Nordic nRF52";
-		t->target_options |= CORTEXM_TOPT_INHIBIT_SRST;
+		t->target_options |= CORTEXM_TOPT_INHIBIT_NRST;
 		target_add_ram(t, 0x20000000, ram_size * 1024);
 		nrf51_add_flash(t, 0, page_size * code_size, page_size);
 		nrf51_add_flash(t, NRF51_UICR, page_size, page_size);
 		target_add_commands(t, nrf51_cmd_list, "nRF52");
-		return true;
 	} else {
 		t->driver = "Nordic nRF51";
 		/* Use the biggest RAM size seen in NRF51 fammily.
 		 * IDCODE is kept as '0', as deciphering is hard and
 		 * there is later no usage.*/
 		target_add_ram(t, 0x20000000, 0x8000);
-		t->target_options |= CORTEXM_TOPT_INHIBIT_SRST;
+		t->target_options |= CORTEXM_TOPT_INHIBIT_NRST;
 		nrf51_add_flash(t, 0, page_size * code_size, page_size);
 		nrf51_add_flash(t, NRF51_UICR, page_size, page_size);
 		target_add_commands(t, nrf51_cmd_list, "nRF51");
-		return true;
 	}
-	return false;
+	return true;
 }
 
-static int nrf51_flash_erase(struct target_flash *f, target_addr addr, size_t len)
+static bool nrf51_flash_erase(target_flash_s *f, target_addr_t addr, size_t len)
 {
 	target *t = f->t;
 	/* Enable erase */
@@ -165,22 +168,21 @@ static int nrf51_flash_erase(struct target_flash *f, target_addr addr, size_t le
 	/* Poll for NVMC_READY */
 	while (target_mem_read32(t, NRF51_NVMC_READY) == 0)
 		if(target_check_error(t))
-			return -1;
+			return false;
 
 	while (len) {
-		if (addr == NRF51_UICR) { // Special Case
+		if (addr == NRF51_UICR) // Special Case
 			/* Write to the ERASE_UICR register to erase */
 			target_mem_write32(t, NRF51_NVMC_ERASEUICR, 0x1);
-
-		} else { // Standard Flash Page
+		else // Standard Flash Page
 			/* Write address of first word in page to erase it */
 			target_mem_write32(t, NRF51_NVMC_ERASEPAGE, addr);
-		}
 
 		/* Poll for NVMC_READY */
-		while (target_mem_read32(t, NRF51_NVMC_READY) == 0)
-			if(target_check_error(t))
-				return -1;
+		while (target_mem_read32(t, NRF51_NVMC_READY) == 0) {
+			if (target_check_error(t))
+				return false;
+		}
 
 		addr += f->blocksize;
 		if (len > f->blocksize)
@@ -193,15 +195,15 @@ static int nrf51_flash_erase(struct target_flash *f, target_addr addr, size_t le
 	target_mem_write32(t, NRF51_NVMC_CONFIG, NRF51_NVMC_CONFIG_REN);
 
 	/* Poll for NVMC_READY */
-	while (target_mem_read32(t, NRF51_NVMC_READY) == 0)
-		if(target_check_error(t))
-			return -1;
+	while (target_mem_read32(t, NRF51_NVMC_READY) == 0) {
+		if (target_check_error(t))
+			return false;
+	}
 
-	return 0;
+	return true;
 }
 
-static int nrf51_flash_write(struct target_flash *f,
-                             target_addr dest, const void *src, size_t len)
+static bool nrf51_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len)
 {
 	target *t = f->t;
 
@@ -210,38 +212,41 @@ static int nrf51_flash_write(struct target_flash *f,
 	/* Poll for NVMC_READY */
 	while (target_mem_read32(t, NRF51_NVMC_READY) == 0)
 		if(target_check_error(t))
-			return -1;
+			return false;
 	target_mem_write(t, dest, src, len);
 	/* Poll for NVMC_READY */
 	while (target_mem_read32(t, NRF51_NVMC_READY) == 0)
 		if(target_check_error(t))
-			return -1;
+			return false;
 	/* Return to read-only */
 	target_mem_write32(t, NRF51_NVMC_CONFIG, NRF51_NVMC_CONFIG_REN);
-	return 0;
+	return true;
 }
 
-static bool nrf51_cmd_erase_all(target *t, int argc, const char **argv)
+static bool nrf51_mass_erase(target *t)
 {
-	(void)argc;
-	(void)argv;
-	tc_printf(t, "erase..\n");
+	target_reset(t);
 
 	/* Enable erase */
 	target_mem_write32(t, NRF51_NVMC_CONFIG, NRF51_NVMC_CONFIG_EEN);
 
 	/* Poll for NVMC_READY */
-	while (target_mem_read32(t, NRF51_NVMC_READY) == 0)
-		if(target_check_error(t))
+	while (target_mem_read32(t, NRF51_NVMC_READY) == 0) {
+		if (target_check_error(t))
 			return false;
+	}
 
+	platform_timeout timeout = {};
+	platform_timeout_set(&timeout, 500);
 	/* Erase all */
 	target_mem_write32(t, NRF51_NVMC_ERASEALL, 1);
 
 	/* Poll for NVMC_READY */
-	while (target_mem_read32(t, NRF51_NVMC_READY) == 0)
-		if(target_check_error(t))
+	while (target_mem_read32(t, NRF51_NVMC_READY) == 0) {
+		if (target_check_error(t))
 			return false;
+		target_print_progress(&timeout);
+	}
 
 	return true;
 }
@@ -267,6 +272,32 @@ static bool nrf51_cmd_erase_uicr(target *t, int argc, const char **argv)
 	while (target_mem_read32(t, NRF51_NVMC_READY) == 0)
 		if(target_check_error(t))
 			return false;
+
+	return true;
+}
+
+static bool nrf51_cmd_protect_flash(target *t, int argc, const char **argv)
+{
+	(void)argc;
+	(void)argv;
+	tc_printf(t, "protect flash..\n");
+
+	/* Enable write */
+	target_mem_write32(t, NRF51_NVMC_CONFIG, NRF51_NVMC_CONFIG_WEN);
+
+	/* Poll for NVMC_READY */
+	while (target_mem_read32(t, NRF51_NVMC_READY) == 0) {
+		if(target_check_error(t))
+			return false;
+	}
+	
+	target_mem_write32(t, NRF51_APPROTECT, 0xFFFFFF00);
+
+	/* Poll for NVMC_READY */
+	while (target_mem_read32(t, NRF51_NVMC_READY) == 0) {
+		if(target_check_error(t))
+			return false;
+	}
 
 	return true;
 }
@@ -395,15 +426,9 @@ static bool nrf51_cmd_read(target *t, int argc, const char **argv)
 	return nrf51_cmd_read_help(t, 0, NULL);
 }
 
-#include "adiv5.h"
 #define NRF52_MDM_IDR 0x02880000
 
-static bool nrf51_mdm_cmd_erase_mass(target *t, int argc, const char **argv);
-
-const struct command_s nrf51_mdm_cmd_list[] = {
-	{"erase_mass", (cmd_handler)nrf51_mdm_cmd_erase_mass, "Erase entire flash memory"},
-	{NULL, NULL, NULL}
-};
+static bool nrf51_mdm_mass_erase(target *t);
 
 #define MDM_POWER_EN ADIV5_DP_REG(0x01)
 #define MDM_SELECT_AP ADIV5_DP_REG(0x02)
@@ -411,20 +436,21 @@ const struct command_s nrf51_mdm_cmd_list[] = {
 #define MDM_CONTROL ADIV5_AP_REG(0x04)
 #define MDM_PROT_EN  ADIV5_AP_REG(0x0C)
 
-void nrf51_mdm_probe(ADIv5_AP_t *ap)
+bool nrf51_mdm_probe(ADIv5_AP_t *ap)
 {
 	switch(ap->idr) {
 	case NRF52_MDM_IDR:
 		break;
 	default:
-		return;
+		return false;
 	}
 
 	target *t = target_new();
 	if (!t) {
-		return;
+		return false;
 	}
 
+	t->mass_erase = nrf51_mdm_mass_erase;
 	adiv5_ap_ref(ap);
 	t->priv = ap;
 	t->priv_free = (void*)adiv5_ap_unref;
@@ -436,26 +462,25 @@ void nrf51_mdm_probe(ADIv5_AP_t *ap)
 	else
 		t->driver = "Nordic nRF52 Access Port (protected)";
 	t->regs_size = 4;
-	target_add_commands(t, nrf51_mdm_cmd_list, t->driver);
+
+	return true;
 }
 
-static bool nrf51_mdm_cmd_erase_mass(target *t, int argc, const char **argv)
+static bool nrf51_mdm_mass_erase(target *t)
 {
-	(void)argc;
-	(void)argv;
 	ADIv5_AP_t *ap = t->priv;
 
 	uint32_t status = adiv5_ap_read(ap, MDM_STATUS);
-
 	adiv5_dp_write(ap->dp, MDM_POWER_EN, 0x50000000);
-
 	adiv5_dp_write(ap->dp, MDM_SELECT_AP, 0x01000000);
-
 	adiv5_ap_write(ap, MDM_CONTROL, 0x00000001);
 
+	platform_timeout timeout;
+	platform_timeout_set(&timeout, 500);
 	// Read until 0, probably should have a timeout here...
 	do {
 		status = adiv5_ap_read(ap, MDM_STATUS);
+		target_print_progress(&timeout);
 	} while (status);
 
 	// The second read will provide true prot status

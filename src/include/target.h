@@ -22,8 +22,8 @@
  * implemented by a target driver when a supported device is detected.
  */
 
-#ifndef __TARGET_H
-#define __TARGET_H
+#ifndef INCLUDE_TARGET_H
+#define INCLUDE_TARGET_H
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -31,37 +31,37 @@
 #include <sys/types.h>
 
 typedef struct target_s target;
-typedef uint32_t target_addr;
+typedef uint32_t target_addr_t;
 struct target_controller;
 
 #if PC_HOSTED == 1
-int platform_adiv5_swdp_scan(uint32_t targetid);
-int platform_jtag_scan(const uint8_t *lrlens);
+uint32_t platform_adiv5_swdp_scan(uint32_t targetid);
+uint32_t platform_jtag_scan(const uint8_t *lrlens);
 #endif
-int adiv5_swdp_scan(uint32_t targetid);
-int jtag_scan(const uint8_t *lrlens);
+uint32_t adiv5_swdp_scan(uint32_t targetid);
+uint32_t jtag_scan(const uint8_t *lrlens);
 
 int target_foreach(void (*cb)(int i, target *t, void *context), void *context);
 void target_list_free(void);
 
 /* Attach/detach functions */
 target *target_attach(target *t, struct target_controller *);
-target *target_attach_n(int n, struct target_controller *);
+target *target_attach_n(size_t n, struct target_controller *);
 void target_detach(target *t);
 bool target_attached(target *t);
 const char *target_driver_name(target *t);
 const char *target_core_name(target *t);
 unsigned int target_designer(target *t);
-unsigned int target_idcode(target *t);
+unsigned int target_part_id(target *t);
 
 /* Memory access functions */
 bool target_mem_map(target *t, char *buf, size_t len);
-int target_mem_read(target *t, void *dest, target_addr src, size_t len);
-int target_mem_write(target *t, target_addr dest, const void *src, size_t len);
+int target_mem_read(target *t, void *dest, target_addr_t src, size_t len);
+int target_mem_write(target *t, target_addr_t dest, const void *src, size_t len);
 /* Flash memory access functions */
-int target_flash_erase(target *t, target_addr addr, size_t len);
-int target_flash_write(target *t, target_addr dest, const void *src, size_t len);
-int target_flash_done(target *t);
+bool target_flash_erase(target *t, target_addr_t addr, size_t len);
+bool target_flash_write(target *t, target_addr_t dest, const void *src, size_t len);
+bool target_flash_complete(target *t);
 
 /* Register access functions */
 size_t target_regs_size(target *t);
@@ -84,11 +84,11 @@ enum target_halt_reason {
 
 void target_reset(target *t);
 void target_halt_request(target *t);
-enum target_halt_reason target_halt_poll(target *t, target_addr *watch);
+enum target_halt_reason target_halt_poll(target *t, target_addr_t *watch);
 void target_halt_resume(target *t, bool step);
 void target_set_cmdline(target *t, char *cmdline);
-void target_set_heapinfo(target *t, target_addr heap_base, target_addr heap_limit,
-	target_addr stack_base, target_addr stack_limit);
+void target_set_heapinfo(
+	target *t, target_addr_t heap_base, target_addr_t heap_limit, target_addr_t stack_base, target_addr_t stack_limit);
 
 /* Break-/watchpoint functions */
 enum target_breakwatch {
@@ -98,8 +98,8 @@ enum target_breakwatch {
 	TARGET_WATCH_READ,
 	TARGET_WATCH_ACCESS,
 };
-int target_breakwatch_set(target *t, enum target_breakwatch, target_addr, size_t);
-int target_breakwatch_clear(target *t, enum target_breakwatch, target_addr, size_t);
+int target_breakwatch_set(target *t, enum target_breakwatch, target_addr_t, size_t);
+int target_breakwatch_clear(target *t, enum target_breakwatch, target_addr_t, size_t);
 
 /* Command interpreter */
 void target_command_help(target *t);
@@ -151,32 +151,22 @@ struct target_controller {
 	void (*printf)(struct target_controller *, const char *fmt, va_list);
 
 	/* Interface to host system calls */
-	int (*open)(struct target_controller *,
-	            target_addr path, size_t path_len,
-	            enum target_open_flags flags, mode_t mode);
+	int (*open)(
+		struct target_controller *, target_addr_t path, size_t path_len, enum target_open_flags flags, mode_t mode);
 	int (*close)(struct target_controller *, int fd);
-	int (*read)(struct target_controller *,
-	            int fd, target_addr buf, unsigned int count);
-	int (*write)(struct target_controller *,
-	             int fd, target_addr buf, unsigned int count);
-	long (*lseek)(struct target_controller *,
-	              int fd, long offset, enum target_seek_flag flag);
-	int (*rename)(struct target_controller *,
-	              target_addr oldpath, size_t old_len,
-	              target_addr newpath, size_t new_len);
-	int (*unlink)(struct target_controller *,
-	              target_addr path, size_t path_len);
-	int (*stat)(struct target_controller *,
-	            target_addr path, size_t path_len, target_addr buf);
-	int (*fstat)(struct target_controller *, int fd, target_addr buf);
-	int (*gettimeofday)(struct target_controller *,
-	                    target_addr tv, target_addr tz);
+	int (*read)(struct target_controller *, int fd, target_addr_t buf, unsigned int count);
+	int (*write)(struct target_controller *, int fd, target_addr_t buf, unsigned int count);
+	long (*lseek)(struct target_controller *, int fd, long offset, enum target_seek_flag flag);
+	int (*rename)(
+		struct target_controller *, target_addr_t oldpath, size_t old_len, target_addr_t newpath, size_t new_len);
+	int (*unlink)(struct target_controller *, target_addr_t path, size_t path_len);
+	int (*stat)(struct target_controller *, target_addr_t path, size_t path_len, target_addr_t buf);
+	int (*fstat)(struct target_controller *, int fd, target_addr_t buf);
+	int (*gettimeofday)(struct target_controller *, target_addr_t tv, target_addr_t tz);
 	int (*isatty)(struct target_controller *, int fd);
-	int (*system)(struct target_controller *,
-	              target_addr cmd, size_t cmd_len);
+	int (*system)(struct target_controller *, target_addr_t cmd, size_t cmd_len);
 	enum target_errno errno_;
 	bool interrupted;
 };
 
-#endif
-
+#endif /* INCLUDE_TARGET_H */

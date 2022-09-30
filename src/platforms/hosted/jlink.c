@@ -30,15 +30,15 @@
 #include <ctype.h>
 #include <sys/time.h>
 
-#include "cl_utils.h"
+#include "cli.h"
 #include "jlink.h"
 
-#define USB_PID_SEGGER       0x1366
+#define USB_VID_SEGGER       0x1366
 
-/* Only two devices PIDS tested so long */
-#define USB_VID_SEGGER_0101  0x0101
-#define USB_VID_SEGGER_0105  0x0105
-#define USB_VID_SEGGER_1020  0x1020
+#define USB_PID_SEGGER_0101  0x0101
+#define USB_PID_SEGGER_0105  0x0105
+#define USB_PID_SEGGER_1015  0x1015
+#define USB_PID_SEGGER_1020  0x1020
 
 static uint32_t emu_caps;
 static uint32_t emu_speed_kHz;
@@ -123,7 +123,7 @@ static int initialize_handle(bmp_info_t *info, libusb_device *dev)
 	const struct libusb_interface *interface;
 	bool found_interface = false;
 	const struct libusb_interface_descriptor *desc;
-	for (int i = 0; i < config->bNumInterfaces; i++) {
+	for (size_t i = 0; i < config->bNumInterfaces; i++) {
 		interface = &config->interface[i];
 		desc = &interface->altsetting[0];
 		if (desc->bInterfaceClass != LIBUSB_CLASS_VENDOR_SPEC)
@@ -145,7 +145,7 @@ static int initialize_handle(bmp_info_t *info, libusb_device *dev)
 		libusb_free_config_descriptor(config);
 		return -1;
 	}
-	for (int i = 0; i < desc->bNumEndpoints; i++) {
+	for (size_t i = 0; i < desc->bNumEndpoints; i++) {
 		const struct libusb_endpoint_descriptor *epdesc = &desc->endpoint[i];
 		if (epdesc->bEndpointAddress & LIBUSB_ENDPOINT_IN) {
 			info->usb_link->ep_rx = epdesc->bEndpointAddress;
@@ -178,14 +178,18 @@ int jlink_init(bmp_info_t *info)
 		struct libusb_device_descriptor desc;
 		if (libusb_get_device_descriptor(dev, &desc) < 0) {
             DEBUG_WARN( "libusb_get_device_descriptor() failed");
-			goto error;;
+			goto error;
 		}
-		if (desc.idVendor !=  USB_PID_SEGGER)
+		if (desc.idVendor !=  USB_VID_SEGGER)
 			continue;
-		if ((desc.idProduct != USB_VID_SEGGER_0101) &&
-			(desc.idProduct != USB_VID_SEGGER_0105) &&
-			(desc.idProduct != USB_VID_SEGGER_1020))
-			continue;
+		if ((desc.idProduct != USB_PID_SEGGER_0101) &&
+			(desc.idProduct != USB_PID_SEGGER_0105) &&
+			(desc.idProduct != USB_PID_SEGGER_1015) &&
+			(desc.idProduct != USB_PID_SEGGER_1020)) {
+				DEBUG_WARN("Ignored device with product id 0x%04x, please report if this is a valid J-Link probe\n",
+				desc.idProduct);
+				continue;
+		}
 		int res = libusb_open(dev, &jl->ul_libusb_device_handle);
 		if (res != LIBUSB_SUCCESS)
 			continue;
@@ -229,17 +233,17 @@ const char *jlink_target_voltage(bmp_info_t *info)
         return ret;
 }
 
-static bool srst_status = false;
-void jlink_srst_set_val(bmp_info_t *info, bool assert)
+static bool nrst_status = false;
+void jlink_nrst_set_val(bmp_info_t *info, bool assert)
 {
         uint8_t cmd[1];
         cmd[0]= (assert)? CMD_HW_RESET0: CMD_HW_RESET1;
         send_recv(info->usb_link, cmd, 1, NULL, 0);
         platform_delay(2);
-        srst_status = assert;
+        nrst_status = assert;
 }
 
-bool jlink_srst_get_val(bmp_info_t *info) {
+bool jlink_nrst_get_val(bmp_info_t *info) {
         uint8_t cmd[1] = {CMD_GET_HW_STATUS};
         uint8_t res[8];
         send_recv(info->usb_link, cmd, 1, res, sizeof(res));

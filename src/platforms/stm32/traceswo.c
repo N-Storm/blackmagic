@@ -32,7 +32,7 @@
  * The core can then process the buffer to extract the frame.
  */
 #include "general.h"
-#include "cdcacm.h"
+#include "usb.h"
 #include "traceswo.h"
 
 #include <libopencm3/cm3/nvic.h>
@@ -88,10 +88,10 @@ void trace_buf_push(uint8_t *buf, int len)
 {
 	if (decoding)
 		traceswo_decode(usbdev, CDCACM_UART_ENDPOINT, buf, len);
-	else if (usbd_ep_write_packet(usbdev, 0x85, buf, len) != len) {
+	else if (usbd_ep_write_packet(usbdev, USB_REQ_TYPE_IN | TRACE_ENDPOINT, buf, len) != len) {
 		if (trace_usb_buf_size + len > 64) {
 			/* Stall if upstream to too slow. */
-			usbd_ep_stall_set(usbdev, 0x85, 1);
+			usbd_ep_stall_set(usbdev, USB_REQ_TYPE_IN | TRACE_ENDPOINT, 1);
 			trace_usb_buf_size = 0;
 			return;
 		}

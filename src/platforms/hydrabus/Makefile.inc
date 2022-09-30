@@ -15,10 +15,9 @@ LDFLAGS = -lopencm3_stm32f4 \
 
 VPATH += platforms/stm32
 
-SRC += 	cdcacm.c	\
-	traceswodecode.c	\
+SRC +=               \
+	traceswodecode.c \
 	traceswo.c	\
-	usbuart.c	\
 	serialno.c	\
 	timing.c	\
 	timing_stm32.c	\

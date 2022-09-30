@@ -29,18 +29,24 @@
 #include "target.h"
 #include "target_internal.h"
 
-unsigned int make_packet_request(uint8_t RnW, uint16_t addr)
+uint8_t make_packet_request(uint8_t RnW, uint16_t addr)
 {
 	bool APnDP = addr & ADIV5_APnDP;
-	addr &= 0xff;
-	unsigned int request = 0x81; /* Park and Startbit */
-	if(APnDP) request ^= 0x22;
-	if(RnW)   request ^= 0x24;
 
-	addr &= 0xC;
-	request |= (addr << 1) & 0x18;
-	if((addr == 4) || (addr == 8))
-		request ^= 0x20;
+	addr &= 0xffU;
+
+	uint8_t request = 0x81U; /* Park and Startbit */
+
+	if (APnDP)
+		request ^= 0x22U;
+	if (RnW)
+		request ^= 0x24U;
+
+	addr &= 0xcU;
+	request |= (addr << 1U) & 0x18U;
+	if (addr == 4U || addr == 8U)
+		request ^= 0x20U;
+
 	return request;
 }
 
@@ -48,13 +54,13 @@ unsigned int make_packet_request(uint8_t RnW, uint16_t addr)
 
 static void dp_line_reset(ADIv5_DP_t *dp)
 {
-	dp->seq_out(0xFFFFFFFF, 32);
-	dp->seq_out(0x0FFFFFFF, 32);
+	dp->seq_out(0xFFFFFFFFU, 32U);
+	dp->seq_out(0x0FFFFFFFU, 32U);
 }
 
 bool firmware_dp_low_write(ADIv5_DP_t *dp, uint16_t addr, const uint32_t data)
 {
-	unsigned int request =  make_packet_request(ADIV5_LOW_WRITE, addr & 0xf);
+	unsigned int request = make_packet_request(ADIV5_LOW_WRITE, addr & 0xfU);
 	dp->seq_out(request, 8);
 	int res = dp->seq_in(3);
 	dp->seq_out_parity(data, 32);
@@ -65,10 +71,12 @@ bool firmware_dp_low_write(ADIv5_DP_t *dp, uint16_t addr, const uint32_t data)
  * If target id given, scan DPs 0 .. 15 on that device and return.
  * Otherwise
  */
-int adiv5_swdp_scan(uint32_t targetid)
+uint32_t adiv5_swdp_scan(uint32_t targetid)
 {
 	volatile struct exception e;
+
 	target_list_free();
+
 	ADIv5_DP_t idp = {
 		.dp_low_write = firmware_dp_low_write,
 		.error = firmware_swdp_error,
@@ -77,8 +85,11 @@ int adiv5_swdp_scan(uint32_t targetid)
 		.abort = firmware_swdp_abort,
 	};
 	ADIv5_DP_t *initial_dp = &idp;
+
 	if (swdptap_init(initial_dp))
-		return -1;
+		return 0;
+
+	platform_target_clk_output_enable(true);
 	/* DORMANT-> SWD sequence*/
 	initial_dp->seq_out(0xFFFFFFFF, 32);
 	initial_dp->seq_out(0xFFFFFFFF, 32);
@@ -91,124 +102,121 @@ int adiv5_swdp_scan(uint32_t targetid)
 	 * 0x1a Arm CoreSight SW-DP activation sequence
 	 * 20 bits start of reset another reset sequence*/
 	initial_dp->seq_out(0x1a0, 12);
-	uint32_t idcode = 0;
-	volatile uint32_t target_id = 0;
+
 	bool scan_multidrop = true;
-	if (!targetid || !initial_dp->dp_low_write) {
-		/* No targetID given on the command line or probe can not
-		 * handle multi-drop. Try to read ID */
+	volatile uint32_t dp_targetid = targetid;
+
+	if (!dp_targetid) {
+		/* No targetID given on the command line Try to read ID */
+
+		scan_multidrop = false;
+
 		dp_line_reset(initial_dp);
 
+		volatile uint32_t dp_dpidr;
 		TRY_CATCH (e, EXCEPTION_ALL) {
-			idcode = initial_dp->dp_read(initial_dp, ADIV5_DP_IDCODE);
+			dp_dpidr = initial_dp->dp_read(initial_dp, ADIV5_DP_DPIDR);
 		}
 		if (e.type || initial_dp->fault) {
-			scan_multidrop = false;
 			DEBUG_WARN("Trying old JTAG to SWD sequence\n");
 			initial_dp->seq_out(0xFFFFFFFF, 32);
 			initial_dp->seq_out(0xFFFFFFFF, 32);
 			initial_dp->seq_out(0xE79E, 16); /* 0b0111100111100111 */
+
 			dp_line_reset(initial_dp);
+
 			initial_dp->fault = 0;
 
 			TRY_CATCH (e, EXCEPTION_ALL) {
-				idcode = initial_dp->dp_read(initial_dp, ADIV5_DP_IDCODE);
+				dp_dpidr = initial_dp->dp_read(initial_dp, ADIV5_DP_DPIDR);
 			}
 			if (e.type || initial_dp->fault) {
 				DEBUG_WARN("No usable DP found\n");
-				return -1;
+				return 0;
 			}
 		}
-		if ((idcode & ADIV5_DP_VERSION_MASK) == ADIV5_DPv2) {
+
+		const uint8_t dp_version = (dp_dpidr & ADIV5_DP_DPIDR_VERSION_MASK) >> ADIV5_DP_DPIDR_VERSION_OFFSET;
+		if (dp_version >= 2) {
 			scan_multidrop = true;
-			/* Read TargetID. Can be done with device in WFI, sleep or reset!*/
-			adiv5_dp_write(initial_dp, ADIV5_DP_SELECT, 2);
-			target_id = adiv5_dp_read(initial_dp, ADIV5_DP_CTRLSTAT);
-			adiv5_dp_write(initial_dp, ADIV5_DP_SELECT, 0);
-			DEBUG_INFO("TARGETID %08" PRIx32 "\n", target_id);
-			switch (target_id) {
-			case 0x01002927: /* RP2040 */
-				/* Release evt. handing RESCUE DP reset*/
-				adiv5_dp_write(initial_dp, ADIV5_DP_CTRLSTAT, 0);
-				break;
-			}
-			if (!initial_dp->dp_low_write) {
-				DEBUG_WARN("CMSIS_DAP < V1.2 can not handle multi-drop!\n");
-				/* E.g. CMSIS_DAP < V1.2 can not handle multi-drop!*/
-				scan_multidrop = false;
-			}
-		} else {
-			scan_multidrop = false;
+
+			/* Read TargetID. Can be done with device in WFI, sleep or reset! */
+			/* TARGETID is on bank 2 */
+			adiv5_dp_write(initial_dp, ADIV5_DP_SELECT, ADIV5_DP_BANK2);
+			dp_targetid = adiv5_dp_read(initial_dp, ADIV5_DP_TARGETID);
+			adiv5_dp_write(initial_dp, ADIV5_DP_SELECT, ADIV5_DP_BANK0);
 		}
-	} else {
-		target_id = targetid;
 	}
-	volatile int nr_dps = (scan_multidrop) ? 16: 1;
-	volatile uint32_t dp_targetid;
-	for (volatile int i = 0; i < nr_dps; i++) {
+
+	if (!initial_dp->dp_low_write) {
+		DEBUG_WARN("CMSIS_DAP < V1.2 can not handle multi-drop!\n");
+		/* E.g. CMSIS_DAP < V1.2 can not handle multi-drop!*/
+		scan_multidrop = false;
+	}
+
+	DEBUG_WARN("scan_multidrop: %s\n", scan_multidrop ? "true" : "false");
+
+	const volatile size_t max_dp = (scan_multidrop) ? 16U : 1U;
+	for (volatile size_t i = 0; i < max_dp; i++) {
 		if (scan_multidrop) {
 			dp_line_reset(initial_dp);
-			dp_targetid = (i << 28) | (target_id & 0x0fffffff);
+
 			initial_dp->dp_low_write(initial_dp, ADIV5_DP_TARGETSEL,
-									dp_targetid);
+				(i << ADIV5_DP_TARGETSEL_TINSTANCE_OFFSET) |
+					(dp_targetid & (ADIV5_DP_TARGETSEL_TPARTNO_MASK | ADIV5_DP_TARGETSEL_TDESIGNER_MASK | 1U)));
+
 			TRY_CATCH (e, EXCEPTION_ALL) {
-				idcode = initial_dp->dp_read(initial_dp, ADIV5_DP_IDCODE);
+				initial_dp->dp_read(initial_dp, ADIV5_DP_DPIDR);
 			}
-			if (e.type || initial_dp->fault) {
+			if (e.type || initial_dp->fault)
 				continue;
-			}
-		} else {
-			dp_targetid = target_id;
 		}
-		ADIv5_DP_t *dp = (void*)calloc(1, sizeof(*dp));
-		if (!dp) {			/* calloc failed: heap exhaustion */
+
+		ADIv5_DP_t *dp = calloc(1, sizeof(*dp));
+		if (!dp) { /* calloc failed: heap exhaustion */
 			DEBUG_WARN("calloc: failed in %s\n", __func__);
 			continue;
 		}
-		memcpy(dp, initial_dp, sizeof(ADIv5_DP_t));
-		dp->idcode = idcode;
-		dp->targetid = dp_targetid;
-		adiv5_dp_init(dp);
 
+		memcpy(dp, initial_dp, sizeof(ADIv5_DP_t));
+		dp->instance = i;
+
+		adiv5_dp_init(dp, 0);
 	}
-	return target_list?1:0;
+	return target_list ? 1U : 0U;
 }
 
 uint32_t firmware_swdp_read(ADIv5_DP_t *dp, uint16_t addr)
 {
 	if (addr & ADIV5_APnDP) {
 		adiv5_dp_low_access(dp, ADIV5_LOW_READ, addr, 0);
-		return adiv5_dp_low_access(dp, ADIV5_LOW_READ,
-		                           ADIV5_DP_RDBUFF, 0);
-	} else {
+		return adiv5_dp_low_access(dp, ADIV5_LOW_READ, ADIV5_DP_RDBUFF, 0);
+	} else
 		return firmware_swdp_low_access(dp, ADIV5_LOW_READ, addr, 0);
-	}
 }
 
- uint32_t firmware_swdp_error(ADIv5_DP_t *dp)
+uint32_t firmware_swdp_error(ADIv5_DP_t *dp)
 {
-	if ((dp->fault && (dp->idcode & ADIV5_DP_VERSION_MASK) == ADIV5_DPv2) &&
-		dp->dp_low_write) {
-		/* On protocoll error target gets deselected.
+	if (dp->version >= 2 && dp->dp_low_write) {
+		/* On protocol error target gets deselected.
 		 * With DP Change, another target needs selection.
 		 * => Reselect with right target! */
 		dp_line_reset(dp);
-		dp->dp_low_write(dp, ADIV5_DP_TARGETSEL, dp->targetid);
-		dp->dp_read(dp, ADIV5_DP_IDCODE);
+		dp->dp_low_write(dp, ADIV5_DP_TARGETSEL, dp->targetsel);
+		dp->dp_read(dp, ADIV5_DP_DPIDR);
 		/* Exception here is unexpected, so do not catch */
 	}
 	uint32_t err, clr = 0;
-	err = adiv5_dp_read(dp, ADIV5_DP_CTRLSTAT) &
-		(ADIV5_DP_CTRLSTAT_STICKYORUN | ADIV5_DP_CTRLSTAT_STICKYCMP |
-		ADIV5_DP_CTRLSTAT_STICKYERR | ADIV5_DP_CTRLSTAT_WDATAERR);
+	err = adiv5_dp_read(dp, ADIV5_DP_CTRLSTAT) & (ADIV5_DP_CTRLSTAT_STICKYORUN | ADIV5_DP_CTRLSTAT_STICKYCMP |
+													 ADIV5_DP_CTRLSTAT_STICKYERR | ADIV5_DP_CTRLSTAT_WDATAERR);
 
-	if(err & ADIV5_DP_CTRLSTAT_STICKYORUN)
+	if (err & ADIV5_DP_CTRLSTAT_STICKYORUN)
 		clr |= ADIV5_DP_ABORT_ORUNERRCLR;
-	if(err & ADIV5_DP_CTRLSTAT_STICKYCMP)
+	if (err & ADIV5_DP_CTRLSTAT_STICKYCMP)
 		clr |= ADIV5_DP_ABORT_STKCMPCLR;
-	if(err & ADIV5_DP_CTRLSTAT_STICKYERR)
+	if (err & ADIV5_DP_CTRLSTAT_STICKYERR)
 		clr |= ADIV5_DP_ABORT_STKERRCLR;
-	if(err & ADIV5_DP_CTRLSTAT_WDATAERR)
+	if (err & ADIV5_DP_CTRLSTAT_WDATAERR)
 		clr |= ADIV5_DP_ABORT_WDERRCLR;
 
 	adiv5_dp_write(dp, ADIV5_DP_ABORT, clr);
@@ -217,10 +225,9 @@ uint32_t firmware_swdp_read(ADIv5_DP_t *dp, uint16_t addr)
 	return err;
 }
 
-uint32_t firmware_swdp_low_access(ADIv5_DP_t *dp, uint8_t RnW,
-				      uint16_t addr, uint32_t value)
+uint32_t firmware_swdp_low_access(ADIv5_DP_t *dp, uint8_t RnW, uint16_t addr, uint32_t value)
 {
-	uint32_t request = make_packet_request(RnW, addr);
+	uint8_t request = make_packet_request(RnW, addr);
 	uint32_t response = 0;
 	uint32_t ack = SWDP_ACK_WAIT;
 	platform_timeout timeout;

@@ -21,8 +21,9 @@
 /* This file implements the platform specific functions for the STM32
  * implementation.
  */
-#ifndef __PLATFORM_H
-#define __PLATFORM_H
+
+#ifndef PLATFORMS_NATIVE_PLATFORM_H
+#define PLATFORMS_NATIVE_PLATFORM_H
 
 #include "gpio.h"
 #include "timing.h"
@@ -30,12 +31,11 @@
 
 #define PLATFORM_HAS_TRACESWO
 #define PLATFORM_HAS_POWER_SWITCH
+#define PLATFORM_HAS_USBUART
 
 #ifdef ENABLE_DEBUG
-# define PLATFORM_HAS_DEBUG
-# define USBUART_DEBUG
+#define PLATFORM_HAS_DEBUG
 extern bool debug_bmp;
-int usbuart_debug_write(const char *buf, size_t len);
 #endif
 
 #define PLATFORM_IDENT          " "
@@ -57,18 +57,19 @@ int usbuart_debug_write(const char *buf, size_t len);
  * nTRST    = PB1  (output) [blackmagic]
  * PWR_BR   = PB1  (output) [blackmagic_mini] -- supply power to the target, active low
  * TMS_DIR  = PA1  (output) [blackmagic_mini v2.1] -- choose direction of the TCK pin, input low, output high
- * SRST_OUT = PA2  (output) -- Hardware 5 and older
+ * nRST_OUT = PA2  (output) -- Hardware 5 and older
  *          = PA9  (output) -- Hardware 6 and newer
  * TDI      = PA3  (output) -- Hardware 5 and older
  *          = PA7  (output) -- Hardware 6 and newer
  * TMS      = PA4  (input/output for SWDIO)
  * TCK      = PA5  (output SWCLK)
+ * TCK_DIR  = PC15 (output) -- Hardware 6 and newer
  * TDO      = PA6  (input)
  * TRACESWO = PB7  (input)  -- To allow trace decoding using USART1
  *                             Hardware 4 has a normally open jumper between TDO and TRACESWO
  *                             Hardware 5 has hardwired connection between TDO and TRACESWO
  *          = PA10 (input)  -- Hardware 6 and newer
- * nSRST    = PA7  (input)  -- Hardware 5 and older
+ * nRST     = PA7  (input)  -- Hardware 5 and older
  *          = PC13 (input)  -- Hardware 6 and newer
  *
  * USB_PU   = PA8  (output)
@@ -109,11 +110,13 @@ int usbuart_debug_write(const char *buf, size_t len);
 #define TMS_DIR_PORT	JTAG_PORT
 #define TMS_PORT	JTAG_PORT
 #define TCK_PORT	JTAG_PORT
+#define TCK_DIR_PORT GPIOC
 #define TDO_PORT	JTAG_PORT
 #define TDI_PIN		HW_SWITCH(6, GPIO3, GPIO7)
 #define TMS_DIR_PIN	GPIO1
 #define TMS_PIN		GPIO4
 #define TCK_PIN		GPIO5
+#define TCK_DIR_PIN GPIO15
 #define TDO_PIN		GPIO6
 
 #define SWDIO_DIR_PORT	JTAG_PORT
@@ -127,10 +130,10 @@ int usbuart_debug_write(const char *buf, size_t len);
 #define TRST_PIN	GPIO1
 #define PWR_BR_PORT	GPIOB
 #define PWR_BR_PIN	GPIO1
-#define SRST_PORT	GPIOA
-#define SRST_PIN	HW_SWITCH(6, GPIO2, GPIO9)
-#define SRST_SENSE_PORT	GPIOA
-#define SRST_SENSE_PIN  HW_SWITCH(6, GPIO7, GPIO13)
+#define NRST_PORT	GPIOA
+#define NRST_PIN	HW_SWITCH(6, GPIO2, GPIO9)
+#define NRST_SENSE_PORT	GPIOA
+#define NRST_SENSE_PIN  HW_SWITCH(6, GPIO7, GPIO13)
 
 #define USB_PU_PORT	GPIOA
 #define USB_PU_PIN	GPIO8
@@ -185,35 +188,39 @@ int usbuart_debug_write(const char *buf, size_t len);
 #define AUX_BTN2       GPIO9
 #define AUX_VBAT       GPIO0
 
-# define SWD_CR   GPIO_CRL(SWDIO_PORT)
-# define SWD_CR_MULT (1 << (4 << 2))
+#define SWD_CR       GPIO_CRL(SWDIO_PORT)
+#define SWD_CR_SHIFT (4U << 2U)
 
-#define TMS_SET_MODE() do { \
-	gpio_set(TMS_DIR_PORT, TMS_DIR_PIN); \
-	gpio_set_mode(TMS_PORT, GPIO_MODE_OUTPUT_50_MHZ, \
-	              GPIO_CNF_OUTPUT_PUSHPULL, TMS_PIN); \
-} while(0)
-#define SWDIO_MODE_FLOAT() do { \
-	uint32_t cr = SWD_CR; \
-	cr  &= ~(0xf * SWD_CR_MULT); \
-	cr  |=  (0x4 * SWD_CR_MULT); \
-	GPIO_BRR(SWDIO_DIR_PORT) = SWDIO_DIR_PIN; \
-	SWD_CR = cr; \
-} while(0)
-#define SWDIO_MODE_DRIVE() do { \
-	uint32_t cr = SWD_CR; \
-	cr  &= ~(0xf * SWD_CR_MULT); \
-	cr  |=  (0x1 * SWD_CR_MULT); \
-	GPIO_BSRR(SWDIO_DIR_PORT) = SWDIO_DIR_PIN; \
-	SWD_CR = cr; \
-} while(0)
-#define UART_PIN_SETUP() do { \
-	gpio_set_mode(USBUSART_PORT, GPIO_MODE_OUTPUT_50_MHZ, \
-	              GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, USBUSART_TX_PIN); \
-	gpio_set_mode(USBUSART_PORT, GPIO_MODE_INPUT, \
-				  GPIO_CNF_INPUT_PULL_UPDOWN, USBUSART_RX_PIN); \
-	gpio_set(USBUSART_PORT, USBUSART_RX_PIN); \
-} while(0)
+#define TMS_SET_MODE()                                                                       \
+	do {                                                                                     \
+		gpio_set(TMS_DIR_PORT, TMS_DIR_PIN);                                                 \
+		gpio_set_mode(TMS_PORT, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, TMS_PIN); \
+	} while (0)
+
+#define SWDIO_MODE_FLOAT()                        \
+	do {                                          \
+		uint32_t cr = SWD_CR;                     \
+		cr &= ~(0xfU << SWD_CR_SHIFT);            \
+		cr |= (0x4U << SWD_CR_SHIFT);             \
+		GPIO_BRR(SWDIO_DIR_PORT) = SWDIO_DIR_PIN; \
+		SWD_CR = cr;                              \
+	} while (0)
+
+#define SWDIO_MODE_DRIVE()                         \
+	do {                                           \
+		uint32_t cr = SWD_CR;                      \
+		cr &= ~(0xfU << SWD_CR_SHIFT);             \
+		cr |= (0x1U << SWD_CR_SHIFT);              \
+		GPIO_BSRR(SWDIO_DIR_PORT) = SWDIO_DIR_PIN; \
+		SWD_CR = cr;                               \
+	} while (0)
+
+#define UART_PIN_SETUP()                                                                                        \
+	do {                                                                                                        \
+		gpio_set_mode(USBUSART_PORT, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, USBUSART_TX_PIN); \
+		gpio_set_mode(USBUSART_PORT, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, USBUSART_RX_PIN);             \
+		gpio_set(USBUSART_PORT, USBUSART_RX_PIN);                                                               \
+	} while (0)
 
 #define USB_DRIVER st_usbfs_v1_usb_driver
 #define USB_IRQ    NVIC_USB_LP_CAN_RX0_IRQ
@@ -303,4 +310,4 @@ int usbuart_debug_write(const char *buf, size_t len);
 #define snprintf sniprintf
 #endif
 
-#endif
+#endif /* PLATFORMS_NATIVE_PLATFORM_H */
