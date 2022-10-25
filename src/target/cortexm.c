@@ -684,6 +684,8 @@ bool cortexm_probe(ADIv5_AP_t *ap)
 	case JEP106_MANUFACTURER_ARM:
 		if (t->part_id == 0x4c0) {        /* Cortex-M0+ ROM */
 			PROBE(lpc11xx_probe);         /* LPC8 */
+		}else if (  t->part_id == 0x4c1) { /* Cortex-M0+ ROM */
+			PROBE(lpc11xx_probe);         /* newer LPC11U6x */
 		} else if (t->part_id == 0x4c3) { /* Cortex-M3 ROM */
 			PROBE(lmi_probe);
 			PROBE(ch32f1_probe);
