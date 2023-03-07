@@ -21,15 +21,20 @@
 #ifndef TARGET_TARGET_INTERNAL_H
 #define TARGET_TARGET_INTERNAL_H
 
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 #include "platform_support.h"
 
-extern target *target_list;
-target *target_new(void);
+extern target_s *target_list;
+target_s *target_new(void);
+
+typedef struct target_ram target_ram_s;
 
 struct target_ram {
 	target_addr_t start;
 	size_t length;
-	struct target_ram *next;
+	target_ram_s *next;
 };
 
 typedef struct target_flash target_flash_s;
@@ -40,100 +45,105 @@ typedef bool (*flash_write_func)(target_flash_s *f, target_addr_t dest, const vo
 typedef bool (*flash_done_func)(target_flash_s *f);
 
 struct target_flash {
-	target *t;                   /* Target this flash is attached to */
-	target_addr_t start;         /* start address of flash */
-	size_t length;               /* flash length */
-	size_t blocksize;            /* erase block size */
-	size_t writesize;            /* write operation size, must be <= blocksize/writebufsize */
-	size_t writebufsize;         /* size of write buffer */
-	uint8_t erased;              /* byte erased state */
-	bool ready;                  /* true if flash is in flash mode/prepared */
-	flash_prepare_func prepare;  /* prepare for flash operations */
-	flash_erase_func erase;      /* erase a range of flash */
-	flash_write_func write;      /* write to flash */
-	flash_done_func done;        /* finish flash operations */
-	void *buf;                   /* buffer for flash operations */
-	target_addr_t buf_addr_base; /* address of block this buffer is for */
-	target_addr_t buf_addr_low;  /* address of lowest byte written */
-	target_addr_t buf_addr_high; /* address of highest byte written */
-	target_flash_s *next;        /* next flash in list */
+	target_s *t;                 /* Target this flash is attached to */
+	target_addr_t start;         /* Start address of flash */
+	size_t length;               /* Flash length */
+	size_t blocksize;            /* Erase block size */
+	size_t writesize;            /* Write operation size, must be <= blocksize/writebufsize */
+	size_t writebufsize;         /* Size of write buffer, this is calculated and not set in target code */
+	uint8_t erased;              /* Byte erased state */
+	bool ready;                  /* True if flash is in flash mode/prepared */
+	flash_prepare_func prepare;  /* Prepare for flash operations */
+	flash_erase_func erase;      /* Erase a range of flash */
+	flash_write_func write;      /* Write to flash */
+	flash_done_func done;        /* Finish flash operations */
+	void *buf;                   /* Buffer for flash operations */
+	target_addr_t buf_addr_base; /* Address of block this buffer is for */
+	target_addr_t buf_addr_low;  /* Address of lowest byte written */
+	target_addr_t buf_addr_high; /* Address of highest byte written */
+	target_flash_s *next;        /* Next flash in list */
 };
 
-typedef bool (*cmd_handler)(target *t, int argc, const char **argv);
+typedef bool (*cmd_handler_fn)(target_s *t, int argc, const char **argv);
 
-typedef struct command_s {
+typedef struct command {
 	const char *cmd;
-	cmd_handler handler;
+	cmd_handler_fn handler;
 	const char *help;
-} command_t;
+} command_s;
 
-struct target_command_s {
+typedef struct target_command target_command_s;
+
+struct target_command {
 	const char *specific_name;
-	const struct command_s *cmds;
-	struct target_command_s *next;
+	const command_s *cmds;
+	target_command_s *next;
 };
+
+typedef struct breakwatch breakwatch_s;
 
 struct breakwatch {
-	struct breakwatch *next;
-	enum target_breakwatch type;
+	breakwatch_s *next;
+	target_breakwatch_e type;
 	target_addr_t addr;
 	size_t size;
-	uint32_t reserved[4]; /* for use by the implementing driver */
+	uint32_t reserved[4]; /* For use by the implementing driver */
 };
 
 #define MAX_CMDLINE 81
 
-struct target_s {
+struct target {
 	bool attached;
-	struct target_controller *tc;
+	target_controller_s *tc;
 
-	/* Attach/Detach funcitons */
-	bool (*attach)(target *t);
-	void (*detach)(target *t);
-	bool (*check_error)(target *t);
+	/* Attach/Detach functions */
+	bool (*attach)(target_s *t);
+	void (*detach)(target_s *t);
+	bool (*check_error)(target_s *t);
 
 	/* Memory access functions */
-	void (*mem_read)(target *t, void *dest, target_addr_t src, size_t len);
-	void (*mem_write)(target *t, target_addr_t dest, const void *src, size_t len);
+	void (*mem_read)(target_s *t, void *dest, target_addr_t src, size_t len);
+	void (*mem_write)(target_s *t, target_addr_t dest, const void *src, size_t len);
 
 	/* Register access functions */
 	size_t regs_size;
-	char *tdesc;
-	void (*regs_read)(target *t, void *data);
-	void (*regs_write)(target *t, const void *data);
-	ssize_t (*reg_read)(target *t, int reg, void *data, size_t max);
-	ssize_t (*reg_write)(target *t, int reg, const void *data, size_t size);
+	const char *(*regs_description)(target_s *t);
+	void (*regs_read)(target_s *t, void *data);
+	void (*regs_write)(target_s *t, const void *data);
+	ssize_t (*reg_read)(target_s *t, int reg, void *data, size_t max);
+	ssize_t (*reg_write)(target_s *t, int reg, const void *data, size_t size);
 
 	/* Halt/resume functions */
-	void (*reset)(target *t);
-	void (*extended_reset)(target *t);
-	void (*halt_request)(target *t);
-	enum target_halt_reason (*halt_poll)(target *t, target_addr_t *watch);
-	void (*halt_resume)(target *t, bool step);
+	void (*reset)(target_s *t);
+	void (*extended_reset)(target_s *t);
+	void (*halt_request)(target_s *t);
+	target_halt_reason_e (*halt_poll)(target_s *t, target_addr_t *watch);
+	void (*halt_resume)(target_s *t, bool step);
 
 	/* Break-/watchpoint functions */
-	int (*breakwatch_set)(target *t, struct breakwatch *);
-	int (*breakwatch_clear)(target *t, struct breakwatch *);
-	struct breakwatch *bw_list;
+	int (*breakwatch_set)(target_s *t, breakwatch_s *);
+	int (*breakwatch_clear)(target_s *t, breakwatch_s *);
+	breakwatch_s *bw_list;
 
 	/* Recovery functions */
-	bool (*mass_erase)(target *t);
+	bool (*mass_erase)(target_s *t);
 
 	/* Flash functions */
-	bool (*enter_flash_mode)(target *t);
-	bool (*exit_flash_mode)(target *t);
+	bool (*enter_flash_mode)(target_s *t);
+	bool (*exit_flash_mode)(target_s *t);
 	bool flash_mode;
 
-	/* target-defined options */
+	/* Target-defined options */
 	unsigned target_options;
 
 	void *target_storage;
+
 	union {
 		bool unsafe_enabled;
 		bool ke04_mode;
 	};
 
-	struct target_ram *ram;
+	target_ram_s *ram;
 	target_flash_s *flash;
 
 	/* Other stuff */
@@ -142,58 +152,59 @@ struct target_s {
 	char *core;
 	char cmdline[MAX_CMDLINE];
 	target_addr_t heapinfo[4];
-	struct target_command_s *commands;
-#ifdef PLATFORM_HAS_USBUART
+	target_command_s *commands;
+#if PC_HOSTED == 0
 	bool stdout_redirected;
 #endif
 
-	struct target_s *next;
+	target_s *next;
 
 	void *priv;
 	void (*priv_free)(void *);
 
-	/* Target designer and id / partno */
+	/* Target designer and ID / partno */
 	uint16_t designer_code;
-	/* targetid partno if available (>= DPv2)
-	 * fallback to ap partno
+	/*
+	 * Target ID partno if available (>= DPv2)
+	 * fallback to AP partno
 	 */
 	uint16_t part_id;
 };
 
-void target_print_progress(platform_timeout *timeout);
-void target_ram_map_free(target *t);
-void target_flash_map_free(target *t);
-void target_mem_map_free(target *t);
-void target_add_commands(target *t, const struct command_s *cmds, const char *name);
-void target_add_ram(target *t, target_addr_t start, uint32_t len);
-void target_add_flash(target *t, target_flash_s *f);
+void target_print_progress(platform_timeout_s *timeout);
+void target_ram_map_free(target_s *t);
+void target_flash_map_free(target_s *t);
+void target_mem_map_free(target_s *t);
+void target_add_commands(target_s *t, const command_s *cmds, const char *name);
+void target_add_ram(target_s *t, target_addr_t start, uint32_t len);
+void target_add_flash(target_s *t, target_flash_s *f);
 
-target_flash_s *target_flash_for_addr(target *t, uint32_t addr);
+target_flash_s *target_flash_for_addr(target_s *t, uint32_t addr);
 
 /* Convenience function for MMIO access */
-uint32_t target_mem_read32(target *t, uint32_t addr);
-uint16_t target_mem_read16(target *t, uint32_t addr);
-uint8_t target_mem_read8(target *t, uint32_t addr);
-void target_mem_write32(target *t, uint32_t addr, uint32_t value);
-void target_mem_write16(target *t, uint32_t addr, uint16_t value);
-void target_mem_write8(target *t, uint32_t addr, uint8_t value);
-bool target_check_error(target *t);
+uint32_t target_mem_read32(target_s *t, uint32_t addr);
+uint16_t target_mem_read16(target_s *t, uint32_t addr);
+uint8_t target_mem_read8(target_s *t, uint32_t addr);
+void target_mem_write32(target_s *t, uint32_t addr, uint32_t value);
+void target_mem_write16(target_s *t, uint32_t addr, uint16_t value);
+void target_mem_write8(target_s *t, uint32_t addr, uint8_t value);
+bool target_check_error(target_s *t);
 
 /* Access to host controller interface */
-void tc_printf(target *t, const char *fmt, ...);
+void tc_printf(target_s *t, const char *fmt, ...);
 
 /* Interface to host system calls */
-int tc_open(target *, target_addr_t path, size_t plen, enum target_open_flags flags, mode_t mode);
-int tc_close(target *t, int fd);
-int tc_read(target *t, int fd, target_addr_t buf, unsigned int count);
-int tc_write(target *t, int fd, target_addr_t buf, unsigned int count);
-long tc_lseek(target *t, int fd, long offset, enum target_seek_flag flag);
-int tc_rename(target *t, target_addr_t oldpath, size_t oldlen, target_addr_t newpath, size_t newlen);
-int tc_unlink(target *t, target_addr_t path, size_t plen);
-int tc_stat(target *t, target_addr_t path, size_t plen, target_addr_t buf);
-int tc_fstat(target *t, int fd, target_addr_t buf);
-int tc_gettimeofday(target *t, target_addr_t tv, target_addr_t tz);
-int tc_isatty(target *t, int fd);
-int tc_system(target *t, target_addr_t cmd, size_t cmdlen);
+int tc_open(target_s *, target_addr_t path, size_t plen, target_open_flags_e flags, mode_t mode);
+int tc_close(target_s *t, int fd);
+int tc_read(target_s *t, int fd, target_addr_t buf, unsigned int count);
+int tc_write(target_s *t, int fd, target_addr_t buf, unsigned int count);
+long tc_lseek(target_s *t, int fd, long offset, target_seek_flag_e flag);
+int tc_rename(target_s *t, target_addr_t oldpath, size_t oldlen, target_addr_t newpath, size_t newlen);
+int tc_unlink(target_s *t, target_addr_t path, size_t plen);
+int tc_stat(target_s *t, target_addr_t path, size_t plen, target_addr_t buf);
+int tc_fstat(target_s *t, int fd, target_addr_t buf);
+int tc_gettimeofday(target_s *t, target_addr_t tv, target_addr_t tz);
+int tc_isatty(target_s *t, int fd);
+int tc_system(target_s *t, target_addr_t cmd, size_t cmdlen);
 
 #endif /* TARGET_TARGET_INTERNAL_H */

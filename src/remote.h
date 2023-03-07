@@ -44,7 +44,7 @@
  *       e.g. SI21 : Request input with parity, 33 ticks
  *       resp: K<PARAM> - hex value returned.
  *       resp: F<PARAM> - hex value returned, bad parity.
- *             X<err>   - error occured
+ *             X<err>   - error occurred
  *
  * The whole protocol is defined in this header file. Parameters have
  * to be marshalled in remote.c, swdptap.c and jtagtap.c, so be
@@ -103,7 +103,7 @@
 #define REMOTE_AP_MEM_WRITE_SIZED 'm'
 
 /* Generic protocol elements */
-#define REMOTE_GEN_PACKET  'G'
+#define REMOTE_GEN_PACKET 'G'
 #define REMOTE_START_STR                                                            \
 	(char[])                                                                        \
 	{                                                                               \
@@ -221,20 +221,22 @@
 	}
 
 /* HL protocol elements */
-#define HEX '%', '0', '2', 'x'
+#define HEX        '%', '0', '2', 'x'
 #define HEX_U32(x) '%', '0', '8', 'x'
-#define CHR(x) '%', 'c'
+#define CHR(x)     '%', 'c'
 
-#define REMOTE_JTAG_ADD_DEV_STR (char []){ REMOTE_SOM, REMOTE_JTAG_PACKET,\
-			REMOTE_ADD_JTAG_DEV,											\
-			'%','0','2','x', /* index */								\
-			'%','0','2','x', /* dr_prescan */							\
-			'%','0','2','x', /*	dr_postscan	*/							\
-			'%','0','2','x', /* ir_len */								\
-			'%','0','2','x', /* ir_prescan */							\
-			'%','0','2','x', /* ir_postscan */							\
-			HEX_U32(current_ir), /* current_ir */						\
-			REMOTE_EOM, 0}
+#define REMOTE_JTAG_ADD_DEV_STR                                                                    \
+	(char[])                                                                                       \
+	{                                                                                              \
+		REMOTE_SOM, REMOTE_JTAG_PACKET, REMOTE_ADD_JTAG_DEV, '%', '0', '2', 'x', /* index */       \
+			'%', '0', '2', 'x',                                                  /* dr_prescan */  \
+			'%', '0', '2', 'x',                                                  /*	dr_postscan	*/ \
+			'%', '0', '2', 'x',                                                  /* ir_len */      \
+			'%', '0', '2', 'x',                                                  /* ir_prescan */  \
+			'%', '0', '2', 'x',                                                  /* ir_postscan */ \
+			HEX_U32(current_ir),                                                 /* current_ir */  \
+			REMOTE_EOM, 0                                                                          \
+	}
 
 #define REMOTE_HL_CHECK_STR                                          \
 	(char[])                                                         \
@@ -284,6 +286,6 @@
 	}
 
 uint64_t remotehston(uint32_t limit, const char *s);
-void remotePacketProcess(unsigned int i, char *packet);
+void remote_packet_process(unsigned int i, char *packet);
 
 #endif /* REMOTE_H */

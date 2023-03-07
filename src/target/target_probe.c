@@ -33,32 +33,33 @@
 #else
 #define APPLE_STATIC static inline
 #define CORTEXA_PROBE_WEAK_NOP(name) \
-	extern bool name(ADIv5_AP_t *, uint32_t) __attribute__((weak, alias("cortexa_probe_nop")));
-#define CORTEXM_PROBE_WEAK_NOP(name) extern bool name(ADIv5_AP_t *) __attribute__((weak, alias("cortexm_probe_nop")));
-#define TARGET_PROBE_WEAK_NOP(name)  extern bool name(target *) __attribute__((weak, alias("target_probe_nop")));
+	extern bool name(adiv5_access_port_s *, uint32_t) __attribute__((weak, alias("cortexa_probe_nop")));
+#define CORTEXM_PROBE_WEAK_NOP(name) \
+	extern bool name(adiv5_access_port_s *) __attribute__((weak, alias("cortexm_probe_nop")));
+#define TARGET_PROBE_WEAK_NOP(name) extern bool name(target_s *) __attribute__((weak, alias("target_probe_nop")));
 #endif
 
-APPLE_STATIC bool cortexa_probe_nop(ADIv5_AP_t *apb, uint32_t debug_base)
+APPLE_STATIC bool cortexa_probe_nop(adiv5_access_port_s *apb, uint32_t debug_base)
 {
 	(void)apb;
 	(void)debug_base;
 	return false;
 }
 
-APPLE_STATIC bool cortexm_probe_nop(ADIv5_AP_t *ap)
+APPLE_STATIC bool cortexm_probe_nop(adiv5_access_port_s *ap)
 {
 	(void)ap;
 	return false;
 }
 
-APPLE_STATIC bool target_probe_nop(target *t)
+APPLE_STATIC bool target_probe_nop(target_s *t)
 {
 	(void)t;
 	return false;
 }
 
 /*
- * nop alias functions to allow suport for target probe methods
+ * nop alias functions to allow support for target probe methods
  * to be disabled by not compiling/linking them in.
  */
 
@@ -73,6 +74,7 @@ CORTEXM_PROBE_WEAK_NOP(rp_rescue_probe)
 
 TARGET_PROBE_WEAK_NOP(ch32f1_probe)
 TARGET_PROBE_WEAK_NOP(gd32f1_probe)
+TARGET_PROBE_WEAK_NOP(gd32f4_probe)
 TARGET_PROBE_WEAK_NOP(stm32f1_probe)
 TARGET_PROBE_WEAK_NOP(at32fxx_probe)
 TARGET_PROBE_WEAK_NOP(stm32f4_probe)
@@ -99,3 +101,5 @@ TARGET_PROBE_WEAK_NOP(msp432_probe)
 TARGET_PROBE_WEAK_NOP(ke04_probe)
 TARGET_PROBE_WEAK_NOP(rp_probe)
 TARGET_PROBE_WEAK_NOP(renesas_probe)
+TARGET_PROBE_WEAK_NOP(mm32l0xx_probe)
+TARGET_PROBE_WEAK_NOP(mm32f3xx_probe)

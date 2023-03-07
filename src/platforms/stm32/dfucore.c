@@ -25,18 +25,22 @@
 #include <libopencm3/stm32/desig.h>
 
 #if defined(STM32F1HD)
-#	define DFU_IFACE_STRING  "@Internal Flash   /0x08000000/4*002Ka,000*002Kg"
-#   define DFU_IFACE_STRING_OFFSET 38
-#   define DFU_IFACE_PAGESIZE 2
+#define DFU_IFACE_STRING        "@Internal Flash   /0x08000000/4*002Ka,000*002Kg"
+#define DFU_IFACE_STRING_OFFSET 38
+#define DFU_IFACE_PAGESIZE      2
 #elif defined(STM32F1)
-#	define DFU_IFACE_STRING  "@Internal Flash   /0x08000000/8*001Ka,000*001Kg"
-#   define DFU_IFACE_STRING_OFFSET 38
-#   define DFU_IFACE_PAGESIZE 1
-#elif defined(STM32F4) ||  defined(STM32F7)
-#   define FLASH_BASE         0x08000000U
-#   define DFU_IFACE_PAGESIZE 128
-#   define DFU_IFACE_STRING_OFFSET 54
-#	define DFU_IFACE_STRING  "@Internal Flash   /0x08000000/1*016Ka,3*016Kg,1*064Kg,000*128Kg"
+#define DFU_IFACE_STRING        "@Internal Flash   /0x08000000/8*001Ka,000*001Kg"
+#define DFU_IFACE_STRING_OFFSET 38
+#define DFU_IFACE_PAGESIZE      1
+#elif defined(STM32F4) || defined(STM32F7)
+#define DFU_IFACE_PAGESIZE 128
+#if APP_START == 0x08020000
+#define DFU_IFACE_STRING_OFFSET 62
+#define DFU_IFACE_STRING        "@Internal Flash   /0x08000000/1*016Ka,3*016Ka,1*064Ka,1*128Kg,002*128Kg"
+#elif APP_START == 0x08004000
+#define DFU_IFACE_STRING_OFFSET 54
+#define DFU_IFACE_STRING        "@Internal Flash   /0x08000000/1*016Ka,3*016Kg,1*064Kg,000*128Kg"
+#endif
 #endif
 #include <libopencm3/stm32/flash.h>
 
@@ -44,6 +48,7 @@
 #include <libopencm3/usb/dfu.h>
 
 #include "usbdfu.h"
+#include "usb_types.h"
 
 usbd_device *usbdev;
 /* We need a special large control buffer for this device: */
@@ -51,7 +56,7 @@ uint8_t usbd_control_buffer[1024];
 
 static uint32_t max_address;
 
-static enum dfu_state usbdfu_state = STATE_DFU_IDLE;
+static dfu_state_e usbdfu_state = STATE_DFU_IDLE;
 
 static void get_dev_unique_id(void);
 
@@ -61,9 +66,10 @@ static struct {
 	uint32_t addr;
 	uint16_t blocknum;
 } prog;
+
 static uint8_t current_error;
 
-const struct usb_device_descriptor dev_desc = {
+const usb_device_descriptor_s dev_desc = {
 	.bLength = USB_DT_DEVICE_SIZE,
 	.bDescriptorType = USB_DT_DEVICE,
 	.bcdUSB = 0x0200,
@@ -71,7 +77,7 @@ const struct usb_device_descriptor dev_desc = {
 	.bDeviceSubClass = 0,
 	.bDeviceProtocol = 0,
 	.bMaxPacketSize0 = 64,
-	.idVendor = 0x1D50,
+	.idVendor = 0x1d50,
 	.idProduct = 0x6017,
 	.bcdDevice = 0x0100,
 	.iManufacturer = 1,
@@ -80,22 +86,22 @@ const struct usb_device_descriptor dev_desc = {
 	.bNumConfigurations = 1,
 };
 
-const struct usb_dfu_descriptor dfu_function = {
-	.bLength = sizeof(struct usb_dfu_descriptor),
+const usb_dfu_descriptor_s dfu_function = {
+	.bLength = sizeof(usb_dfu_descriptor_s),
 	.bDescriptorType = DFU_FUNCTIONAL,
 	.bmAttributes = USB_DFU_CAN_DOWNLOAD | USB_DFU_CAN_UPLOAD | USB_DFU_WILL_DETACH,
 	.wDetachTimeout = 255,
 	.wTransferSize = 1024,
-	.bcdDFUVersion = 0x011A,
+	.bcdDFUVersion = 0x011a,
 };
 
-const struct usb_interface_descriptor iface = {
+const usb_interface_descriptor_s iface = {
 	.bLength = USB_DT_INTERFACE_SIZE,
 	.bDescriptorType = USB_DT_INTERFACE,
 	.bInterfaceNumber = 0,
 	.bAlternateSetting = 0,
 	.bNumEndpoints = 0,
-	.bInterfaceClass = 0xFE, /* Device Firmware Upgrade */
+	.bInterfaceClass = 0xfe, /* Device Firmware Upgrade */
 	.bInterfaceSubClass = 1,
 	.bInterfaceProtocol = 2,
 
@@ -107,28 +113,30 @@ const struct usb_interface_descriptor iface = {
 	.extralen = sizeof(dfu_function),
 };
 
-const struct usb_interface ifaces[] = {{
+const usb_interface_s ifaces[] = {{
 	.num_altsetting = 1,
 	.altsetting = &iface,
 }};
 
-const struct usb_config_descriptor config = {
+const usb_config_descriptor_s config = {
 	.bLength = USB_DT_CONFIGURATION_SIZE,
 	.bDescriptorType = USB_DT_CONFIGURATION,
 	.wTotalLength = 0,
 	.bNumInterfaces = 1,
 	.bConfigurationValue = 1,
 	.iConfiguration = 0,
-	.bmAttributes = 0xC0,
+	.bmAttributes = 0xc0,
 	.bMaxPower = 0x32,
 
 	.interface = ifaces,
 };
 
-static char if_string[] = DFU_IFACE_STRING;
-#define BOARD_IDENT_DFU(BOARD_TYPE) "Black Magic Probe DFU " PLATFORM_IDENT  "" FIRMWARE_VERSION
+#define BOARD_IDENT_DFU(BOARD_TYPE) "Black Magic Probe DFU " PLATFORM_IDENT "" FIRMWARE_VERSION
 
-static const char *usb_strings[] = {
+/* Because of shenanigans below, this intentionally creates a runtime copy of the string. */
+static char if_string[] = DFU_IFACE_STRING;
+
+static const char *const usb_strings[] = {
 	"Black Magic Debug",
 	BOARD_IDENT_DFU(PLATFORM_IDENT),
 	serial_no,
@@ -139,17 +147,15 @@ static const char *usb_strings[] = {
 static uint32_t get_le32(const void *vp)
 {
 	const uint8_t *p = vp;
-	return ((uint32_t)p[3] << 24) + ((uint32_t)p[2] << 16) + (p[1] << 8) + p[0];
+	return ((uint32_t)p[3] << 24U) + ((uint32_t)p[2] << 16U) + (p[1] << 8U) + p[0];
 }
 
-static uint8_t usbdfu_getstatus(uint32_t *bwPollTimeout)
+static uint8_t usbdfu_getstatus(uint32_t *poll_timeout)
 {
-	switch(usbdfu_state) {
+	switch (usbdfu_state) {
 	case STATE_DFU_DNLOAD_SYNC:
 		usbdfu_state = STATE_DFU_DNBUSY;
-		*bwPollTimeout = dfu_poll_timeout(prog.buf[0],
-					get_le32(prog.buf + 1),
-					prog.blocknum);
+		*poll_timeout = dfu_poll_timeout(prog.buf[0], get_le32(prog.buf + 1U), prog.blocknum);
 		return DFU_STATUS_OK;
 
 	case STATE_DFU_MANIFEST_SYNC:
@@ -163,38 +169,33 @@ static uint8_t usbdfu_getstatus(uint32_t *bwPollTimeout)
 	}
 }
 
-static void
-usbdfu_getstatus_complete(usbd_device *dev, struct usb_setup_data *req)
+static void usbdfu_getstatus_complete(usbd_device *dev, usb_setup_data_s *req)
 {
 	(void)req;
 	(void)dev;
 
-	switch(usbdfu_state) {
+	switch (usbdfu_state) {
 	case STATE_DFU_DNBUSY:
 
 		flash_unlock();
-		if(prog.blocknum == 0) {
-			uint32_t addr = get_le32(prog.buf + 1);
-			switch(prog.buf[0]) {
+		if (prog.blocknum == 0) {
+			const uint32_t addr = get_le32(prog.buf + 1U);
+			switch (prog.buf[0]) {
 			case CMD_ERASE:
-				if ((addr <  app_address) || (addr >= max_address)) {
-					usbdfu_state = 	STATE_DFU_ERROR;
+				if (addr < app_address || addr >= max_address) {
+					usbdfu_state = STATE_DFU_ERROR;
 					flash_lock();
 					return;
 				}
 				dfu_check_and_do_sector_erase(addr);
 			}
 		} else {
-			uint32_t baseaddr = prog.addr +
-				((prog.blocknum - 2) *
-					dfu_function.wTransferSize);
+			const uint32_t baseaddr = prog.addr + ((prog.blocknum - 2U) * dfu_function.wTransferSize);
 			dfu_flash_program_buffer(baseaddr, prog.buf, prog.len);
 		}
 		flash_lock();
 
-		/* We jump straight to dfuDNLOAD-IDLE,
-		 * skipping dfuDNLOAD-SYNC
-		 */
+		/* We jump straight to dfuDNLOAD-IDLE, skipping dfuDNLOAD-SYNC */
 		usbdfu_state = STATE_DFU_DNLOAD_IDLE;
 		return;
 
@@ -206,40 +207,39 @@ usbdfu_getstatus_complete(usbd_device *dev, struct usb_setup_data *req)
 	}
 }
 
-static enum usbd_request_return_codes usbdfu_control_request(usbd_device *dev,
-		struct usb_setup_data *req, uint8_t **buf, uint16_t *len,
-		void (**complete)(usbd_device *dev, struct usb_setup_data *req))
+static usbd_request_return_codes_e usbdfu_control_request(usbd_device *dev, usb_setup_data_s *req, uint8_t **buf,
+	uint16_t *len, void (**complete)(usbd_device *dev, usb_setup_data_s *req))
 {
-	(void)dev;
+	uint8_t *const data = *buf;
 
-	if((req->bmRequestType & 0x7F) != 0x21)
+	if ((req->bmRequestType & 0x7fU) != 0x21U)
 		return USBD_REQ_NOTSUPP; /* Only accept class request */
 
-	switch(req->bRequest) {
+	switch (req->bRequest) {
 	case DFU_DNLOAD:
-		if((len == NULL) || (*len == 0)) {
+		if (len == NULL || *len == 0) {
 			usbdfu_state = STATE_DFU_MANIFEST_SYNC;
 			return USBD_REQ_HANDLED;
 		} else {
 			/* Copy download data for use on GET_STATUS */
 			prog.blocknum = req->wValue;
 			prog.len = *len;
-			memcpy(prog.buf, *buf, *len);
-			if ((req->wValue == 0) && (prog.buf[0] == CMD_SETADDR)) {
-				uint32_t addr = get_le32(prog.buf + 1);
-				if ((addr < app_address) || (addr >= max_address)) {
+			memcpy(prog.buf, data, *len);
+			if (req->wValue == 0 && prog.buf[0] == CMD_SETADDR) {
+				uint32_t addr = get_le32(prog.buf + 1U);
+				if (addr < app_address || addr >= max_address) {
 					current_error = DFU_STATUS_ERR_TARGET;
 					usbdfu_state = STATE_DFU_ERROR;
 					return USBD_REQ_HANDLED;
-				} else
-					prog.addr = addr;
+				}
+				prog.addr = addr;
 			}
 			usbdfu_state = STATE_DFU_DNLOAD_SYNC;
 			return USBD_REQ_HANDLED;
 		}
 	case DFU_CLRSTATUS:
 		/* Clear error and return to dfuIDLE */
-		if(usbdfu_state == STATE_DFU_ERROR)
+		if (usbdfu_state == STATE_DFU_ERROR)
 			usbdfu_state = STATE_DFU_IDLE;
 		return USBD_REQ_HANDLED;
 	case DFU_ABORT:
@@ -247,16 +247,13 @@ static enum usbd_request_return_codes usbdfu_control_request(usbd_device *dev,
 		usbdfu_state = STATE_DFU_IDLE;
 		return USBD_REQ_HANDLED;
 	case DFU_UPLOAD:
-		if ((usbdfu_state == STATE_DFU_IDLE) ||
-			(usbdfu_state == STATE_DFU_DNLOAD_IDLE) ||
-			(usbdfu_state == STATE_DFU_UPLOAD_IDLE)) {
+		if (usbdfu_state == STATE_DFU_IDLE || usbdfu_state == STATE_DFU_DNLOAD_IDLE ||
+			usbdfu_state == STATE_DFU_UPLOAD_IDLE) {
 			prog.blocknum = req->wValue;
 			usbdfu_state = STATE_DFU_UPLOAD_IDLE;
-			if(prog.blocknum > 1) {
-				uint32_t baseaddr = prog.addr +
-					((prog.blocknum - 2) *
-					 dfu_function.wTransferSize);
-				memcpy(*buf, (void*)baseaddr, *len);
+			if (prog.blocknum > 1U) {
+				const uintptr_t baseaddr = prog.addr + ((prog.blocknum - 2U) * dfu_function.wTransferSize);
+				memcpy(data, (void *)baseaddr, *len);
 			}
 			return USBD_REQ_HANDLED;
 		} else {
@@ -264,23 +261,22 @@ static enum usbd_request_return_codes usbdfu_control_request(usbd_device *dev,
 			return USBD_REQ_NOTSUPP;
 		}
 	case DFU_GETSTATUS: {
-		uint32_t bwPollTimeout = 0; /* 24-bit integer in DFU class spec */
+		uint32_t poll_timeout = 0; /* 24-bit integer in DFU class spec */
 
-		(*buf)[0] = usbdfu_getstatus(&bwPollTimeout);
-		(*buf)[1] = bwPollTimeout & 0xFF;
-		(*buf)[2] = (bwPollTimeout >> 8) & 0xFF;
-		(*buf)[3] = (bwPollTimeout >> 16) & 0xFF;
-		(*buf)[4] = usbdfu_state;
-		(*buf)[5] = 0;	/* iString not used here */
+		data[0] = usbdfu_getstatus(&poll_timeout);
+		data[1] = poll_timeout & 0xffU;
+		data[2] = (poll_timeout >> 8U) & 0xffU;
+		data[3] = (poll_timeout >> 16U) & 0xffU;
+		data[4] = usbdfu_state;
+		data[5] = 0; /* iString not used here */
 		*len = 6;
 
 		*complete = usbdfu_getstatus_complete;
-
 		return USBD_REQ_HANDLED;
-		}
+	}
 	case DFU_GETSTATE:
-		/* Return state with no state transision */
-		*buf[0] = usbdfu_state;
+		/* Return state with no state transition */
+		data[0] = usbdfu_state;
 		*len = 1;
 		return USBD_REQ_HANDLED;
 	}
@@ -292,60 +288,53 @@ void dfu_init(const usbd_driver *driver)
 {
 	get_dev_unique_id();
 
-	usbdev = usbd_init(driver, &dev_desc, &config,
-			   usb_strings, 4,
-			   usbd_control_buffer, sizeof(usbd_control_buffer));
+	usbdev = usbd_init(driver, &dev_desc, &config, usb_strings, 4, usbd_control_buffer, sizeof(usbd_control_buffer));
 
-	usbd_register_control_callback(usbdev,
-				USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
-				USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT,
-				usbdfu_control_request);
+	usbd_register_control_callback(usbdev, USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
+		USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT, usbdfu_control_request);
 }
 
 void dfu_main(void)
 {
-	while (1)
+	while (true)
 		usbd_poll(usbdev);
 }
 
 #if defined(DFU_IFACE_STRING_OFFSET)
 static void set_dfu_iface_string(uint32_t size)
 {
-	uint32_t res;
-	char *p = if_string + DFU_IFACE_STRING_OFFSET;
+	char *const p = if_string + DFU_IFACE_STRING_OFFSET;
+#if DFU_IFACE_PAGESIZE > 1
 	size /= DFU_IFACE_PAGESIZE;
-	/* We do not want the whole printf library in the bootloader.
+#endif
+	/*
+	 * We do not want the whole printf library in the bootloader.
 	 * Fill the size digits by hand.
 	 */
-	res = size / 100;
-	if (res > 9) {
-		*p++ = '9';
-		*p++ = '9';
-		*p++ = '9';
+	if (size >= 999) {
+		p[0] = '9';
+		p[1] = '9';
+		p[2] = '9';
 		return;
-	} else {
-		*p++ = res + '0';
-		size -= res * 100;
 	}
-	res = size / 10;
-	*p++ = res + '0';
-	size -= res * 10;
-	*p++ = size + '0';
+	p[2] = (char)(48U + (size % 10U));
+	size /= 10U;
+	p[1] = (char)(48U + (size % 10U));
+	size /= 10U;
+	p[0] = (char)(48U + size);
 }
 #else
-# define set_dfu_iface_string(x)
+#define set_dfu_iface_string(x)
 #endif
 
 static void get_dev_unique_id(void)
 {
-	uint32_t fuse_flash_size;
-
-	/* Calculated the upper flash limit from the exported data
-	   in theparameter block*/
-	fuse_flash_size = desig_get_flash_size();
-	if (fuse_flash_size == 0x40) /* Handle F103x8 as F103xB! */
-		fuse_flash_size = 0x80;
-	set_dfu_iface_string(fuse_flash_size - 8);
-	max_address = FLASH_BASE + (fuse_flash_size << 10);
+	/* Calculated the upper flash limit from the exported data in the parameter block*/
+	uint32_t fuse_flash_size = desig_get_flash_size();
+	/* Handle F103x8 as F103xB. */
+	if (fuse_flash_size == 0x40U)
+		fuse_flash_size = 0x80U;
+	set_dfu_iface_string(fuse_flash_size - 8U);
+	max_address = FLASH_BASE + (fuse_flash_size << 10U);
 	read_serial_number();
 }

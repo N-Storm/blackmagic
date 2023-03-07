@@ -46,8 +46,8 @@ static inline void sfdp_debug_print(const uint32_t address, const void *const bu
 	DEBUG_INFO("%" PRIu32 " byte SFDP read at 0x%" PRIx32 ":\n", length, address);
 	const uint8_t *const data = buffer;
 	for (size_t i = 0; i < length; i += 8U) {
-		DEBUG_INFO("\t%02x %02x %02x %02x %02x %02x %02x %02x\n", data[i + 0], data[i + 1], data[i + 2], data[i + 3],
-			data[i + 4], data[i + 5], data[i + 6], data[i + 7]);
+		DEBUG_INFO("\t%02x %02x %02x %02x %02x %02x %02x %02x\n", data[i], data[i + 1U], data[i + 2U], data[i + 3U],
+			data[i + 4U], data[i + 5U], data[i + 6U], data[i + 7U]);
 	}
 #else
 	(void)address;
@@ -64,8 +64,8 @@ static inline size_t sfdp_memory_density_to_capacity_bits(const uint8_t *const d
 		return SFDP_DENSITY_VALUE(density) + 1U;
 }
 
-static spi_parameters_s sfdp_read_basic_parameter_table(target *const t, const uint32_t address, const size_t length,
-	const read_sfdp_func sfdp_read)
+static spi_parameters_s sfdp_read_basic_parameter_table(
+	target_s *const t, const uint32_t address, const size_t length, const read_sfdp_func sfdp_read)
 {
 	sfdp_basic_parameter_table_s parameter_table;
 	const size_t table_length = MIN(sizeof(sfdp_basic_parameter_table_s), length);
@@ -85,7 +85,7 @@ static spi_parameters_s sfdp_read_basic_parameter_table(target *const t, const u
 	return result;
 }
 
-bool sfdp_read_parameters(target *const t, spi_parameters_s *params, const read_sfdp_func sfdp_read)
+bool sfdp_read_parameters(target_s *const t, spi_parameters_s *params, const read_sfdp_func sfdp_read)
 {
 	sfdp_header_s header;
 	sfdp_read(t, SFDP_HEADER_ADDRESS, &header, sizeof(header));

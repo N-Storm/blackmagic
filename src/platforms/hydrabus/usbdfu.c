@@ -36,7 +36,7 @@ int main(void)
 {
 	/* Check the force bootloader pin*/
 	rcc_peripheral_enable_clock(&RCC_AHB1ENR, RCC_AHB1ENR_IOPAEN);
-	if(!gpio_get(GPIOA, GPIO0))
+	if (!gpio_get(GPIOA, GPIO0))
 		dfu_jump_app_if_valid();
 
 	dfu_protect_enable();
@@ -44,7 +44,7 @@ int main(void)
 	/* Set up clock*/
 	rcc_clock_setup_hse_3v3(&hse_8mhz_3v3[CLOCK_3V3_168MHZ]);
 	systick_set_clocksource(STK_CSR_CLKSOURCE_AHB_DIV8);
-	systick_set_reload(2100000);
+	systick_set_reload(2100000U);
 
 	systick_interrupt_enable();
 	systick_counter_enable();
@@ -52,25 +52,21 @@ int main(void)
 	/* Handle LED */
 	rcc_peripheral_enable_clock(&RCC_AHB1ENR, RCC_AHB1ENR_IOPDEN);
 	gpio_clear(GPIOA, GPIO4);
-	gpio_mode_setup(GPIOA, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE,
-			GPIO4);
+	gpio_mode_setup(GPIOA, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO4);
 
 	/* Set up USB*/
 	rcc_peripheral_enable_clock(&RCC_AHB1ENR, RCC_AHB1ENR_IOPAEN);
 	rcc_peripheral_enable_clock(&RCC_AHB2ENR, RCC_AHB2ENR_OTGFSEN);
 
 	/* Set up USB Pins and alternate function*/
-	gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE,
-		GPIO9 | GPIO10 | GPIO11 | GPIO12);
-	gpio_set_af(GPIOA, GPIO_AF10, GPIO9 | GPIO10| GPIO11 | GPIO12);
+	gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO9 | GPIO10 | GPIO11 | GPIO12);
+	gpio_set_af(GPIOA, GPIO_AF10, GPIO9 | GPIO10 | GPIO11 | GPIO12);
 	dfu_init(&stm32f107_usb_driver);
 
 	dfu_main();
 }
 
-
 void sys_tick_handler(void)
 {
-	gpio_toggle(GPIOA, GPIO4);  /* Green LED on/off */
+	gpio_toggle(GPIOA, GPIO4); /* Green LED on/off */
 }
-

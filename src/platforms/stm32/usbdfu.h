@@ -20,12 +20,13 @@
 #ifndef PLATFORMS_STM32_USBDFU_H
 #define PLATFORMS_STM32_USBDFU_H
 
+#include <stddef.h>
 #include <libopencm3/usb/usbd.h>
 
 /* Commands sent with wBlockNum == 0 as per ST implementation. */
-#define CMD_SETADDR	0x21
-#define CMD_ERASE	0x41
-extern uint32_t app_address;
+#define CMD_SETADDR 0x21U
+#define CMD_ERASE   0x41U
+extern uintptr_t app_address;
 
 /* dfucore.c - DFU core, common to libopencm3 platforms. */
 void dfu_init(const usbd_driver *driver);
@@ -33,7 +34,7 @@ void dfu_main(void);
 
 /* Device specific functions */
 void dfu_check_and_do_sector_erase(uint32_t sector);
-void dfu_flash_program_buffer(uint32_t baseaddr, void *buf, int len);
+void dfu_flash_program_buffer(uint32_t baseaddr, const void *buf, size_t len);
 uint32_t dfu_poll_timeout(uint8_t cmd, uint32_t addr, uint16_t blocknum);
 void dfu_protect(bool enable);
 void dfu_jump_app_if_valid(void);

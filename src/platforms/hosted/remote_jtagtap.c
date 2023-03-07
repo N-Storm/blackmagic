@@ -37,7 +37,7 @@
 #include "bmp_remote.h"
 
 static void jtagtap_reset(void);
-static void jtagtap_tms_seq(uint32_t tms_states, size_t ticks);
+static void jtagtap_tms_seq(uint32_t tms_states, size_t clock_cycles);
 static void jtagtap_tdi_tdo_seq(uint8_t *data_out, bool final_tms, const uint8_t *data_in, size_t clock_cycles);
 static void jtagtap_tdi_seq(bool final_tms, const uint8_t *data_in, size_t clock_cycles);
 static bool jtagtap_next(bool tms, bool tdi);
@@ -48,31 +48,32 @@ static inline unsigned int bool_to_int(const bool value)
 	return value ? 1 : 0;
 }
 
-int remote_jtagtap_init(jtag_proc_t *jtag_proc)
+bool remote_jtagtap_init(void)
 {
 	platform_buffer_write((uint8_t *)REMOTE_JTAG_INIT_STR, sizeof(REMOTE_JTAG_INIT_STR));
 
 	char buffer[REMOTE_MAX_MSG_SIZE];
 	int length = platform_buffer_read((uint8_t *)buffer, REMOTE_MAX_MSG_SIZE);
-	if ((!length) || (buffer[0] == REMOTE_RESP_ERR)) {
+	if (!length || buffer[0] == REMOTE_RESP_ERR) {
 		DEBUG_WARN("jtagtap_init failed, error %s\n", length ? buffer + 1 : "unknown");
 		exit(-1);
 	}
 
-	jtag_proc->jtagtap_reset = jtagtap_reset;
-	jtag_proc->jtagtap_next = jtagtap_next;
-	jtag_proc->jtagtap_tms_seq = jtagtap_tms_seq;
-	jtag_proc->jtagtap_tdi_tdo_seq = jtagtap_tdi_tdo_seq;
-	jtag_proc->jtagtap_tdi_seq = jtagtap_tdi_seq;
+	jtag_proc.jtagtap_reset = jtagtap_reset;
+	jtag_proc.jtagtap_next = jtagtap_next;
+	jtag_proc.jtagtap_tms_seq = jtagtap_tms_seq;
+	jtag_proc.jtagtap_tdi_tdo_seq = jtagtap_tdi_tdo_seq;
+	jtag_proc.jtagtap_tdi_seq = jtagtap_tdi_seq;
+	jtag_proc.tap_idle_cycles = 1;
 
 	platform_buffer_write((uint8_t *)REMOTE_HL_CHECK_STR, sizeof(REMOTE_HL_CHECK_STR));
 	length = platform_buffer_read((uint8_t *)buffer, REMOTE_MAX_MSG_SIZE);
 	if (!length || buffer[0] == REMOTE_RESP_ERR || buffer[0] == 1)
 		PRINT_INFO("Firmware does not support newer JTAG commands, please update it.");
 	else
-		jtag_proc->jtagtap_cycle = jtagtap_cycle;
+		jtag_proc.jtagtap_cycle = jtagtap_cycle;
 
-	return 0;
+	return true;
 }
 
 /* See remote.c/.h for protocol information */
@@ -107,7 +108,8 @@ static void jtagtap_tms_seq(uint32_t tms_states, size_t clock_cycles)
  * FIXME: Provide and test faster call and keep fallback
  * for old firmware
  */
-static void jtagtap_tdi_tdo_seq(uint8_t *const data_out, const bool final_tms, const uint8_t *const data_in, const size_t clock_cycles)
+static void jtagtap_tdi_tdo_seq(
+	uint8_t *const data_out, const bool final_tms, const uint8_t *const data_in, const size_t clock_cycles)
 {
 	if (!clock_cycles || (!data_in && !data_out))
 		return;
@@ -115,25 +117,36 @@ static void jtagtap_tdi_tdo_seq(uint8_t *const data_out, const bool final_tms, c
 	char buffer[REMOTE_MAX_MSG_SIZE];
 	size_t in_offset = 0;
 	size_t out_offset = 0;
-	for (size_t cycle = 0; cycle < clock_cycles; ) {
-		size_t chunk;
+	char tms_state = REMOTE_TDITDO_NOTMS;
+	/* Loop through the data to send/receive and handle it in chunks of up to 64 bits */
+	for (size_t cycle = 0; cycle < clock_cycles;) {
+		/* Calculate how many bits need to be in this chunk, capped at 64 */
+		size_t chunk = 64;
 		if (clock_cycles - cycle <= 64)
 			chunk = clock_cycles - cycle;
-		else
-			chunk = 64;
 		cycle += chunk;
+		/* If the result would complete the transaction, check if TMS needs to be high at the end */
+		if (cycle == clock_cycles && final_tms)
+			/* If it does, we then need to tell the firmware this */
+			tms_state = REMOTE_TDITDO_TMS;
 
+		/* Build a representation of the data to send safely */
 		uint64_t data = 0;
 		const size_t bytes = (chunk + 7U) >> 3U;
 		if (data_in) {
-			for (size_t i = 0; i < bytes; ++i)
-				data |= data_in[in_offset++] << (i * 8U);
+			for (size_t idx = 0; idx < bytes; ++idx, ++in_offset)
+				data |= data_in[in_offset] << (idx * 8U);
 		}
-		/* PRIx64 differs with system. Use it explicit in the format string*/
-		int length = snprintf(buffer, REMOTE_MAX_MSG_SIZE, "!J%c%02zx%" PRIx64 "%c",
-			!clock_cycles && final_tms ? REMOTE_TDITDO_TMS : REMOTE_TDITDO_NOTMS, chunk, data, REMOTE_EOM);
+		/*
+		 * Build the remote protocol message to send, and send it.
+		 * This uses its own copy of the REMOTE_JTAG_TDIDO_STR to correct for how
+		 * formatting a uint64_t is platform-specific.
+		 */
+		int length =
+			snprintf(buffer, REMOTE_MAX_MSG_SIZE, "!J%c%02zx%" PRIx64 "%c", tms_state, chunk, data, REMOTE_EOM);
 		platform_buffer_write((uint8_t *)buffer, length);
 
+		/* Receive the response and check if it's an error response */
 		length = platform_buffer_read((uint8_t *)buffer, REMOTE_MAX_MSG_SIZE);
 		if (!length || buffer[0] == REMOTE_RESP_ERR) {
 			DEBUG_WARN("jtagtap_tdi_tdo_seq failed, error %s\n", length ? buffer + 1 : "unknown");

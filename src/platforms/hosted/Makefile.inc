@@ -64,8 +64,8 @@ ifneq ($(HOSTED_BMP_ONLY), 1)
 endif
 
 ifneq ($(HOSTED_BMP_ONLY), 1)
-    CFLAGS  +=  -DCMSIS_DAP
-    SRC += cmsis_dap.c dap.c
+    CFLAGS += -DCMSIS_DAP
+    SRC += cmsis_dap.c dap.c dap_command.c
     ifneq ($(shell pkg-config --exists $(HIDAPILIB); echo $$?), 0)
         $(error Please install $(HIDAPILIB) dependency or set HOSTED_BMP_ONLY to 1)
     endif
@@ -73,7 +73,7 @@ ifneq ($(HOSTED_BMP_ONLY), 1)
     LDFLAGS += $(shell pkg-config --libs $(HIDAPILIB))
 endif
 
-SRC += timing.c cli.c utils.c
+SRC += timing.c cli.c utils.c probe_info.c
 SRC += bmp_remote.c remote_swdptap.c remote_jtagtap.c
 ifneq ($(HOSTED_BMP_ONLY), 1)
     SRC += bmp_libusb.c stlinkv2.c

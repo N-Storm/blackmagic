@@ -18,9 +18,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* This file implements the platform specific functions for the STM32
- * implementation.
- */
+/* This file implements the platform specific functions for the 96Boards Carbon implementation. */
 
 #include "general.h"
 #include "usb.h"
@@ -49,16 +47,13 @@ void platform_init(void)
 	rcc_periph_clock_enable(RCC_GPIOD);
 	rcc_periph_clock_enable(RCC_CRC);
 
-	/* Set up USB Pins and alternate function*/
+	/* Set up USB Pins and alternate function */
 	gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO11 | GPIO12);
 	gpio_set_af(GPIOA, GPIO_AF10, GPIO11 | GPIO12);
 
-	gpio_mode_setup(JTAG_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE,
-			TMS_PIN | TCK_PIN | TDI_PIN);
-	gpio_set_output_options(JTAG_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ,
-			TMS_PIN | TCK_PIN | TDI_PIN);
-        gpio_mode_setup(TDO_PORT, GPIO_MODE_INPUT, GPIO_PUPD_NONE,
-			TDO_PIN);
+	gpio_mode_setup(JTAG_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, TMS_PIN | TCK_PIN | TDI_PIN);
+	gpio_set_output_options(JTAG_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, TMS_PIN | TCK_PIN | TDI_PIN);
+	gpio_mode_setup(TDO_PORT, GPIO_MODE_INPUT, GPIO_PUPD_NONE, TDO_PIN);
 
 	gpio_mode_setup(TRST_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, TRST_PIN);
 	gpio_mode_setup(NRST_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, NRST_PIN);
@@ -98,8 +93,8 @@ void platform_request_boot(void)
 
 	/* Jump to the built in bootloader by mapping System flash */
 	rcc_periph_clock_enable(RCC_SYSCFG);
-	SYSCFG_MEMRM &= ~3;
-	SYSCFG_MEMRM |=  1;
+	SYSCFG_MEMRM &= ~3U;
+	SYSCFG_MEMRM |= 1U;
 }
 
 void platform_target_clk_output_enable(bool enable)

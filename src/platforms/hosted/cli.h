@@ -26,7 +26,7 @@
 
 #include "cortexm.h"
 
-enum bmp_cl_mode {
+typedef enum bmda_cli_mode {
 	BMP_MODE_DEBUG,
 	BMP_MODE_TEST,
 	BMP_MODE_RESET,
@@ -38,17 +38,17 @@ enum bmp_cl_mode {
 	BMP_MODE_FLASH_VERIFY,
 	BMP_MODE_SWJ_TEST,
 	BMP_MODE_MONITOR,
-};
+} bmda_cli_mode_e;
 
-typedef enum bmp_scan_mode_e {
+typedef enum bmp_scan_mode {
 	BMP_SCAN_JTAG,
 	BMP_SCAN_SWD,
 	BMP_SCAN_AUTO
-} bmp_scan_mode_t;
+} bmp_scan_mode_e;
 
-typedef struct BMP_CL_OPTIONS_s {
-	enum bmp_cl_mode opt_mode;
-	bmp_scan_mode_t opt_scanmode;
+typedef struct bmda_cli_options {
+	bmda_cli_mode_e opt_mode;
+	bmp_scan_mode_e opt_scanmode;
 	bool opt_tpwr;
 	bool opt_list_only;
 	bool opt_connect_under_reset;
@@ -60,7 +60,7 @@ typedef struct BMP_CL_OPTIONS_s {
 	char *opt_serial;
 	uint32_t opt_targetid;
 	char *opt_ident_string;
-	int opt_position;
+	size_t opt_position;
 	char *opt_cable;
 	char *opt_monitor;
 	int opt_debuglevel;
@@ -68,11 +68,11 @@ typedef struct BMP_CL_OPTIONS_s {
 	uint32_t opt_flash_start;
 	uint32_t opt_max_swj_frequency;
 	size_t opt_flash_size;
-} BMP_CL_OPTIONS_t;
+} bmda_cli_options_s;
 
-void cl_init(BMP_CL_OPTIONS_t *opt, int argc, char **argv);
-int cl_execute(BMP_CL_OPTIONS_t *opt);
-int serial_open(BMP_CL_OPTIONS_t *opt, char *serial);
+void cl_init(bmda_cli_options_s *opt, int argc, char **argv);
+int cl_execute(bmda_cli_options_s *opt);
+int serial_open(const bmda_cli_options_s *opt, const char *serial);
 void serial_close(void);
 
 #endif /* PLATFORMS_HOSTED_CLI_H */

@@ -23,26 +23,27 @@
 #include <stddef.h>
 #include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/cdc.h>
+#include "usb_types.h"
 
-#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4)
+#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4) || defined(STM32F7)
 /* XXX: Does the st_usbfs_v2_usb_driver work on F3 with 128 byte buffers? */
-#if defined(STM32F1) || defined(STM32F3) || defined(STM32F4)
+#if defined(STM32F1) || defined(STM32F3) || defined(STM32F4) || defined(STM32F7)
 #define USART_DMA_BUF_SHIFT 7U
 #elif defined(STM32F0)
 /* The st_usbfs_v2_usb_driver only works with up to 64-byte buffers on the F0 parts */
 #define USART_DMA_BUF_SHIFT 6U
 #endif
 
-#define USART_DMA_BUF_SIZE  (1U << USART_DMA_BUF_SHIFT)
+#define USART_DMA_BUF_SIZE   (1U << USART_DMA_BUF_SHIFT)
 #define AUX_UART_BUFFER_SIZE (USART_DMA_BUF_SIZE)
 #elif defined(LM4F)
-#define AUX_UART_BUFFER_SIZE 128
+#define AUX_UART_BUFFER_SIZE 128U
 #endif
 
 void aux_serial_init(void);
-void aux_serial_set_encoding(struct usb_cdc_line_coding *coding);
+void aux_serial_set_encoding(usb_cdc_line_coding_s *coding);
 
-#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4)
+#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4) || defined(STM32F7)
 typedef enum aux_serial_led {
 	AUX_SERIAL_LED_TX = (1U << 0U),
 	AUX_SERIAL_LED_RX = (1U << 1U)
@@ -58,10 +59,10 @@ void aux_serial_switch_transmit_buffers(void);
 char *aux_serial_current_transmit_buffer(void);
 /* Get how full the current transmit buffer is */
 size_t aux_serial_transmit_buffer_fullness(void);
-/* Send a number of bytes staged into the current transmit bufer */
+/* Send a number of bytes staged into the current transmit buffer */
 void aux_serial_send(size_t len);
 
-#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4)
+#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4) || defined(STM32F7)
 void aux_serial_update_receive_buffer_fullness(void);
 bool aux_serial_receive_buffer_empty(void);
 void aux_serial_drain_receive_buffer(void);

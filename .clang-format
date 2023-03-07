@@ -5,6 +5,7 @@ AlignConsecutiveAssignments: false
 AlignConsecutiveDeclarations: false
 AlignConsecutiveMacros: true
 AlignEscapedNewlines: Left
+AlignOperands: DontAlign
 AllowAllArgumentsOnNextLine: true
 AllowShortFunctionsOnASingleLine: None
 AllowShortIfStatementsOnASingleLine: false
@@ -25,6 +26,7 @@ BraceWrapping:
   BeforeElse: false
   IndentBraces: false
 BreakBeforeBraces: Linux
+BreakBeforeTernaryOperators: false
 BasedOnStyle: LLVM
 BinPackArguments: true
 BinPackParameters: true
@@ -33,12 +35,14 @@ Cpp11BracedListStyle: true
 IndentCaseLabels: false
 IndentWidth: 4
 ContinuationIndentWidth: 4
+MaxEmptyLinesToKeep: 1
 KeepEmptyLinesAtTheStartOfBlocks: false
 FixNamespaceComments: true
 ForEachMacros: ['TRY_CATCH']
 #QualifierAlignment: Custom
 #QualifierOrder: ['inline', 'static', 'const', 'volatile', 'type']
 SpaceAroundPointerQualifiers: After
+SeparateDefinitionBlocks: Always
 
 # Taken from git's rules
 #PenaltyBreakAssignment: 10 # Unknown to clang-format-4.0

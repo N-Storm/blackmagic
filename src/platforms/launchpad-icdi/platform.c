@@ -14,6 +14,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+
 #include "general.h"
 #include "gdb_if.h"
 #include "usb.h"
@@ -25,13 +26,12 @@
 #include <libopencm3/cm3/systick.h>
 #include <libopencm3/lm4f/usb.h>
 
-#define PLL_DIV_80MHZ	5
-#define PLL_DIV_25MHZ	16
+#define PLL_DIV_80MHZ 5
+#define PLL_DIV_25MHZ 16
 
 extern void trace_tick(void);
 
 char serial_no[DFU_SERIAL_LENGTH];
-volatile platform_timeout * volatile head_timeout;
 uint8_t running_status;
 static volatile uint32_t time_ms;
 
@@ -40,7 +40,7 @@ uint32_t swd_delay_cnt = 0;
 void sys_tick_handler(void)
 {
 	trace_tick();
-	time_ms += 10;
+	time_ms += 10U;
 }
 
 uint32_t platform_time_ms(void)
@@ -50,12 +50,12 @@ uint32_t platform_time_ms(void)
 
 void platform_init(void)
 {
-	for (int i = 0; i < 1000000; ++i)
+	for (volatile size_t i = 0; i < 1000000U; ++i)
 		continue;
 
 	rcc_sysclk_config(OSCSRC_MOSC, XTAL_16M, PLL_DIV_80MHZ);
 
-	// Enable all JTAG ports and set pins to output
+	/* Enable all JTAG ports and set pins to output */
 	periph_clock_enable(RCC_GPIOA);
 	periph_clock_enable(RCC_GPIOB);
 
@@ -70,7 +70,7 @@ void platform_init(void)
 	gpio_set(NRST_PORT, NRST_PIN);
 
 	systick_set_clocksource(STK_CSR_CLKSOURCE_AHB_DIV8);
-	systick_set_reload(rcc_get_system_clock_frequency() / (SYSTICKHZ * 8));
+	systick_set_reload(rcc_get_system_clock_frequency() / (SYSTICKHZ * 8U));
 
 	systick_interrupt_enable();
 	systick_counter_enable();
@@ -79,24 +79,24 @@ void platform_init(void)
 	nvic_enable_irq(NVIC_UART0_IRQ);
 
 	periph_clock_enable(RCC_GPIOD);
-	__asm__("nop"); __asm__("nop"); __asm__("nop");
-	gpio_mode_setup(GPIOD_BASE, GPIO_MODE_ANALOG, GPIO_PUPD_NONE, GPIO4|GPIO5);
+	__asm__("nop");
+	__asm__("nop");
+	__asm__("nop");
+	gpio_mode_setup(GPIOD_BASE, GPIO_MODE_ANALOG, GPIO_PUPD_NONE, GPIO4 | GPIO5);
 	blackmagic_usb_init();
 	aux_serial_init();
 
-	usb_enable_interrupts(USB_INT_RESET | USB_INT_DISCON |
-		USB_INT_RESUME | USB_INT_SUSPEND, 0xff, 0xff);
+	usb_enable_interrupts(USB_INT_RESET | USB_INT_DISCON | USB_INT_RESUME | USB_INT_SUSPEND, 0xff, 0xff);
 }
 
 void platform_nrst_set_val(bool assert)
 {
-	volatile int i;
 	if (assert) {
 		gpio_clear(NRST_PORT, NRST_PIN);
-		for(i = 0; i < 10000; i++) __asm__("nop");
-	} else {
+		for (volatile size_t i = 0; i < 10000U; ++i)
+			continue;
+	} else
 		gpio_set(NRST_PORT, NRST_PIN);
-	}
 }
 
 bool platform_nrst_get_val(void)
@@ -106,9 +106,10 @@ bool platform_nrst_get_val(void)
 
 void platform_delay(uint32_t ms)
 {
-	platform_timeout timeout;
+	platform_timeout_s timeout;
 	platform_timeout_set(&timeout, ms);
-	while (!platform_timeout_is_expired(&timeout));
+	while (!platform_timeout_is_expired(&timeout))
+		continue;
 }
 
 const char *platform_target_voltage(void)
@@ -118,19 +119,21 @@ const char *platform_target_voltage(void)
 
 void read_serial_number(void)
 {
-	/* FIXME: Store a unique serial number somewhere and retreive here */
+	/* FIXME: Store a unique serial number somewhere and retrieve here */
 	uint32_t unique_id = SERIAL_NO;
 
 	/* Fetch serial number from chip's unique ID */
-	for (size_t i = 0; i < DFU_SERIAL_LENGTH - 1; i++) {
-		serial_no[7U - i] = ((unique_id >> (4 * i)) & 0x0FU) + '0';
+	for (size_t i = 0; i < DFU_SERIAL_LENGTH - 1U; ++i) {
+		serial_no[7U - i] = ((unique_id >> (4U * i)) & 0xfU) + '0';
 		if (serial_no[7U - i] > '9')
 			serial_no[7U - i] += 7; /* 'A' - '9' = 8, less 1 gives 7. */
 	}
-	serial_no[DFU_SERIAL_LENGTH - 1] = 0;
+	serial_no[DFU_SERIAL_LENGTH - 1U] = 0;
 }
 
-void platform_request_boot(void) { }
+void platform_request_boot(void)
+{
+}
 
 void platform_max_frequency_set(uint32_t freq)
 {

@@ -49,11 +49,12 @@
 #include "aux_serial.h"
 #include "rtt.h"
 #include "rtt_if.h"
+#include "usb_types.h"
 
 #include <libopencm3/cm3/cortex.h>
 #include <libopencm3/cm3/nvic.h>
 #include <libopencm3/usb/cdc.h>
-#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4)
+#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4) || defined(STM32F7)
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/dma.h>
 #endif
@@ -65,7 +66,7 @@ static void usb_serial_set_state(usbd_device *dev, uint16_t iface, uint8_t ep);
 static void debug_serial_send_callback(usbd_device *dev, uint8_t ep);
 static void debug_serial_receive_callback(usbd_device *dev, uint8_t ep);
 
-#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4)
+#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4) || defined(STM32F7)
 static bool debug_serial_send_complete = true;
 #endif
 
@@ -83,8 +84,8 @@ static uint8_t debug_serial_debug_write_index;
 static uint8_t debug_serial_debug_read_index;
 #endif
 
-static enum usbd_request_return_codes gdb_serial_control_request(usbd_device *dev, struct usb_setup_data *req,
-	uint8_t **buf, uint16_t *const len, void (**complete)(usbd_device *dev, struct usb_setup_data *req))
+static usbd_request_return_codes_e gdb_serial_control_request(usbd_device *dev, usb_setup_data_s *req, uint8_t **buf,
+	uint16_t *const len, void (**complete)(usbd_device *dev, usb_setup_data_s *req))
 {
 	(void)buf;
 	(void)complete;
@@ -94,11 +95,12 @@ static enum usbd_request_return_codes gdb_serial_control_request(usbd_device *de
 
 	switch (req->bRequest) {
 	case USB_CDC_REQ_SET_CONTROL_LINE_STATE:
-		usb_serial_set_state(dev, req->wIndex, CDCACM_GDB_ENDPOINT);
-		gdb_serial_dtr = req->wValue & 1;
+		/* Send a notification back on the notification endpoint */
+		usb_serial_set_state(dev, req->wIndex, CDCACM_GDB_ENDPOINT + 1U);
+		gdb_serial_dtr = req->wValue & 1U;
 		return USBD_REQ_HANDLED;
 	case USB_CDC_REQ_SET_LINE_CODING:
-		if (*len < sizeof(struct usb_cdc_line_coding))
+		if (*len < sizeof(usb_cdc_line_coding_s))
 			return USBD_REQ_NOTSUPP;
 		return USBD_REQ_HANDLED; /* Ignore on GDB Port */
 	}
@@ -110,8 +112,8 @@ bool gdb_serial_get_dtr(void)
 	return gdb_serial_dtr;
 }
 
-static enum usbd_request_return_codes debug_serial_control_request(usbd_device *dev, struct usb_setup_data *req,
-	uint8_t **buf, uint16_t *const len, void (**complete)(usbd_device *dev, struct usb_setup_data *req))
+static usbd_request_return_codes_e debug_serial_control_request(usbd_device *dev, usb_setup_data_s *req, uint8_t **buf,
+	uint16_t *const len, void (**complete)(usbd_device *dev, usb_setup_data_s *req))
 {
 	(void)complete;
 	/* Is the request for the physical/debug UART interface? */
@@ -120,7 +122,8 @@ static enum usbd_request_return_codes debug_serial_control_request(usbd_device *
 
 	switch (req->bRequest) {
 	case USB_CDC_REQ_SET_CONTROL_LINE_STATE:
-		usb_serial_set_state(dev, req->wIndex, CDCACM_UART_ENDPOINT);
+		/* Send a notification back on the notification endpoint */
+		usb_serial_set_state(dev, req->wIndex, CDCACM_UART_ENDPOINT + 1U);
 #ifdef USBUSART_DTR_PIN
 		gpio_set_val(USBUSART_PORT, USBUSART_DTR_PIN, !(req->wValue & 1U));
 #endif
@@ -129,9 +132,9 @@ static enum usbd_request_return_codes debug_serial_control_request(usbd_device *
 #endif
 		return USBD_REQ_HANDLED;
 	case USB_CDC_REQ_SET_LINE_CODING:
-		if (*len < sizeof(struct usb_cdc_line_coding))
+		if (*len < sizeof(usb_cdc_line_coding_s))
 			return USBD_REQ_NOTSUPP;
-		aux_serial_set_encoding((struct usb_cdc_line_coding *)*buf);
+		aux_serial_set_encoding((usb_cdc_line_coding_s *)*buf);
 		return USBD_REQ_HANDLED;
 	}
 	return USBD_REQ_NOTSUPP;
@@ -140,9 +143,9 @@ static enum usbd_request_return_codes debug_serial_control_request(usbd_device *
 void usb_serial_set_state(usbd_device *const dev, const uint16_t iface, const uint8_t ep)
 {
 	uint8_t buf[10];
-	struct usb_cdc_notification *notif = (void*)buf;
+	usb_cdc_notification_s *notif = (void *)buf;
 	/* We echo signals back to host as notification */
-	notif->bmRequestType = 0xA1;
+	notif->bmRequestType = 0xa1;
 	notif->bNotification = USB_CDC_NOTIFY_SERIAL_STATE;
 	notif->wValue = 0;
 	notif->wIndex = iface;
@@ -157,23 +160,24 @@ void usb_serial_set_config(usbd_device *dev, uint16_t value)
 	usb_config = value;
 
 	/* GDB interface */
-#if defined(STM32F4) || defined(LM4F)
+#if defined(STM32F4) || defined(LM4F) || defined(STM32F7)
 	usbd_ep_setup(dev, CDCACM_GDB_ENDPOINT, USB_ENDPOINT_ATTR_BULK, CDCACM_PACKET_SIZE, gdb_usb_out_cb);
 #else
 	usbd_ep_setup(dev, CDCACM_GDB_ENDPOINT, USB_ENDPOINT_ATTR_BULK, CDCACM_PACKET_SIZE, NULL);
 #endif
 	usbd_ep_setup(dev, CDCACM_GDB_ENDPOINT | USB_REQ_TYPE_IN, USB_ENDPOINT_ATTR_BULK, CDCACM_PACKET_SIZE, NULL);
-	usbd_ep_setup(dev, (CDCACM_GDB_ENDPOINT + 1) | USB_REQ_TYPE_IN, USB_ENDPOINT_ATTR_INTERRUPT, 16, NULL);
+	usbd_ep_setup(dev, (CDCACM_GDB_ENDPOINT + 1U) | USB_REQ_TYPE_IN, USB_ENDPOINT_ATTR_INTERRUPT, 16, NULL);
 
 	/* Serial interface */
-	usbd_ep_setup(dev, CDCACM_UART_ENDPOINT, USB_ENDPOINT_ATTR_BULK, CDCACM_PACKET_SIZE / 2, debug_serial_receive_callback);
 	usbd_ep_setup(
-		dev, CDCACM_UART_ENDPOINT | USB_REQ_TYPE_IN, USB_ENDPOINT_ATTR_BULK, CDCACM_PACKET_SIZE, debug_serial_send_callback);
-	usbd_ep_setup(dev, (CDCACM_UART_ENDPOINT + 1) | USB_REQ_TYPE_IN, USB_ENDPOINT_ATTR_INTERRUPT, 16, NULL);
+		dev, CDCACM_UART_ENDPOINT, USB_ENDPOINT_ATTR_BULK, CDCACM_PACKET_SIZE / 2U, debug_serial_receive_callback);
+	usbd_ep_setup(dev, CDCACM_UART_ENDPOINT | USB_REQ_TYPE_IN, USB_ENDPOINT_ATTR_BULK, CDCACM_PACKET_SIZE,
+		debug_serial_send_callback);
+	usbd_ep_setup(dev, (CDCACM_UART_ENDPOINT + 1U) | USB_REQ_TYPE_IN, USB_ENDPOINT_ATTR_INTERRUPT, 16, NULL);
 
 #ifdef PLATFORM_HAS_TRACESWO
 	/* Trace interface */
-	usbd_ep_setup(dev, TRACE_ENDPOINT | USB_REQ_TYPE_IN, USB_ENDPOINT_ATTR_BULK, 64, trace_buf_drain);
+	usbd_ep_setup(dev, TRACE_ENDPOINT | USB_REQ_TYPE_IN, USB_ENDPOINT_ATTR_BULK, TRACE_ENDPOINT_SIZE, trace_buf_drain);
 #endif
 
 	usbd_register_control_callback(dev, USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
@@ -209,7 +213,7 @@ uint32_t debug_serial_fifo_send(const char *const fifo, const uint32_t fifo_begi
 	 * To avoid the need of sending ZLP don't transmit full packet.
 	 * Also reserve space for copy function overrun.
 	 */
-	char packet[CDCACM_PACKET_SIZE - 1];
+	char packet[CDCACM_PACKET_SIZE - 1U];
 	uint32_t packet_len = 0;
 	for (uint32_t fifo_index = fifo_begin; fifo_index != fifo_end && packet_len < CDCACM_PACKET_SIZE - 1U;
 		 fifo_index %= AUX_UART_BUFFER_SIZE)
@@ -229,7 +233,7 @@ static bool debug_serial_fifo_buffer_empty(void)
 }
 #endif
 
-#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4)
+#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4) || defined(STM32F7)
 /*
  * Runs deferred processing for AUX serial RX, draining RX FIFO by sending
  * characters to host PC via the debug serial interface.
@@ -241,11 +245,12 @@ static void debug_serial_send_data(void)
 
 	/* Forcibly empty fifo if no USB endpoint.
 	 * If fifo empty, nothing further to do. */
-	if (usb_get_config() != 1 || (aux_serial_receive_buffer_empty()
+	if (usb_get_config() != 1 ||
+		(aux_serial_receive_buffer_empty()
 #if defined(ENABLE_DEBUG) && defined(PLATFORM_HAS_DEBUG)
-									 && debug_serial_fifo_buffer_empty()
+			&& debug_serial_fifo_buffer_empty()
 #endif
-	)) {
+				)) {
 #if defined(ENABLE_DEBUG) && defined(PLATFORM_HAS_DEBUG)
 		debug_serial_debug_read_index = debug_serial_debug_write_index;
 #endif
@@ -253,7 +258,8 @@ static void debug_serial_send_data(void)
 		debug_serial_send_complete = true;
 	} else {
 #if defined(ENABLE_DEBUG) && defined(PLATFORM_HAS_DEBUG)
-		debug_serial_debug_read_index = debug_serial_fifo_send(debug_serial_debug_buffer, debug_serial_debug_read_index, debug_serial_debug_write_index);
+		debug_serial_debug_read_index = debug_serial_fifo_send(
+			debug_serial_debug_buffer, debug_serial_debug_read_index, debug_serial_debug_write_index);
 #endif
 		aux_serial_stage_receive_buffer();
 	}
@@ -274,9 +280,9 @@ void debug_serial_run(void)
 
 static void debug_serial_send_callback(usbd_device *dev, uint8_t ep)
 {
-	(void) ep;
-	(void) dev;
-#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4)
+	(void)ep;
+	(void)dev;
+#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4) || defined(STM32F7)
 	debug_serial_send_data();
 #endif
 }
@@ -303,7 +309,7 @@ static void debug_serial_receive_callback(usbd_device *dev, uint8_t ep)
 
 	aux_serial_send(len);
 
-#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4)
+#if defined(STM32F0) || defined(STM32F1) || defined(STM32F3) || defined(STM32F4) || defined(STM32F7)
 	/* Disable USBUART TX packet reception if buffer does not have enough space */
 	if (AUX_UART_BUFFER_SIZE - aux_serial_transmit_buffer_fullness() < CDCACM_PACKET_SIZE)
 		usbd_ep_nak_set(dev, ep, 1);
@@ -327,12 +333,13 @@ static size_t debug_serial_debug_write(const char *buf, const size_t len)
 	CM_ATOMIC_CONTEXT();
 	size_t offset = 0;
 
-	for (; offset < len && (debug_serial_debug_write_index + 1) % AUX_UART_BUFFER_SIZE != debug_serial_debug_read_index;
+	for (;
+		 offset < len && (debug_serial_debug_write_index + 1U) % AUX_UART_BUFFER_SIZE != debug_serial_debug_read_index;
 		 ++offset) {
 		if (buf[offset] == '\n') {
 			debug_serial_append_char('\r');
 
-			if ((debug_serial_debug_write_index + 1) % AUX_UART_BUFFER_SIZE == debug_serial_debug_read_index)
+			if ((debug_serial_debug_write_index + 1U) % AUX_UART_BUFFER_SIZE == debug_serial_debug_read_index)
 				break;
 		}
 		debug_serial_append_char(buf[offset]);
@@ -375,9 +382,7 @@ int isatty(const int file)
 	return true;
 }
 
-enum {
-	RDI_SYS_OPEN = 0x01,
-};
+#define RDI_SYS_OPEN 0x01U
 
 typedef struct ex_frame {
 	uint32_t r0;
@@ -404,10 +409,7 @@ void debug_monitor_handler(void) __attribute__((used)) __attribute__((naked));
 void debug_monitor_handler(void)
 {
 	ex_frame_s *frame;
-	__asm__(
-		"mov %[frame], sp" :
-		[frame] "=r" (frame)
-	);
+	__asm__("mov %[frame], sp" : [frame] "=r"(frame));
 
 	/* Make sure to return to the instruction after the SWI/BKPT */
 	frame->return_address += 2U;

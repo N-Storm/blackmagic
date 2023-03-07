@@ -31,19 +31,19 @@
 #include "adiv5.h"
 #include "jtag_devs.h"
 
-struct jtag_dev_s jtag_devs[JTAG_MAX_DEVS+1];
+jtag_dev_s jtag_devs[JTAG_MAX_DEVS + 1U];
 uint32_t jtag_dev_count = 0;
 
 /* bucket of ones for don't care TDI */
-static const uint8_t ones[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+const uint8_t ones[8] = {0xffU, 0xffU, 0xffU, 0xffU, 0xffU, 0xffU, 0xffU, 0xffU};
 
 #if PC_HOSTED == 0
-void jtag_add_device(const uint32_t dev_index, const jtag_dev_t *jtag_dev)
+void jtag_add_device(const uint32_t dev_index, const jtag_dev_s *jtag_dev)
 {
 	if (dev_index == 0)
 		memset(&jtag_devs, 0, sizeof(jtag_devs));
-	memcpy(&jtag_devs[dev_index], jtag_dev, sizeof(jtag_dev_t));
-	jtag_dev_count = dev_index + 1;
+	memcpy(&jtag_devs[dev_index], jtag_dev, sizeof(jtag_dev_s));
+	jtag_dev_count = dev_index + 1U;
 }
 #endif
 
@@ -71,12 +71,12 @@ uint32_t jtag_scan(const uint8_t *irlens)
 	jtag_dev_count = 0;
 	memset(&jtag_devs, 0, sizeof(jtag_devs));
 
-	/* Run throught the SWD to JTAG sequence for the case where an attached SWJ-DP is
+	/* Run through the SWD to JTAG sequence for the case where an attached SWJ-DP is
 	 * in SW-DP mode.
 	 */
 	DEBUG_INFO("Resetting TAP\n");
 #if PC_HOSTED == 1
-	if (platform_jtagtap_init()) {
+	if (!platform_jtagtap_init()) {
 		DEBUG_WARN("JTAG not available\n");
 		return 0;
 	}
@@ -91,16 +91,15 @@ uint32_t jtag_scan(const uint8_t *irlens)
 		jtagtap_shift_ir();
 
 		size_t device = 0;
-		for (size_t prescan = 0; device <= JTAG_MAX_DEVS && jtag_devs[device].ir_len <= JTAG_MAX_IR_LEN;
-			++device) {
+		for (size_t prescan = 0; device <= JTAG_MAX_DEVS && jtag_devs[device].ir_len <= JTAG_MAX_IR_LEN; ++device) {
 			if (irlens[device] == 0)
 				break;
 
 			uint32_t irout = 0;
-			jtag_proc.jtagtap_tdi_tdo_seq((uint8_t*)&irout, 0, ones, irlens[device]);
+			jtag_proc.jtagtap_tdi_tdo_seq((uint8_t *)&irout, 0, ones, irlens[device]);
 
 			/* IEEE 1149.1 requires the first bit to be a 1, but not all devices conform (see #1130 on GH) */
-			if (!(irout & 1))
+			if (!(irout & 1U))
 				DEBUG_WARN("check failed: IR[0] != 1\n");
 
 			jtag_devs[device].ir_len = irlens[device];
@@ -152,7 +151,7 @@ uint32_t jtag_scan(const uint8_t *irlens)
 	}
 
 	DEBUG_INFO("Return to Run-Test/Idle\n");
-	jtag_proc.jtagtap_next(1, 1);
+	jtag_proc.jtagtap_next(true, true);
 	jtagtap_return_idle(1);
 
 	/* All devices should be in BYPASS now */
@@ -162,7 +161,7 @@ uint32_t jtag_scan(const uint8_t *irlens)
 	jtagtap_shift_dr();
 	size_t device = 0;
 	for (; !jtag_proc.jtagtap_next(false, true) && device <= jtag_dev_count; ++device)
-		jtag_devs[device].dr_postscan = jtag_dev_count - device - 1;
+		jtag_devs[device].dr_postscan = jtag_dev_count - device - 1U;
 
 	if (device != jtag_dev_count) {
 		DEBUG_WARN("jtag_scan: Sanity check failed: BYPASS dev count doesn't match IR scan\n");
@@ -177,8 +176,8 @@ uint32_t jtag_scan(const uint8_t *irlens)
 		return 0;
 
 	/* Fill in the ir_postscan fields */
-	for (size_t device = jtag_dev_count - 1; device > 0; --device)
-		jtag_devs[device - 1].ir_postscan = jtag_devs[device].ir_postscan + jtag_devs[device].ir_len;
+	for (size_t device = jtag_dev_count - 1U; device > 0; --device)
+		jtag_devs[device - 1U].ir_postscan = jtag_devs[device].ir_postscan + jtag_devs[device].ir_len;
 
 	/* Reset jtagtap: should take all devs to IDCODE */
 	jtag_proc.jtagtap_reset();
@@ -188,15 +187,14 @@ uint32_t jtag_scan(const uint8_t *irlens)
 		if (!jtag_proc.jtagtap_next(false, true))
 			continue;
 		jtag_devs[device].jd_idcode = 1U;
-		for (size_t bit = 1; bit < 32; ++bit) {
+		for (size_t bit = 1; bit < 32U; ++bit) {
 			if (jtag_proc.jtagtap_next(false, true))
 				jtag_devs[device].jd_idcode |= 1U << bit;
 		}
-
 	}
 	DEBUG_INFO("Return to Run-Test/Idle\n");
 	jtag_proc.jtagtap_next(true, true);
-	jtagtap_return_idle(jtag_proc.tap_idle_cycles);
+	jtagtap_return_idle(1);
 
 #if PC_HOSTED == 1
 	/*Transfer needed device information to firmware jtag_devs */
@@ -233,33 +231,36 @@ uint32_t jtag_scan(const uint8_t *irlens)
 	return jtag_dev_count;
 }
 
-void jtag_dev_write_ir(jtag_proc_t *jp, const uint8_t jd_index, const uint32_t ir)
+void jtag_dev_write_ir(const uint8_t dev_index, const uint32_t ir)
 {
-	jtag_dev_t *d = &jtag_devs[jd_index];
-	if (ir == d->current_ir)
+	jtag_dev_s *device = &jtag_devs[dev_index];
+	/* If the request would duplicate work already done, do nothing */
+	if (ir == device->current_ir)
 		return;
 
+	/* Set all the other devices IR's to being in bypass */
 	for (size_t device = 0; device < jtag_dev_count; device++)
-		jtag_devs[device].current_ir = -1;
-	d->current_ir = ir;
+		jtag_devs[device].current_ir = UINT32_MAX;
+	device->current_ir = ir;
 
+	/* Do the work to make the scanchain match the jtag_devs state */
 	jtagtap_shift_ir();
-	jp->jtagtap_tdi_seq(false, ones, d->ir_prescan);
-	jp->jtagtap_tdi_seq(!d->ir_postscan, (const uint8_t *)&ir, d->ir_len);
-	jp->jtagtap_tdi_seq(true, ones, d->ir_postscan);
+	jtag_proc.jtagtap_tdi_seq(false, ones, device->ir_prescan);
+	jtag_proc.jtagtap_tdi_seq(!device->ir_postscan, (const uint8_t *)&ir, device->ir_len);
+	jtag_proc.jtagtap_tdi_seq(true, ones, device->ir_postscan);
 	jtagtap_return_idle(1);
 }
 
-void jtag_dev_shift_dr(
-	jtag_proc_t *jp, const uint8_t jd_index, uint8_t *dout, const uint8_t *din, const size_t clock_cycles)
+void jtag_dev_shift_dr(const uint8_t dev_index, uint8_t *data_out, const uint8_t *data_in, const size_t clock_cycles)
 {
-	jtag_dev_t *d = &jtag_devs[jd_index];
+	jtag_dev_s *device = &jtag_devs[dev_index];
 	jtagtap_shift_dr();
-	jp->jtagtap_tdi_seq(false, ones, d->dr_prescan);
-	if (dout)
-		jp->jtagtap_tdi_tdo_seq((uint8_t *)dout, !d->dr_postscan, (const uint8_t *)din, clock_cycles);
+	jtag_proc.jtagtap_tdi_seq(false, ones, device->dr_prescan);
+	if (data_out)
+		jtag_proc.jtagtap_tdi_tdo_seq(
+			(uint8_t *)data_out, !device->dr_postscan, (const uint8_t *)data_in, clock_cycles);
 	else
-		jp->jtagtap_tdi_seq(!d->dr_postscan, (const uint8_t *)din, clock_cycles);
-	jp->jtagtap_tdi_seq(true, ones, d->dr_postscan);
+		jtag_proc.jtagtap_tdi_seq(!device->dr_postscan, (const uint8_t *)data_in, clock_cycles);
+	jtag_proc.jtagtap_tdi_seq(true, ones, device->dr_postscan);
 	jtagtap_return_idle(1);
 }

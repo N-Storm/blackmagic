@@ -25,17 +25,17 @@
 #include "cortexm.h"
 #include "lpc_common.h"
 
-#define IAP_PGM_CHUNKSIZE	512	/* should fit in RAM on any device */
+#define IAP_PGM_CHUNKSIZE 512U /* Should fit in RAM on any device */
 
-#define MIN_RAM_SIZE            1024
-#define RAM_USAGE_FOR_IAP_ROUTINES	32	/* IAP routines use 32 bytes at top of ram */
+#define MIN_RAM_SIZE               1024U
+#define RAM_USAGE_FOR_IAP_ROUTINES 32U /* IAP routines use 32 bytes at top of ram */
 
-#define IAP_ENTRYPOINT	0x03000205
-#define IAP_RAM_BASE	0x02000000
+#define IAP_ENTRYPOINT 0x03000205U
+#define IAP_RAM_BASE   0x02000000U
 
-#define LPC15XX_DEVICE_ID  0x400743F8
+#define LPC15XX_DEVICE_ID 0x400743f8U
 
-static bool lpc15xx_read_uid(target *t, int argc, const char *argv[])
+static bool lpc15xx_read_uid(target_s *t, int argc, const char *argv[])
 {
 	(void)argc;
 	(void)argv;
@@ -50,12 +50,12 @@ static bool lpc15xx_read_uid(target *t, int argc, const char *argv[])
 	return true;
 }
 
-const struct command_s lpc15xx_cmd_list[] = {
+const command_s lpc15xx_cmd_list[] = {
 	{"readuid", lpc15xx_read_uid, "Read out the 16-byte UID."},
-	{NULL, NULL, NULL}
+	{NULL, NULL, NULL},
 };
 
-static void lpc15xx_add_flash(target *t, uint32_t addr, size_t len, size_t erasesize)
+static void lpc15xx_add_flash(target_s *t, uint32_t addr, size_t len, size_t erasesize)
 {
 	struct lpc_flash *lf = lpc_add_flash(t, addr, len);
 	lf->f.blocksize = erasesize;
@@ -66,36 +66,32 @@ static void lpc15xx_add_flash(target *t, uint32_t addr, size_t len, size_t erase
 	lf->iap_msp = IAP_RAM_BASE + MIN_RAM_SIZE - RAM_USAGE_FOR_IAP_ROUTINES;
 }
 
-bool
-lpc15xx_probe(target *t)
+bool lpc15xx_probe(target_s *t)
 {
-	uint32_t ram_size = 0;
-
 	/* read the device ID register */
 	const uint32_t device_id = target_mem_read32(t, LPC15XX_DEVICE_ID);
 
+	uint32_t ram_size = 0;
 	switch (device_id) {
-	case 0x00001549:
-	case 0x00001519:
-		ram_size = 0x9000;
+	case 0x00001549U:
+	case 0x00001519U:
+		ram_size = 0x9000U;
 		break;
-	case 0x00001548:
-	case 0x00001518:
-		ram_size = 0x5000;
+	case 0x00001548U:
+	case 0x00001518U:
+		ram_size = 0x5000U;
 		break;
-	case 0x00001547:
-	case 0x00001517:
-		ram_size = 0x3000;
+	case 0x00001547U:
+	case 0x00001517U:
+		ram_size = 0x3000U;
 		break;
+	default:
+		return false;
 	}
 
-	if (ram_size) {
-		t->driver = "LPC15xx";
-		target_add_ram(t, 0x02000000, ram_size);
-		lpc15xx_add_flash(t, 0x00000000, 0x40000, 0x1000);
-		target_add_commands(t, lpc15xx_cmd_list, "LPC15xx");
-		return true;
-	}
-
-	return false;
+	t->driver = "LPC15xx";
+	target_add_ram(t, 0x02000000, ram_size);
+	lpc15xx_add_flash(t, 0x00000000, 0x40000, 0x1000);
+	target_add_commands(t, lpc15xx_cmd_list, "LPC15xx");
+	return true;
 }

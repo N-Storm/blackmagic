@@ -25,17 +25,17 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-typedef struct jtag_proc_s {
+typedef struct jtag_proc {
 	/* Note: Signal names are as for the device under test. */
 
 	void (*jtagtap_reset)(void);
 
 	/*
-	 * tap_next executes one state transision in the JTAG TAP state machine:
+	 * tap_next executes one state transition in the JTAG TAP state machine:
 	 * - Ensure TCK is low
 	 * - Assert the values of TMS and TDI
 	 * - Assert TCK (TMS and TDO are latched on rising edge
-	 * - Caputure the value on TDO
+	 * - Capture the value on TDO
 	 * - Release TCK.
 	 */
 	bool (*jtagtap_next)(const bool tms, const bool tdi);
@@ -57,26 +57,26 @@ typedef struct jtag_proc_s {
 	 * allow the desirable skipping of the entire state under some circumstances.
 	 */
 	uint8_t tap_idle_cycles;
-} jtag_proc_t;
+} jtag_proc_s;
 
-extern jtag_proc_t jtag_proc;
+extern jtag_proc_s jtag_proc;
 
 /* generic soft reset: 1, 1, 1, 1, 1, 0 */
-#define jtagtap_soft_reset() jtag_proc.jtagtap_tms_seq(0x1F, 6)
+#define jtagtap_soft_reset() jtag_proc.jtagtap_tms_seq(0x1fU, 6)
 
 /* Goto Shift-IR: 1, 1, 0, 0 */
-#define jtagtap_shift_ir() jtag_proc.jtagtap_tms_seq(0x03, 4)
+#define jtagtap_shift_ir() jtag_proc.jtagtap_tms_seq(0x03U, 4)
 
 /* Goto Shift-DR: 1, 0, 0 */
-#define jtagtap_shift_dr() jtag_proc.jtagtap_tms_seq(0x01, 3)
+#define jtagtap_shift_dr() jtag_proc.jtagtap_tms_seq(0x01U, 3)
 
 /* Goto Run-test/Idle: 1, 1, 0 */
 #define jtagtap_return_idle(cycles) jtag_proc.jtagtap_tms_seq(0x01, (cycles) + 1U)
 
 #if PC_HOSTED == 1
-int platform_jtagtap_init(void);
+bool platform_jtagtap_init(void);
 #else
-int jtagtap_init(void);
+void jtagtap_init(void);
 #endif
 
 #endif /* INCLUDE_JTAGTAP_H */

@@ -19,13 +19,22 @@
 
 /* Find all known serial connected debuggers */
 
-#include "general.h"
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
+#include <string.h>
 #include <dirent.h>
 #include <errno.h>
+#include "general.h"
 #include "bmp_hosted.h"
+#include "probe_info.h"
+#include "utils.h"
 #include "version.h"
 
-void bmp_ident(bmp_info_t *info)
+void bmp_ident(bmp_info_s *info)
 {
 	PRINT_INFO("Black Magic Debug App (for BMP only) %s\n", FIRMWARE_VERSION);
 	if (!info)
@@ -33,11 +42,13 @@ void bmp_ident(bmp_info_t *info)
 	PRINT_INFO("Using:\n %s %s %s\n", info->manufacturer, info->version, info->serial);
 }
 
-void libusb_exit_function(bmp_info_t *info) {(void)info;};
-
+void libusb_exit_function(bmp_info_s *info)
+{
+	(void)info;
+};
 
 #ifdef __APPLE__
-int find_debuggers(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
+int find_debuggers(bmda_cli_options_s *cl_opts, bmp_info_s *info)
 {
 	DEBUG_WARN("Please implement find_debuggers for MACOS!\n");
 	(void)cl_opts;
@@ -46,13 +57,12 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
 }
 #elif defined(__WIN32__) || defined(__CYGWIN__)
 
-
-/* This source has been used as an example:
+	/* This source has been used as an example:
  * https://stackoverflow.com/questions/3438366/setupdigetdeviceproperty-usage-example */
 
 #include <windows.h>
 #include <setupapi.h>
-#include <cfgmgr32.h>   // for MAX_DEVICE_ID_LEN, CM_Get_Parent and CM_Get_Device_ID
+#include <cfgmgr32.h> // for MAX_DEVICE_ID_LEN, CM_Get_Parent and CM_Get_Device_ID
 #include <tchar.h>
 #include <stdio.h>
 
@@ -60,14 +70,16 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
 #ifdef DEFINE_DEVPROPKEY
 #undef DEFINE_DEVPROPKEY
 #endif
-#define DEFINE_DEVPROPKEY(name, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8, pid) const DEVPROPKEY DECLSPEC_SELECTANY name = { { l, w1, w2, { b1, b2,  b3,  b4,  b5,  b6,  b7,  b8 } }, pid }
+#define DEFINE_DEVPROPKEY(name, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8, pid) \
+	const DEVPROPKEY DECLSPEC_SELECTANY name = {{l, w1, w2, {b1, b2, b3, b4, b5, b6, b7, b8}}, pid}
 
 /* include DEVPKEY_Device_BusReportedDeviceDesc from WinDDK\7600.16385.1\inc\api\devpkey.h */
-DEFINE_DEVPROPKEY(DEVPKEY_Device_BusReportedDeviceDesc,  0x540b947e, 0x8b40, 0x45bc, 0xa8, 0xa2, 0x6a, 0x0b, 0x89, 0x4c, 0xbd, 0xa2, 4);     // DEVPROP_TYPE_STRING
+DEFINE_DEVPROPKEY(DEVPKEY_Device_BusReportedDeviceDesc, 0x540b947e, 0x8b40, 0x45bc, 0xa8, 0xa2, 0x6a, 0x0b, 0x89, 0x4c,
+	0xbd, 0xa2, 4); // DEVPROP_TYPE_STRING
 
 /* List all USB devices with some additional information.
  * Unfortunately, this code is quite ugly. */
-int find_debuggers(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
+int find_debuggers(bmda_cli_options_s *cl_opts, bmp_info_s *info)
 {
 	unsigned i;
 	DWORD dwSize;
@@ -75,47 +87,41 @@ int find_debuggers(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
 	CONFIGRET status;
 	HDEVINFO hDevInfo;
 	SP_DEVINFO_DATA DeviceInfoData;
-	TCHAR szDeviceInstanceID [MAX_DEVICE_ID_LEN];
+	TCHAR szDeviceInstanceID[MAX_DEVICE_ID_LEN];
 	WCHAR busReportedDeviceSesc[4096];
-	int probes_found = 0;
+	size_t probes_found = 0;
 	bool is_printing_probes_info = cl_opts->opt_list_only != 0;
 
 	info->bmp_type = BMP_TYPE_BMP;
 
-	hDevInfo = SetupDiGetClassDevs (0, "USB", NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
+	hDevInfo = SetupDiGetClassDevs(0, "USB", NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
 	if (hDevInfo == INVALID_HANDLE_VALUE)
 		return -1;
 print_probes_info:
-	for (i = 0; ; i++)  {
+	for (i = 0;; i++) {
 		char serial_number[sizeof info->serial];
-		DeviceInfoData.cbSize = sizeof (DeviceInfoData);
+		DeviceInfoData.cbSize = sizeof(DeviceInfoData);
 		if (!SetupDiEnumDeviceInfo(hDevInfo, i, &DeviceInfoData))
 			break;
 
-		status = CM_Get_Device_ID(DeviceInfoData.DevInst, szDeviceInstanceID , MAX_PATH, 0);
+		status = CM_Get_Device_ID(DeviceInfoData.DevInst, szDeviceInstanceID, MAX_PATH, 0);
 		if (status != CR_SUCCESS)
 			continue;
 
 		if (!sscanf(szDeviceInstanceID, "USB\\VID_1D50&PID_6018\\%s", serial_number))
 			continue;
 
-		if (SetupDiGetDevicePropertyW (hDevInfo, &DeviceInfoData, &DEVPKEY_Device_BusReportedDeviceDesc,
-		       &ulPropertyType, (BYTE*)busReportedDeviceSesc, sizeof busReportedDeviceSesc, &dwSize, 0))
-		{
-			probes_found ++;
-			if (is_printing_probes_info)
-			{
-				DEBUG_WARN("%2d: %s, %ls\n", probes_found,
-					   serial_number, busReportedDeviceSesc);
-			}
-			else
-			{
+		if (SetupDiGetDevicePropertyW(hDevInfo, &DeviceInfoData, &DEVPKEY_Device_BusReportedDeviceDesc, &ulPropertyType,
+				(BYTE *)busReportedDeviceSesc, sizeof busReportedDeviceSesc, &dwSize, 0)) {
+			probes_found++;
+			if (is_printing_probes_info) {
+				DEBUG_WARN("%2d: %s, %ls\n", probes_found, serial_number, busReportedDeviceSesc);
+			} else {
 				bool probe_identified = true;
 				if ((cl_opts->opt_serial && strstr(serial_number, cl_opts->opt_serial)) ||
 					(cl_opts->opt_position && cl_opts->opt_position == probes_found) ||
 					/* Special case for the very first probe found. */
-					(probe_identified = false, probes_found == 1)) {
-
+					(probe_identified = false, probes_found == 1U)) {
 					strncpy(info->serial, serial_number, sizeof info->serial);
 					strncpy(info->manufacturer, "BMP", sizeof info->manufacturer);
 					snprintf(info->product, sizeof info->product, "%ls", busReportedDeviceSesc);
@@ -134,11 +140,11 @@ print_probes_info:
 	}
 	if (is_printing_probes_info)
 		return 1;
-	if (probes_found == 1)
+	if (probes_found == 1U)
 		/* Exactly one probe found. Its information has already been filled
 		 * in the detection loop, so use this probe. */
 		return 0;
-	if (probes_found < 1) {
+	if (probes_found < 1U) {
 		DEBUG_WARN("No BMP probe found\n");
 		return -1;
 	}
@@ -147,8 +153,8 @@ print_probes_info:
 	 * Restart the identification loop, this time printing the probe information,
 	 * and then return. */
 	DEBUG_WARN("%d debuggers found!\nSelect with -P <pos>, or "
-		   "-s <(partial)serial no.>\n",
-		   probes_found);
+			   "-s <(partial)serial no.>\n",
+		probes_found);
 	probes_found = 0;
 	is_printing_probes_info = true;
 	goto print_probes_info;
@@ -160,137 +166,195 @@ print_probes_info:
  * usb-Black_Sphere_Technologies_Black_Magic_Probe__SWLINK__v1.7.1-155-gf55ad67b-dirty_DECB8811-if00
  */
 #define BMP_IDSTRING_BLACKSPHERE "usb-Black_Sphere_Technologies_Black_Magic_Probe"
-#define BMP_IDSTRING_BLACKMAGIC "usb-Black_Magic_Debug_Black_Magic_Probe"
+#define BMP_IDSTRING_BLACKMAGIC  "usb-Black_Magic_Debug_Black_Magic_Probe"
 #define BMP_IDSTRING_1BITSQUARED "usb-1BitSquared_Black_Magic_Probe"
-#define DEVICE_BY_ID "/dev/serial/by-id/"
+#define DEVICE_BY_ID             "/dev/serial/by-id"
+#define BMP_PRODUCT_STRING       "Black Magic Probe"
 
-/*
- * Extract type, version and serial from /dev/serial/by_id
- * Return 0 on success
- *
- * Old versions have different strings. Try to cope!
- */
-static int scan_linux_id(char *name, char *type, char *version, char  *serial)
+typedef struct dirent dirent_s;
+
+typedef enum scan_mode {
+	SCAN_FIND,
+	SCAN_LIST
+} scan_mode_e;
+
+size_t find_prefix_length(const char *name, const size_t name_len)
 {
-	name += strlen(BMP_IDSTRING_BLACKSPHERE) + 1;
-	while (*name == '_')
-		name++;
-	if (!*name) {
-		DEBUG_WARN("Unexpected end\n");
-		return -1;
-	}
-	char *p = name;
-	char *delims[4] = {0,0,0,0};
-	int underscores = 0;
-	while (*p) {
-		if (*p == '_') {
-			while (p[1] == '_')
-				p++; /* remove multiple underscores */
-			if (underscores > 2)
-				return -1;
-			delims[underscores] = p;
-			underscores ++;
-		}
-		p++;
-	}
-	if (underscores == 0) { /* Old BMP native */
-		int res;
-		res = sscanf(name, "%8s-if00", serial);
-		if (res != 1)
-			return -1;
-		strcpy(type, "Native");
-		strcpy(version, "Unknown");
-	} else if (underscores == 2) {
-		strncpy(type, name, delims[0] - name - 1);
-		strncpy(version, delims[0] + 1, delims[1] - delims[0] - 1);
-		int res = sscanf(delims[1] + 1, "%8s-if00", serial);
-		if (!res)
-			return -1;
-	} else {
-		int res = sscanf(delims[0] + 1, "%8s-if00", serial);
-		if (!res)
-			return -1;
-		if (name[0] == 'v') {
-			strcpy(type, "Unknown");
-			strncpy(version, name, delims[0] - name - 1);
-		} else {
-			strncpy(type, name, delims[0] - name);
-			strcpy(type, "Unknown");
-		}
-	}
+	if (begins_with(name, name_len, BMP_IDSTRING_BLACKSPHERE))
+		return sizeof(BMP_IDSTRING_BLACKSPHERE);
+	if (begins_with(name, name_len, BMP_IDSTRING_BLACKMAGIC))
+		return sizeof(BMP_IDSTRING_BLACKMAGIC);
+	if (begins_with(name, name_len, BMP_IDSTRING_1BITSQUARED))
+		return sizeof(BMP_IDSTRING_1BITSQUARED);
 	return 0;
 }
 
-int find_debuggers(BMP_CL_OPTIONS_t *cl_opts, bmp_info_t *info)
+char *extract_serial(const char *const device, const size_t length)
+{
+	const char *const last_underscore = strrchr(device, '_');
+	/* Fail the match if we can't find the _ just before the serial string. */
+	if (!last_underscore)
+		return NULL;
+	/* This represents the first byte of the serial number string */
+	const char *const begin = last_underscore + 1;
+	/* This represents one past the last byte of the serial number string */
+	const char *const end = device + length - 5;
+	/* We now allocate memory for the chunk and copy it */
+	const size_t result_length = end - begin;
+	char *const result = (char *)malloc(result_length);
+	memcpy(result, begin, result_length);
+	result[result_length - 1U] = '\0';
+	return result;
+}
+
+static probe_info_s *parse_device_node(const char *name, probe_info_s *probe_list)
+{
+	/* Starting with a string such as 'usb-Black_Magic_Debug_Black_Magic_Probe_v1.8.0-650-g829308db_8BB20695-if00' */
+	const size_t name_len = strlen(name) + 1U;
+	/* Find the correct prefix */
+	size_t prefix_length = find_prefix_length(name, name_len);
+	/* and skip past any leading _'s */
+	while (name[prefix_length] == '_' && prefix_length < name_len)
+		++prefix_length;
+	if (prefix_length == name_len) {
+		DEBUG_WARN("Unexpected end\n");
+		return probe_list;
+	}
+
+	/* With the remaining string, scan for _'s and index where the string chunks lie either side */
+	/* This operates on a string such as 'v1.8.0-650-g829308db_8BB20695-if00' */
+	size_t offsets[3][2] = {{prefix_length, 0U}, {0U, 0U}};
+	size_t underscores = 0;
+	for (size_t offset = prefix_length; offset < name_len; ++offset) {
+		if (name[offset] == '_') {
+			offsets[underscores][1] = offset - offsets[underscores][0];
+			++underscores;
+			/* Device paths with more than 2 underscore delimited sections can't be valid BMP strings. */
+			if (underscores > 2U)
+				return probe_list;
+			/* Skip over consecutive strings of underscores */
+			while (name[offset + 1U] == '_' && offset < name_len)
+				++offset;
+			/* Bounds check it */
+			if (offset == name_len)
+				break;
+			offsets[underscores][0] = offset;
+		}
+	}
+	offsets[underscores][1] = name_len - offsets[underscores][0];
+
+	/* Now we know where everything is, start by extracting the serial string on the end. */
+	char *const serial = extract_serial(name, name_len);
+	if (!serial)
+		return probe_list;
+
+	/* Now extract the underlying probe type and versioning information */
+	char *version = NULL;
+	char *type = NULL;
+	char *product = strdup(BMP_PRODUCT_STRING);
+
+	if (!product) {
+		free(serial);
+		return probe_list;
+	}
+
+	/* If the device name has no underscores after the prefix, it's an original BMP */
+	if (underscores == 0) {
+		version = strdup("Unknown");
+		type = strdup("Native");
+		/*
+		 * If the device name has two underscores delimited sections after the prefix,
+		 * it's a non-native device running the Black Magic Firmware.
+		 */
+	} else if (underscores == 2) {
+		version = strndup(name + offsets[0][0], offsets[0][1]);
+		type = strndup(name + offsets[1][0], offsets[1][1]);
+		/* Otherwise it's a native BMP */
+	} else {
+		/* The first section should start with a 'v' indicating the version info */
+		if (name[prefix_length] == 'v') {
+			version = strndup(name + offsets[0][0], offsets[0][1]);
+			type = strdup("Native");
+			/* But if not then it's actually a non-native device and has no version string. */
+		} else {
+			version = strdup("Unknown");
+			type = strndup(name + offsets[0][0], offsets[0][1]);
+		}
+	}
+
+	if (!version || !type) {
+		DEBUG_WARN("Failed to construct version of type string");
+		free(serial);
+		free(version);
+		free(type);
+		free(product);
+		return probe_list;
+	}
+
+	return probe_info_add_by_serial(probe_list, BMP_TYPE_BMP, type, product, serial, version);
+}
+
+static const probe_info_s *scan_for_devices(void)
+{
+	DIR *dir = opendir(DEVICE_BY_ID);
+	if (!dir) /* /dev/serial/by-id is unavailable */
+		return NULL;
+	probe_info_s *probe_list = NULL;
+	while (true) {
+		const dirent_s *const entry = readdir(dir);
+		if (entry == NULL)
+			break;
+		if (device_is_bmp_gdb_port(entry->d_name)) {
+			probe_info_s *probe_info = parse_device_node(entry->d_name, probe_list);
+			/* If the operation would have succeeded but probe_info_add_by_serial fails, we exhausted memory. */
+			if (!probe_info) {
+				probe_info_list_free(probe_list);
+				probe_list = NULL;
+				break;
+			}
+			/* If the operation returned the probe_list unchanged, it failed to parse the node */
+			if (probe_info == probe_list)
+				DEBUG_WARN("Error parsing device name \"%s\"\n", entry->d_name);
+			probe_list = probe_info;
+		}
+	}
+	closedir(dir);
+	return probe_info_correct_order(probe_list);
+}
+
+int find_debuggers(bmda_cli_options_s *cl_opts, bmp_info_s *info)
 {
 	if (cl_opts->opt_device)
 		return 1;
-	info->bmp_type = BMP_TYPE_BMP;
-	DIR *dir = opendir(DEVICE_BY_ID);
-	if (!dir) /* No serial device connected!*/
-		return 0;
-	int found_bmps = 0;
-	struct dirent *dp;
-	int i = 0;
-	while ((dp = readdir(dir)) != NULL) {
-		if ((strstr(dp->d_name, BMP_IDSTRING_BLACKMAGIC) ||
-		     strstr(dp->d_name, BMP_IDSTRING_BLACKSPHERE) ||
-		     strstr(dp->d_name, BMP_IDSTRING_1BITSQUARED)) &&
-			(strstr(dp->d_name, "-if00"))) {
-			i++;
-			char type[256], version[256], serial[256];
-			if (scan_linux_id(dp->d_name, type, version, serial)) {
-				DEBUG_WARN("Unexpected device name found \"%s\"\n",
-						   dp->d_name);
-			}
-			if ((cl_opts->opt_serial && strstr(serial, cl_opts->opt_serial)) ||
-				(cl_opts->opt_position && cl_opts->opt_position == i)) {
-				/* With serial number given and partial match, we are done!*/
-				strncpy(info->serial, serial, sizeof(info->serial));
-				int res = snprintf(info->manufacturer, sizeof(info->manufacturer), "Black Magic Probe (%s)", type);
-				if (res)
-					DEBUG_WARN("Overflow\n");
-				strncpy(info->version, version, sizeof(info->version));
-				found_bmps = 1;
-				break;
-			} else {
-				found_bmps++;
-			}
-		}
-	}
-	closedir(dir);
-	if (found_bmps < 1) {
+	/* Scan for all possible probes on the system */
+	const probe_info_s *const probe_list = scan_for_devices();
+	if (!probe_list) {
 		DEBUG_WARN("No BMP probe found\n");
 		return -1;
-	} else if ((found_bmps > 1) || cl_opts->opt_list_only) {
+	}
+	/* Count up how many were found and filter the list for a match to the program options request */
+	const size_t probes = probe_info_count(probe_list);
+	const probe_info_s *probe = NULL;
+	/* If there's just one probe and we didn't get match critera, pick it */
+	if (probes == 1U && !cl_opts->opt_serial && !cl_opts->opt_position)
+		probe = probe_list;
+	else /* Otherwise filter the list */
+		probe = probe_info_filter(probe_list, cl_opts->opt_serial, cl_opts->opt_position);
+
+	/* If we found no matching probes, or we're in list-only mode */
+	if (!probe || cl_opts->opt_list_only) {
 		DEBUG_WARN("Available Probes:\n");
+		probe = probe_list;
+		for (size_t position = 1U; probe; probe = probe->next, ++position)
+			DEBUG_WARN(
+				"%2zu: %s, Black Magic Debug, %s, %s\n", position, probe->serial, probe->manufacturer, probe->version);
+		probe_info_list_free(probe_list);
+		return 1; // false;
 	}
-	dir = opendir(DEVICE_BY_ID);
-	i = 0;
-	while ((dp = readdir(dir)) != NULL) {
-		if ((strstr(dp->d_name, BMP_IDSTRING_BLACKMAGIC) ||
-		     strstr(dp->d_name, BMP_IDSTRING_BLACKSPHERE) ||
-		     strstr(dp->d_name, BMP_IDSTRING_1BITSQUARED)) &&
-			(strstr(dp->d_name, "-if00"))) {
-			i++;
-			char type[256], version[256], serial[256];
-			if (scan_linux_id(dp->d_name, type, version, serial)) {
-				DEBUG_WARN("Unexpected device name found \"%s\"\n",
-						   dp->d_name);
-			} else if ((found_bmps == 1) && (!cl_opts->opt_list_only)) {
-				strncpy(info->serial, serial, sizeof(info->serial));
-				found_bmps = 1;
-				strncpy(info->serial, serial, sizeof(info->serial));
-				snprintf(info->manufacturer, sizeof(info->manufacturer), "Black Magic Probe (%s)", type);
-				strncpy(info->version, version, sizeof(info->version));
-				break;
-			} else if (found_bmps > 0) {
-				DEBUG_WARN("%2d: %s, Black Magic Debug, Black Magic "
-						   "Probe (%s), %s\n", i, serial, type, version);
-			}
-		}
-	}
-	closedir(dir);
-	return (found_bmps == 1 && !cl_opts->opt_list_only) ? 0 : 1;
+
+	/* We found a matching probe, populate bmp_info_s and signal success */
+	probe_info_to_bmp_info(probe, info);
+	probe_info_list_free(probe_list);
+	return 0; // true;
 }
 #endif

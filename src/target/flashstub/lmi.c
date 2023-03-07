@@ -20,30 +20,27 @@
 #include <stdint.h>
 #include "stub.h"
 
-#define LMI_FLASH_BASE       ((volatile uint32_t *)0x400FD000)
-#define LMI_FLASH_FMA        LMI_FLASH_BASE[0]
-#define LMI_FLASH_FMD        LMI_FLASH_BASE[1]
-#define LMI_FLASH_FMC        LMI_FLASH_BASE[2]
+#define LMI_FLASH_BASE ((volatile uint32_t *)0x400fd000U)
+#define LMI_FLASH_FMA  LMI_FLASH_BASE[0]
+#define LMI_FLASH_FMD  LMI_FLASH_BASE[1]
+#define LMI_FLASH_FMC  LMI_FLASH_BASE[2]
 
-#define LMI_FLASH_FMC_WRITE  (1 << 0)
-#define LMI_FLASH_FMC_ERASE  (1 << 1)
-#define LMI_FLASH_FMC_MERASE (1 << 2)
-#define LMI_FLASH_FMC_COMT   (1 << 3)
-#define LMI_FLASH_FMC_WRKEY  0xA4420000
+#define LMI_FLASH_FMC_WRITE  (1U << 0U)
+#define LMI_FLASH_FMC_ERASE  (1U << 1U)
+#define LMI_FLASH_FMC_MERASE (1U << 2U)
+#define LMI_FLASH_FMC_COMT   (1U << 3U)
+#define LMI_FLASH_FMC_WRKEY  0xa4420000U
 
 void __attribute__((naked))
-stm32f1_flash_write_stub(uint32_t *dest, uint32_t *src, uint32_t size)
+stm32f1_flash_write_stub(const uint32_t *const dest, const uint32_t *const src, const uint32_t size)
 {
-	size /= 4;
-	for (int i; i < size; i++) {
-		LMI_FLASH_FMA = (uint32_t)&dest[i];
+	for (uint32_t i; i < (size / 4U); ++i) {
+		LMI_FLASH_FMA = (uintptr_t)(dest + i);
 		LMI_FLASH_FMD = src[i];
 		LMI_FLASH_FMC = LMI_FLASH_FMC_WRKEY | LMI_FLASH_FMC_WRITE;
 		while (LMI_FLASH_FMC & LMI_FLASH_FMC_WRITE)
-			;
+			continue;
 	}
 
 	stub_exit(0);
 }
-
-

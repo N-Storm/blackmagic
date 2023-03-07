@@ -34,55 +34,61 @@
 #include <stdbool.h>
 #include "adiv5.h"
 
-typedef enum dap_info_e {
-	DAP_INFO_VENDOR = 0x01,
-	DAP_INFO_PRODUCT = 0x02,
-	DAP_INFO_SER_NUM = 0x03,
-	DAP_INFO_FW_VER = 0x04,
-	DAP_INFO_DEVICE_VENDOR = 0x05,
-	DAP_INFO_DEVICE_NAME = 0x06,
-	DAP_INFO_CAPABILITIES = 0xf0,
-	DAP_INFO_TDT = 0xf1,
-	DAP_INFO_SWO_BUF_SIZE = 0xfd,
-	DAP_INFO_PACKET_COUNT = 0xfe,
-	DAP_INFO_PACKET_SIZE = 0xff,
-} dap_info_t;
+typedef enum dap_info {
+	DAP_INFO_VENDOR = 0x01U,
+	DAP_INFO_PRODUCT = 0x02U,
+	DAP_INFO_SER_NUM = 0x03U,
+	DAP_INFO_FW_VER = 0x04U,
+	DAP_INFO_DEVICE_VENDOR = 0x05U,
+	DAP_INFO_DEVICE_NAME = 0x06U,
+	DAP_INFO_CAPABILITIES = 0xf0U,
+	DAP_INFO_TDT = 0xf1U,
+	DAP_INFO_SWO_BUF_SIZE = 0xfdU,
+	DAP_INFO_PACKET_COUNT = 0xfeU,
+	DAP_INFO_PACKET_SIZE = 0xffU,
+} dap_info_e;
 
-typedef enum dap_cap_e {
-	DAP_CAP_SWD = (1 << 0),
-	DAP_CAP_JTAG = (1 << 1),
-	DAP_CAP_SWO_UART = (1 << 2),
-	DAP_CAP_SWO_MANCHESTER = (1 << 3),
-	DAP_CAP_ATOMIC_CMD = (1 << 4),
-	DAP_CAP_TDT = (1 << 5),
-	DAP_CAP_SWO_STREAMING = (1 << 6),
-} dap_cap_t;
+typedef enum dap_cap {
+	DAP_CAP_SWD = (1U << 0U),
+	DAP_CAP_JTAG = (1U << 1U),
+	DAP_CAP_SWO_UART = (1U << 2U),
+	DAP_CAP_SWO_MANCHESTER = (1U << 3U),
+	DAP_CAP_ATOMIC_CMD = (1U << 4U),
+	DAP_CAP_TDT = (1U << 5U),
+	DAP_CAP_SWO_STREAMING = (1U << 6U),
+} dap_cap_e;
 
 void dap_led(int index, int state);
 void dap_connect(bool jtag);
 void dap_disconnect(void);
 void dap_transfer_configure(uint8_t idle, uint16_t count, uint16_t retry);
 void dap_swd_configure(uint8_t cfg);
-size_t dap_info(dap_info_t info, uint8_t *data, size_t size);
+size_t dap_info(dap_info_e info, uint8_t *data, size_t size);
 void dap_reset_target(void);
 void dap_nrst_set_val(bool assert);
 void dap_trst_reset(void);
 void dap_reset_target_hw(int state);
 void dap_reset_pin(int state);
-uint32_t dap_read_reg(ADIv5_DP_t *dp, uint8_t reg);
-void dap_write_reg(ADIv5_DP_t *dp, uint8_t reg, uint32_t data);
+void dap_line_reset(void);
+uint32_t dap_read_reg(adiv5_debug_port_s *dp, uint8_t reg);
+void dap_write_reg(adiv5_debug_port_s *dp, uint8_t reg, uint32_t data);
 void dap_reset_link(bool jtag);
-uint32_t dap_read_idcode(ADIv5_DP_t *dp);
-unsigned int dap_read_block(ADIv5_AP_t *ap, void *dest, uint32_t src, size_t len, enum align align);
-unsigned int dap_write_block(ADIv5_AP_t *ap, uint32_t dest, const void *src, size_t len, enum align align);
-void dap_ap_mem_access_setup(ADIv5_AP_t *ap, uint32_t addr, enum align align);
-uint32_t dap_ap_read(ADIv5_AP_t *ap, uint16_t addr);
-void dap_ap_write(ADIv5_AP_t *ap, uint16_t addr, uint32_t value);
-void dap_read_single(ADIv5_AP_t *ap, void *dest, uint32_t src, enum align align);
-void dap_write_single(ADIv5_AP_t *ap, uint32_t dest, const void *src, enum align align);
-int dbg_dap_cmd(uint8_t *data, int size, int rsize);
-void dap_jtagtap_tdi_tdo_seq(uint8_t *data_out, bool final_tms, const uint8_t *tms, const uint8_t *data_in, size_t clock_cycles);
+uint32_t dap_read_idcode(adiv5_debug_port_s *dp);
+bool dap_read_block(adiv5_access_port_s *ap, void *dest, uint32_t src, size_t len, align_e align);
+bool dap_write_block(adiv5_access_port_s *ap, uint32_t dest, const void *src, size_t len, align_e align);
+void dap_ap_mem_access_setup(adiv5_access_port_s *ap, uint32_t addr, align_e align);
+uint32_t dap_ap_read(adiv5_access_port_s *ap, uint16_t addr);
+void dap_ap_write(adiv5_access_port_s *ap, uint16_t addr, uint32_t value);
+void dap_read_single(adiv5_access_port_s *ap, void *dest, uint32_t src, align_e align);
+void dap_write_single(adiv5_access_port_s *ap, uint32_t dest, const void *src, align_e align);
+ssize_t dbg_dap_cmd(uint8_t *data, size_t response_length, size_t request_length);
+bool dap_run_cmd(const void *request_data, size_t request_length, void *response_data, size_t response_length);
+void dap_jtagtap_tdi_tdo_seq(
+	uint8_t *data_out, bool final_tms, const uint8_t *tms, const uint8_t *data_in, size_t clock_cycles);
 int dap_jtag_configure(void);
+
+uint32_t dap_swdptap_seq_in(size_t clock_cycles);
+bool dap_swdptap_seq_in_parity(uint32_t *result, size_t clock_cycles);
 void dap_swdptap_seq_out(uint32_t tms_states, size_t clock_cycles);
 void dap_swdptap_seq_out_parity(uint32_t tms_states, size_t clock_cycles);
 

@@ -24,18 +24,17 @@
 
 #include "general.h"
 #include "jtagtap.h"
-#include "gdb_packet.h"
 
-jtag_proc_t jtag_proc;
+jtag_proc_s jtag_proc;
 
 static void jtagtap_reset(void);
 static void jtagtap_tms_seq(uint32_t tms_states, size_t ticks);
-static void jtagtap_tdi_tdo_seq(uint8_t *data_out, bool final_tms, const uint8_t *data_in, size_t ticks);
-static void jtagtap_tdi_seq(bool final_tms, const uint8_t *data_in, size_t ticks);
+static void jtagtap_tdi_tdo_seq(uint8_t *data_out, bool final_tms, const uint8_t *data_in, size_t clock_cycles);
+static void jtagtap_tdi_seq(bool final_tms, const uint8_t *data_in, size_t clock_cycles);
 static bool jtagtap_next(bool tms, bool tdi);
 static void jtagtap_cycle(bool tms, bool tdi, size_t clock_cycles);
 
-int jtagtap_init()
+void jtagtap_init(void)
 {
 	platform_target_clk_output_enable(true);
 	TMS_SET_MODE();
@@ -48,13 +47,10 @@ int jtagtap_init()
 	jtag_proc.jtagtap_cycle = jtagtap_cycle;
 	jtag_proc.tap_idle_cycles = 1;
 
-	/* Go to JTAG mode for SWJ-DP */
-	for (size_t i = 0; i <= 50U; ++i)
-		jtagtap_next(1, 0);      /* Reset SW-DP */
+	/* Ensure we're in JTAG mode */
+	for (size_t i = 0; i < 50U; ++i)
+		jtagtap_next(true, false); /* 50 idle cylces for SWD reset */
 	jtagtap_tms_seq(0xe73cU, 16U); /* SWD to JTAG sequence */
-	jtagtap_soft_reset();
-
-	return 0;
 }
 
 static void jtagtap_reset(void)
@@ -62,8 +58,8 @@ static void jtagtap_reset(void)
 #ifdef TRST_PORT
 	if (platform_hwversion() == 0) {
 		gpio_clear(TRST_PORT, TRST_PIN);
-		for (volatile size_t i = 0; i < 10000; i++)
-			__asm__("nop");
+		for (volatile size_t i = 0; i < 10000U; i++)
+			continue;
 		gpio_set(TRST_PORT, TRST_PIN);
 	}
 #endif
@@ -100,31 +96,33 @@ static bool jtagtap_next(const bool tms, const bool tdi)
 		return jtagtap_next_no_delay();
 }
 
-static void jtagtap_tms_seq_swd_delay(uint32_t tms_states, size_t ticks)
+static void jtagtap_tms_seq_swd_delay(uint32_t tms_states, const size_t clock_cycles)
 {
-	while (ticks) {
-		const bool state = tms_states & 1;
+	for (size_t cycle = 0; cycle < clock_cycles; ++cycle) {
+		const bool state = tms_states & 1U;
 		gpio_set_val(TMS_PORT, TMS_PIN, state);
 		gpio_set(TCK_PORT, TCK_PIN);
 		for (volatile int32_t cnt = swd_delay_cnt - 2; cnt > 0; cnt--)
 			continue;
-		tms_states >>= 1;
-		ticks--;
+		tms_states >>= 1U;
 		gpio_clear(TCK_PORT, TCK_PIN);
 		for (volatile int32_t cnt = swd_delay_cnt - 2; cnt > 0; cnt--)
 			continue;
 	}
 }
 
-static void jtagtap_tms_seq_no_delay(uint32_t tms_states, size_t ticks)
+static void jtagtap_tms_seq_no_delay(uint32_t tms_states, const size_t clock_cycles)
 {
-	while (ticks) {
-		const bool state = tms_states & 1;
+	bool state = tms_states & 1U;
+	for (size_t cycle = 0; cycle < clock_cycles; ++cycle) {
 		gpio_set_val(TMS_PORT, TMS_PIN, state);
 		gpio_set(TCK_PORT, TCK_PIN);
-		tms_states >>= 1;
+		/* Block the compiler from re-ordering the TMS states calculation to preserve timings */
+		__asm__ volatile("" ::: "memory");
+		tms_states >>= 1U;
+		state = tms_states & 1U;
 		__asm__("nop");
-		ticks--;
+		__asm__("nop");
 		gpio_clear(TCK_PORT, TCK_PIN);
 	}
 }
@@ -138,90 +136,99 @@ static void jtagtap_tms_seq(const uint32_t tms_states, const size_t ticks)
 		jtagtap_tms_seq_no_delay(tms_states, ticks);
 }
 
-static void jtagtap_tdi_tdo_seq_swd_delay(const uint8_t *const data_in, uint8_t *const data_out, const bool final_tms, size_t clock_cycles)
+static void jtagtap_tdi_tdo_seq_swd_delay(
+	const uint8_t *const data_in, uint8_t *const data_out, const bool final_tms, const size_t clock_cycles)
 {
-	size_t byte = 0;
-	size_t index = 0;
 	uint8_t value = 0;
-	while (clock_cycles--) {
+	for (size_t cycle = 0; cycle < clock_cycles; ++cycle) {
+		const size_t bit = cycle & 7U;
+		const size_t byte = cycle >> 3U;
 		/* On the last cycle, assert final_tms to TMS_PIN */
-		gpio_set_val(TMS_PORT, TMS_PIN, clock_cycles ? false : final_tms);
+		gpio_set_val(TMS_PORT, TMS_PIN, cycle + 1U >= clock_cycles && final_tms);
 		/* Set up the TDI pin and start the clock cycle */
-		gpio_set_val(TDI_PORT, TDI_PIN, data_in[byte] & (1U << index));
+		gpio_set_val(TDI_PORT, TDI_PIN, data_in[byte] & (1U << bit));
 		gpio_set(TCK_PORT, TCK_PIN);
-		for (volatile int32_t cnt = swd_delay_cnt - 2; cnt > 0; cnt--)
+		for (volatile int32_t cnt = swd_delay_cnt - 2U; cnt > 0; cnt--)
 			continue;
 		/* If TDO is high, store a 1 in the appropriate position in the value being accumulated */
 		if (gpio_get(TDO_PORT, TDO_PIN))
-			value |= (1 << index);
-		if (index++ == 7U) {
-			data_out[byte++] = value;
-			index = 0;
+			value |= 1U << bit;
+		if (bit == 7U) {
+			data_out[byte] = value;
 			value = 0;
 		}
 		/* Finish the clock cycle */
 		gpio_clear(TCK_PORT, TCK_PIN);
-		for (volatile int32_t cnt = swd_delay_cnt - 2; cnt > 0; cnt--)
+		for (volatile int32_t cnt = swd_delay_cnt - 2U; cnt > 0; cnt--)
 			continue;
 	}
-	if (index)
+	const size_t bit = (clock_cycles - 1U) & 7U;
+	const size_t byte = (clock_cycles - 1U) >> 3U;
+	if (bit)
 		data_out[byte] = value;
 }
 
-static void jtagtap_tdi_tdo_seq_no_delay(const uint8_t *const data_in, uint8_t *const data_out, const bool final_tms, size_t clock_cycles)
+static inline void jtag_next_tms_tdi(const bool tms, const bool tdi)
 {
-	size_t byte = 0;
-	size_t index = 0;
+	/* Initiate the falling edge on the bus */
+	gpio_clear(TCK_PORT, TCK_PIN);
+	/* It is now safe to change TMS and TDI */
+	gpio_set_val(TMS_PORT, TMS_PIN, tms);
+	gpio_set_val(TDI_PORT, TDI_PIN, tdi);
+}
+
+static void jtagtap_tdi_tdo_seq_no_delay(
+	const uint8_t *const data_in, uint8_t *const data_out, const bool final_tms, const size_t clock_cycles)
+{
 	uint8_t value = 0;
-	while (clock_cycles--) {
-		/* On the last tick, assert final_tms to TMS_PIN */
-		gpio_set_val(TMS_PORT, TMS_PIN, clock_cycles ? false : final_tms);
-		/* Set up the TDI pin and start the clock cycle */
-		gpio_set_val(TDI_PORT, TDI_PIN, data_in[byte] & (1U << index));
+	for (size_t cycle = 0; cycle < clock_cycles;) {
+		/* Calculate the next bit and byte to consume data from */
+		const uint8_t bit = cycle & 7U;
+		const size_t byte = cycle >> 3U;
+		/* Configure the bus for the next cycle */
+		jtag_next_tms_tdi(cycle + 1U >= clock_cycles && final_tms, data_in[byte] & (1U << bit));
+		/* Increment the cycle counter */
+		++cycle;
+		/* Block the compiler from re-ordering the calculations to preserve timings */
+		__asm__ volatile("" ::: "memory");
+		/* Start the clock cycle */
 		gpio_set(TCK_PORT, TCK_PIN);
 		/* If TDO is high, store a 1 in the appropriate position in the value being accumulated */
 		if (gpio_get(TDO_PORT, TDO_PIN))
-			value |= (1 << index);
-		/* If we've got to the next whole byte, store the accumulated value and reset state */
-		if (index++ == 7U) {
-			data_out[byte++] = value;
-			index = 0;
+			value |= 1U << bit;
+		/* If we've got the next whole byte, store the accumulated value and reset state */
+		if (bit == 7U) {
+			data_out[byte] = value;
 			value = 0;
 		}
 		/* Finish the clock cycle */
-		gpio_clear(TCK_PORT, TCK_PIN);
 	}
-	if (index)
-		data_out[byte] = value;
+	gpio_clear(TCK_PORT, TCK_PIN);
 }
 
-static void jtagtap_tdi_tdo_seq(uint8_t *const data_out, const bool final_tms, const uint8_t *const data_in, size_t ticks)
+static void jtagtap_tdi_tdo_seq(
+	uint8_t *const data_out, const bool final_tms, const uint8_t *const data_in, size_t clock_cycles)
 {
 	gpio_clear(TMS_PORT, TMS_PIN);
 	gpio_clear(TDI_PORT, TDI_PIN);
 	if (swd_delay_cnt)
-		jtagtap_tdi_tdo_seq_swd_delay(data_in, data_out, final_tms, ticks);
+		jtagtap_tdi_tdo_seq_swd_delay(data_in, data_out, final_tms, clock_cycles);
 	else
-		jtagtap_tdi_tdo_seq_no_delay(data_in, data_out, final_tms, ticks);
+		jtagtap_tdi_tdo_seq_no_delay(data_in, data_out, final_tms, clock_cycles);
 }
 
 static void jtagtap_tdi_seq_swd_delay(const uint8_t *const data_in, const bool final_tms, size_t clock_cycles)
 {
-	size_t byte = 0;
-	size_t index = 0;
-	while (clock_cycles--) {
+	for (size_t cycle = 0; cycle < clock_cycles; ++cycle) {
+		const size_t bit = cycle & 7U;
+		const size_t byte = cycle >> 3U;
 		/* On the last tick, assert final_tms to TMS_PIN */
-		gpio_set_val(TMS_PORT, TMS_PIN, clock_cycles ? false : final_tms);
+		gpio_set_val(TMS_PORT, TMS_PIN, cycle + 1U >= clock_cycles && final_tms);
 		/* Set up the TDI pin and start the clock cycle */
-		gpio_set_val(TDI_PORT, TDI_PIN, data_in[byte] & (1U << index));
+		gpio_set_val(TDI_PORT, TDI_PIN, data_in[byte] & (1U << bit));
 		gpio_set(TCK_PORT, TCK_PIN);
 		for (volatile int32_t cnt = swd_delay_cnt - 2; cnt > 0; cnt--)
 			continue;
-		/* If we've used a whole byte, reset state for the next */
-		if (index++ == 7U) {
-			++byte;
-			index = 0;
-		}
 		/* Finish the clock cycle */
 		gpio_clear(TCK_PORT, TCK_PIN);
 		for (volatile int32_t cnt = swd_delay_cnt - 2; cnt > 0; cnt--)
@@ -231,31 +238,29 @@ static void jtagtap_tdi_seq_swd_delay(const uint8_t *const data_in, const bool f
 
 static void jtagtap_tdi_seq_no_delay(const uint8_t *const data_in, const bool final_tms, size_t clock_cycles)
 {
-	size_t byte = 0;
-	size_t index = 0;
-	while (clock_cycles--) {
-		/* On the last tick, assert final_tms to TMS_PIN */
-		gpio_set_val(TMS_PORT, TMS_PIN, clock_cycles ? false : final_tms);
-		/* Set up the TDI pin and start the clock cycle */
-		gpio_set_val(TDI_PORT, TDI_PIN, data_in[byte] & (1U << index));
-		gpio_set(TCK_PORT, TCK_PIN);
-		/* If we've used a whole byte, reset state for the next */
-		if (index++ == 7U) {
-			++byte;
-			index = 0;
-		}
-		/* Finish the clock cycle */
+	for (size_t cycle = 0; cycle < clock_cycles; ++cycle) {
 		gpio_clear(TCK_PORT, TCK_PIN);
+		const size_t bit = cycle & 7U;
+		const size_t byte = cycle >> 3U;
+		/* On the last tick, assert final_tms to TMS_PIN */
+		gpio_set_val(TMS_PORT, TMS_PIN, cycle + 1U >= clock_cycles && final_tms);
+		/* Set up the TDI pin and start the clock cycle */
+		gpio_set_val(TDI_PORT, TDI_PIN, data_in[byte] & (1U << bit));
+		gpio_set(TCK_PORT, TCK_PIN);
+		/* Finish the clock cycle */
 	}
+	__asm__("nop");
+	__asm__("nop");
+	gpio_clear(TCK_PORT, TCK_PIN);
 }
 
-static void jtagtap_tdi_seq(const bool final_tms, const uint8_t *const data_in, const size_t ticks)
+static void jtagtap_tdi_seq(const bool final_tms, const uint8_t *const data_in, const size_t clock_cycles)
 {
 	gpio_clear(TMS_PORT, TMS_PIN);
 	if (swd_delay_cnt)
-		jtagtap_tdi_seq_swd_delay(data_in, final_tms, ticks);
+		jtagtap_tdi_seq_swd_delay(data_in, final_tms, clock_cycles);
 	else
-		jtagtap_tdi_seq_no_delay(data_in, final_tms, ticks);
+		jtagtap_tdi_seq_no_delay(data_in, final_tms, clock_cycles);
 }
 
 static void jtagtap_cycle_swd_delay(const size_t clock_cycles)
@@ -283,7 +288,7 @@ static void jtagtap_cycle(const bool tms, const bool tdi, const size_t clock_cyc
 {
 	jtagtap_next(tms, tdi);
 	if (swd_delay_cnt)
-		jtagtap_cycle_swd_delay(clock_cycles - 1);
+		jtagtap_cycle_swd_delay(clock_cycles - 1U);
 	else
-		jtagtap_cycle_no_delay(clock_cycles - 1);
+		jtagtap_cycle_no_delay(clock_cycles - 1U);
 }

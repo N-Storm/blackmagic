@@ -29,7 +29,12 @@
 
 /* rtt i/o to terminal */
 
-#if PC_HOSTED == 0
+/* Define NO_LIBOPENCM3 either in "platform.h" or on the command line
+ * in order to avoid including "libopencm3/usb/usbd.h".
+ */
+#include "platform.h"
+
+#if PC_HOSTED == 0 && !defined(NO_LIBOPENCM3)
 #include <libopencm3/usb/usbd.h>
 
 /* usb rx callback */
@@ -41,17 +46,17 @@ void rtt_serial_receive_callback(usbd_device *dev, uint8_t ep);
 
 #if !defined(RTT_UP_BUF_SIZE) || !defined(RTT_DOWN_BUF_SIZE)
 #if (PC_HOSTED == 1)
-#define RTT_UP_BUF_SIZE    (4096 + 8)
-#define RTT_DOWN_BUF_SIZE  (512)
+#define RTT_UP_BUF_SIZE   (4096U + 8U)
+#define RTT_DOWN_BUF_SIZE 512U
 #elif defined(STM32F7)
-#define RTT_UP_BUF_SIZE    (4096 + 8)
-#define RTT_DOWN_BUF_SIZE  (2048)
+#define RTT_UP_BUF_SIZE   (4096U + 8U)
+#define RTT_DOWN_BUF_SIZE 2048U
 #elif defined(STM32F4)
-#define RTT_UP_BUF_SIZE    (2048 + 8)
-#define RTT_DOWN_BUF_SIZE  (256)
+#define RTT_UP_BUF_SIZE   (2048U + 8U)
+#define RTT_DOWN_BUF_SIZE 256U
 #else /* stm32f103 */
-#define RTT_UP_BUF_SIZE    (1024 + 8)
-#define RTT_DOWN_BUF_SIZE  (256)
+#define RTT_UP_BUF_SIZE   (1024U + 8U)
+#define RTT_DOWN_BUF_SIZE 256U
 #endif
 #endif
 

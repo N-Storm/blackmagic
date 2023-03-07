@@ -25,7 +25,7 @@
 
 #include "target.h"
 
-int command_process(target *t, char *cmd);
+int command_process(target_s *t, char *cmd);
 
 /*
  * Attempts to parse a string as either being "enable" or "disable".
@@ -34,5 +34,9 @@ int command_process(target *t, char *cmd);
  * gdb port, returns false and leaves out untouched.
  */
 bool parse_enable_or_disable(const char *s, bool *out);
+
+#if PC_HOSTED == 1
+extern bool shutdown_bmda;
+#endif
 
 #endif /* INCLUDE_COMMAND_H */

@@ -20,7 +20,10 @@
 #ifndef TARGET_LPC_COMMON_H
 #define TARGET_LPC_COMMON_H
 
-enum iap_cmd {
+#include <stdint.h>
+#include "target_internal.h"
+
+typedef enum iap_cmd {
 	IAP_CMD_READ_FACTORY_SETTINGS = 40,
 	IAP_CMD_INIT = 49,
 	IAP_CMD_PREPARE = 50,
@@ -38,9 +41,9 @@ enum iap_cmd {
 	IAP_CMD_EXTENDED_READ_SIGNATURE = 73,
 	IAP_CMD_READ_EEPROM_PAGE = 80,
 	IAP_CMD_WRITE_EEPROM_PAGE = 81,
-};
+} iap_cmd_e;
 
-enum iap_status {
+typedef enum iap_status {
 	IAP_STATUS_CMD_SUCCESS = 0,
 	IAP_STATUS_INVALID_COMMAND = 1,
 	IAP_STATUS_SRC_ADDR_ERROR = 2,
@@ -63,25 +66,25 @@ enum iap_status {
 	IAP_STATUS_NO_VALID_IMAGE = 29,
 	IAP_STATUS_FLASH_ERASE = 32,
 	IAP_STATUS_INVALID_PAGE = 33,
-};
+} iap_status_e;
 
 /* CPU Frequency */
-#define CPU_CLK_KHZ 12000
+#define CPU_CLK_KHZ 12000U
 
-struct lpc_flash {
+typedef struct lpc_flash {
 	target_flash_s f;
 	uint8_t base_sector;
 	uint8_t bank;
 	uint8_t reserved_pages;
 	/* Info filled in by specific driver */
-	void (*wdt_kick)(target *t);
+	void (*wdt_kick)(target_s *t);
 	uint32_t iap_entry;
 	uint32_t iap_ram;
 	uint32_t iap_msp;
-};
+} lpc_flash_s;
 
-struct lpc_flash *lpc_add_flash(target *t, target_addr_t addr, size_t length);
-enum iap_status lpc_iap_call(struct lpc_flash *f, void *result, enum iap_cmd cmd, ...);
+lpc_flash_s *lpc_add_flash(target_s *t, target_addr_t addr, size_t length);
+iap_status_e lpc_iap_call(struct lpc_flash *f, void *result, iap_cmd_e cmd, ...);
 bool lpc_flash_erase(target_flash_s *f, target_addr_t addr, size_t len);
 bool lpc_flash_write_magic_vect(target_flash_s *f, target_addr_t dest, const void *src, size_t len);
 

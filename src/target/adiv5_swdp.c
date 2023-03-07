@@ -20,12 +20,13 @@
  */
 
 /* This file implements the SW-DP specific functions of the
- * ARM Debug Interface v5 Architecure Specification, ARM doc IHI0031A.
+ * ARM Debug Interface v5 Architecture Specification, ARM doc IHI0031A.
  */
 
 #include "general.h"
 #include "exception.h"
 #include "adiv5.h"
+#include "swd.h"
 #include "target.h"
 #include "target_internal.h"
 
@@ -52,19 +53,30 @@ uint8_t make_packet_request(uint8_t RnW, uint16_t addr)
 
 /* Provide bare DP access functions without timeout and exception */
 
-static void dp_line_reset(ADIv5_DP_t *dp)
+static void swd_line_reset(void)
 {
-	dp->seq_out(0xFFFFFFFFU, 32U);
-	dp->seq_out(0x0FFFFFFFU, 32U);
+	swd_proc.seq_out(0xffffffffU, 32U);
+	swd_proc.seq_out(0x0fffffffU, 32U);
 }
 
-bool firmware_dp_low_write(ADIv5_DP_t *dp, uint16_t addr, const uint32_t data)
+bool firmware_dp_low_write(const uint16_t addr, const uint32_t data)
 {
-	unsigned int request = make_packet_request(ADIV5_LOW_WRITE, addr & 0xfU);
-	dp->seq_out(request, 8);
-	int res = dp->seq_in(3);
-	dp->seq_out_parity(data, 32);
-	return (res != 1);
+	const uint8_t request = make_packet_request(ADIV5_LOW_WRITE, addr);
+	swd_proc.seq_out(request, 8);
+	const uint8_t res = swd_proc.seq_in(3);
+	swd_proc.seq_out_parity(data, 32);
+	swd_proc.seq_out(0, 8);
+	return res != SWDP_ACK_OK;
+}
+
+static uint32_t firmware_dp_low_read(const uint16_t addr)
+{
+	const uint8_t request = make_packet_request(ADIV5_LOW_READ, addr);
+	swd_proc.seq_out(request, 8);
+	const uint8_t res = swd_proc.seq_in(3);
+	uint32_t data = 0;
+	swd_proc.seq_in_parity(&data, 32);
+	return res == SWDP_ACK_OK ? data : 0;
 }
 
 /* Try first the dormant to SWD procedure.
@@ -73,35 +85,39 @@ bool firmware_dp_low_write(ADIv5_DP_t *dp, uint16_t addr, const uint32_t data)
  */
 uint32_t adiv5_swdp_scan(uint32_t targetid)
 {
-	volatile struct exception e;
+	volatile exception_s e;
 
 	target_list_free();
 
-	ADIv5_DP_t idp = {
+	adiv5_debug_port_s idp = {
 		.dp_low_write = firmware_dp_low_write,
 		.error = firmware_swdp_error,
 		.dp_read = firmware_swdp_read,
 		.low_access = firmware_swdp_low_access,
 		.abort = firmware_swdp_abort,
 	};
-	ADIv5_DP_t *initial_dp = &idp;
+	adiv5_debug_port_s *initial_dp = &idp;
 
-	if (swdptap_init(initial_dp))
+#if PC_HOSTED == 0
+	swdptap_init();
+#else
+	if (!platform_swdptap_init(initial_dp))
 		return 0;
+#endif
 
 	platform_target_clk_output_enable(true);
 	/* DORMANT-> SWD sequence*/
-	initial_dp->seq_out(0xFFFFFFFF, 32);
-	initial_dp->seq_out(0xFFFFFFFF, 32);
+	swd_proc.seq_out(0xffffffff, 32);
+	swd_proc.seq_out(0xffffffff, 32);
 	/* 128 bit selection alert sequence for SW-DP-V2 */
-	initial_dp->seq_out(0x6209f392, 32);
-	initial_dp->seq_out(0x86852d95, 32);
-	initial_dp->seq_out(0xe3ddafe9, 32);
-	initial_dp->seq_out(0x19bc0ea2, 32);
+	swd_proc.seq_out(0x6209f392, 32);
+	swd_proc.seq_out(0x86852d95, 32);
+	swd_proc.seq_out(0xe3ddafe9, 32);
+	swd_proc.seq_out(0x19bc0ea2, 32);
 	/* 4 cycle low,
 	 * 0x1a Arm CoreSight SW-DP activation sequence
 	 * 20 bits start of reset another reset sequence*/
-	initial_dp->seq_out(0x1a0, 12);
+	swd_proc.seq_out(0x1a0, 12);
 
 	bool scan_multidrop = true;
 	volatile uint32_t dp_targetid = targetid;
@@ -111,19 +127,19 @@ uint32_t adiv5_swdp_scan(uint32_t targetid)
 
 		scan_multidrop = false;
 
-		dp_line_reset(initial_dp);
+		swd_line_reset();
 
-		volatile uint32_t dp_dpidr;
+		volatile uint32_t dp_dpidr = 0;
 		TRY_CATCH (e, EXCEPTION_ALL) {
 			dp_dpidr = initial_dp->dp_read(initial_dp, ADIV5_DP_DPIDR);
 		}
 		if (e.type || initial_dp->fault) {
 			DEBUG_WARN("Trying old JTAG to SWD sequence\n");
-			initial_dp->seq_out(0xFFFFFFFF, 32);
-			initial_dp->seq_out(0xFFFFFFFF, 32);
-			initial_dp->seq_out(0xE79E, 16); /* 0b0111100111100111 */
+			swd_proc.seq_out(0xffffffff, 32);
+			swd_proc.seq_out(0xffffffff, 32);
+			swd_proc.seq_out(0xe79e, 16); /* 0b0111100111100111 */
 
-			dp_line_reset(initial_dp);
+			swd_line_reset();
 
 			initial_dp->fault = 0;
 
@@ -139,6 +155,8 @@ uint32_t adiv5_swdp_scan(uint32_t targetid)
 		const uint8_t dp_version = (dp_dpidr & ADIV5_DP_DPIDR_VERSION_MASK) >> ADIV5_DP_DPIDR_VERSION_OFFSET;
 		if (dp_version >= 2) {
 			scan_multidrop = true;
+			// initial_dp must have the version field set so adiv5_dp_read() does protocol recovery correctly.
+			initial_dp->version = dp_version;
 
 			/* Read TargetID. Can be done with device in WFI, sleep or reset! */
 			/* TARGETID is on bank 2 */
@@ -148,37 +166,39 @@ uint32_t adiv5_swdp_scan(uint32_t targetid)
 		}
 	}
 
+#if PC_HOSTED == 1
 	if (!initial_dp->dp_low_write) {
-		DEBUG_WARN("CMSIS_DAP < V1.2 can not handle multi-drop!\n");
-		/* E.g. CMSIS_DAP < V1.2 can not handle multi-drop!*/
+		DEBUG_WARN("CMSIS_DAP < v1.2 can not handle multi-drop, disabling\n");
 		scan_multidrop = false;
 	}
+#endif
 
 	DEBUG_WARN("scan_multidrop: %s\n", scan_multidrop ? "true" : "false");
 
-	const volatile size_t max_dp = (scan_multidrop) ? 16U : 1U;
+	const volatile size_t max_dp = scan_multidrop ? 16U : 1U;
 	for (volatile size_t i = 0; i < max_dp; i++) {
 		if (scan_multidrop) {
-			dp_line_reset(initial_dp);
+			initial_dp->fault = 0;
+			swd_line_reset();
 
-			initial_dp->dp_low_write(initial_dp, ADIV5_DP_TARGETSEL,
-				(i << ADIV5_DP_TARGETSEL_TINSTANCE_OFFSET) |
-					(dp_targetid & (ADIV5_DP_TARGETSEL_TPARTNO_MASK | ADIV5_DP_TARGETSEL_TDESIGNER_MASK | 1U)));
+			initial_dp->dp_low_write(ADIV5_DP_TARGETSEL,
+				i << ADIV5_DP_TARGETSEL_TINSTANCE_OFFSET |
+					(dp_targetid & (ADIV5_DP_TARGETID_TDESIGNER_MASK | ADIV5_DP_TARGETID_TPARTNO_MASK)) | 1U);
 
 			TRY_CATCH (e, EXCEPTION_ALL) {
-				initial_dp->dp_read(initial_dp, ADIV5_DP_DPIDR);
+				adiv5_dp_read(initial_dp, ADIV5_DP_DPIDR);
 			}
 			if (e.type || initial_dp->fault)
 				continue;
 		}
 
-		ADIv5_DP_t *dp = calloc(1, sizeof(*dp));
+		adiv5_debug_port_s *dp = calloc(1, sizeof(*dp));
 		if (!dp) { /* calloc failed: heap exhaustion */
 			DEBUG_WARN("calloc: failed in %s\n", __func__);
 			continue;
 		}
 
-		memcpy(dp, initial_dp, sizeof(ADIv5_DP_t));
+		memcpy(dp, initial_dp, sizeof(adiv5_debug_port_s));
 		dp->instance = i;
 
 		adiv5_dp_init(dp, 0);
@@ -186,29 +206,35 @@ uint32_t adiv5_swdp_scan(uint32_t targetid)
 	return target_list ? 1U : 0U;
 }
 
-uint32_t firmware_swdp_read(ADIv5_DP_t *dp, uint16_t addr)
+uint32_t firmware_swdp_read(adiv5_debug_port_s *dp, uint16_t addr)
 {
 	if (addr & ADIV5_APnDP) {
-		adiv5_dp_low_access(dp, ADIV5_LOW_READ, addr, 0);
+		adiv5_dp_recoverable_access(dp, ADIV5_LOW_READ, addr, 0);
 		return adiv5_dp_low_access(dp, ADIV5_LOW_READ, ADIV5_DP_RDBUFF, 0);
-	} else
-		return firmware_swdp_low_access(dp, ADIV5_LOW_READ, addr, 0);
+	}
+	return adiv5_dp_recoverable_access(dp, ADIV5_LOW_READ, addr, 0);
 }
 
-uint32_t firmware_swdp_error(ADIv5_DP_t *dp)
+uint32_t firmware_swdp_error(adiv5_debug_port_s *dp, const bool protocol_recovery)
 {
-	if (dp->version >= 2 && dp->dp_low_write) {
-		/* On protocol error target gets deselected.
-		 * With DP Change, another target needs selection.
-		 * => Reselect with right target! */
-		dp_line_reset(dp);
-		dp->dp_low_write(dp, ADIV5_DP_TARGETSEL, dp->targetsel);
-		dp->dp_read(dp, ADIV5_DP_DPIDR);
+	/* Only do the comms reset dance on DPv2+ w/ fault or to perform protocol recovery. */
+	if ((dp->version >= 2 && dp->fault) || protocol_recovery) {
+		/*
+		 * Note that on DPv2+ devices, during a protocol error condition
+		 * the target becomes deselected during line reset. Once reset,
+		 * we must then re-select the target to bring the device back
+		 * into the expected state.
+		 */
+		swd_line_reset();
+		if (dp->version >= 2)
+			firmware_dp_low_write(ADIV5_DP_TARGETSEL, dp->targetsel);
+		firmware_dp_low_read(ADIV5_DP_DPIDR);
 		/* Exception here is unexpected, so do not catch */
 	}
-	uint32_t err, clr = 0;
-	err = adiv5_dp_read(dp, ADIV5_DP_CTRLSTAT) & (ADIV5_DP_CTRLSTAT_STICKYORUN | ADIV5_DP_CTRLSTAT_STICKYCMP |
-													 ADIV5_DP_CTRLSTAT_STICKYERR | ADIV5_DP_CTRLSTAT_WDATAERR);
+	const uint32_t err = firmware_dp_low_read(ADIV5_DP_CTRLSTAT) &
+		(ADIV5_DP_CTRLSTAT_STICKYORUN | ADIV5_DP_CTRLSTAT_STICKYCMP | ADIV5_DP_CTRLSTAT_STICKYERR |
+			ADIV5_DP_CTRLSTAT_WDATAERR);
+	uint32_t clr = 0;
 
 	if (err & ADIV5_DP_CTRLSTAT_STICKYORUN)
 		clr |= ADIV5_DP_ABORT_ORUNERRCLR;
@@ -219,53 +245,67 @@ uint32_t firmware_swdp_error(ADIv5_DP_t *dp)
 	if (err & ADIV5_DP_CTRLSTAT_WDATAERR)
 		clr |= ADIV5_DP_ABORT_WDERRCLR;
 
-	adiv5_dp_write(dp, ADIV5_DP_ABORT, clr);
+	if (clr)
+		firmware_dp_low_write(ADIV5_DP_ABORT, clr);
 	dp->fault = 0;
-
 	return err;
 }
 
-uint32_t firmware_swdp_low_access(ADIv5_DP_t *dp, uint8_t RnW, uint16_t addr, uint32_t value)
+uint32_t firmware_swdp_low_access(adiv5_debug_port_s *dp, const uint8_t RnW, const uint16_t addr, const uint32_t value)
 {
-	uint8_t request = make_packet_request(RnW, addr);
-	uint32_t response = 0;
-	uint32_t ack = SWDP_ACK_WAIT;
-	platform_timeout timeout;
-
 	if ((addr & ADIV5_APnDP) && dp->fault)
 		return 0;
 
+	const uint8_t request = make_packet_request(RnW, addr);
+	uint32_t response = 0;
+	uint8_t ack = SWDP_ACK_WAIT;
+	platform_timeout_s timeout;
 	platform_timeout_set(&timeout, 250);
 	do {
-		dp->seq_out(request, 8);
-		ack = dp->seq_in(3);
+		swd_proc.seq_out(request, 8);
+		ack = swd_proc.seq_in(3);
 		if (ack == SWDP_ACK_FAULT) {
+			DEBUG_WARN("SWD access resulted in fault, retrying\n");
 			/* On fault, abort the request and repeat */
-			dp->error(dp);
+			/* Yes, this is self-recursive.. no, we can't think of a better option */
+			adiv5_dp_write(dp, ADIV5_DP_ABORT,
+				ADIV5_DP_ABORT_ORUNERRCLR | ADIV5_DP_ABORT_WDERRCLR | ADIV5_DP_ABORT_STKERRCLR |
+					ADIV5_DP_ABORT_STKCMPCLR);
 		}
 	} while ((ack == SWDP_ACK_WAIT || ack == SWDP_ACK_FAULT) && !platform_timeout_is_expired(&timeout));
 
 	if (ack == SWDP_ACK_WAIT) {
+		DEBUG_WARN("SWD access resulted in wait, aborting\n");
 		dp->abort(dp, ADIV5_DP_ABORT_DAPABORT);
-		dp->fault = 1;
+		dp->fault = ack;
 		return 0;
 	}
 
 	if (ack == SWDP_ACK_FAULT) {
-		dp->fault = 1;
+		DEBUG_WARN("SWD access resulted in fault\n");
+		dp->fault = ack;
 		return 0;
 	}
 
-	if (ack != SWDP_ACK_OK)
-		raise_exception(EXCEPTION_ERROR, "SWDP invalid ACK");
+	if (ack == SWDP_ACK_NO_RESPONSE) {
+		DEBUG_WARN("SWD access resulted in no response\n");
+		dp->fault = ack;
+		return 0;
+	}
+
+	if (ack != SWDP_ACK_OK) {
+		DEBUG_WARN("SWD access has invalid ack %x\n", ack);
+		raise_exception(EXCEPTION_ERROR, "SWD invalid ACK");
+	}
 
 	if (RnW) {
-		if (dp->seq_in_parity(&response, 32)) { /* Give up on parity error */
+		if (swd_proc.seq_in_parity(&response, 32)) { /* Give up on parity error */
 			dp->fault = 1;
-			raise_exception(EXCEPTION_ERROR, "SWDP Parity error");
+			DEBUG_WARN("SWD access resulted in parity error\n");
+			raise_exception(EXCEPTION_ERROR, "SWD parity error");
 		}
 	} else {
-		dp->seq_out_parity(value, 32);
+		swd_proc.seq_out_parity(value, 32);
 		/* ARM Debug Interface Architecture Specification ADIv5.0 to ADIv5.2
 		 * tells to clock the data through SW-DP to either :
 		 * - immediate start a new transaction
@@ -275,12 +315,12 @@ uint32_t firmware_swdp_low_access(ADIv5_DP_t *dp, uint8_t RnW, uint16_t addr, ui
 		 * Implement last option to favour correctness over
 		 *   slight speed decrease
 		 */
-		dp->seq_out(0, 8);
+		swd_proc.seq_out(0, 8);
 	}
 	return response;
 }
 
-void firmware_swdp_abort(ADIv5_DP_t *dp, uint32_t abort)
+void firmware_swdp_abort(adiv5_debug_port_s *dp, uint32_t abort)
 {
 	adiv5_dp_write(dp, ADIV5_DP_ABORT, abort);
 }

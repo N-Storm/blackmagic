@@ -35,30 +35,42 @@
 #ifndef PLATFORMS_HOSTED_BMP_HOSTED_H
 #define PLATFORMS_HOSTED_BMP_HOSTED_H
 
+#if HOSTED_BMP_ONLY != 1
+#include <libusb.h>
+#endif
 #include "cli.h"
+#include "platform.h"
 
 #if HOSTED_BMP_ONLY != 1
-# include <libusb-1.0/libusb.h>
-struct trans_ctx {
-#define TRANS_FLAGS_IS_DONE (1 << 0)
-#define TRANS_FLAGS_HAS_ERROR (1 << 1)
-    volatile unsigned long flags;
-};
+#define TRANSFER_IS_DONE   (1U << 0U)
+#define TRANSFER_HAS_ERROR (1U << 1U)
 
-typedef struct usb_link_s {
-	libusb_context        *ul_libusb_ctx;
-	libusb_device_handle  *ul_libusb_device_handle;
-	unsigned char         ep_tx;
-	unsigned char         ep_rx;
-	struct libusb_transfer* req_trans;
-	struct libusb_transfer* rep_trans;
-	void                  *priv;
-} usb_link_t;
+typedef struct transfer_ctx {
+	volatile size_t flags;
+} transfer_ctx_s;
 
-int send_recv(usb_link_t *link, uint8_t *txbuf, size_t txsize,
-			  uint8_t *rxbuf, size_t rxsize);
+typedef struct libusb_config_descriptor libusb_config_descriptor_s;
+typedef struct libusb_interface_descriptor libusb_interface_descriptor_s;
+typedef struct libusb_endpoint_descriptor libusb_endpoint_descriptor_s;
+typedef struct libusb_interface libusb_interface_s;
+typedef struct libusb_transfer libusb_transfer_s;
+typedef enum libusb_error libusb_error_e;
+
+typedef struct ftdi_context ftdi_context_s;
+
+typedef struct usb_link {
+	libusb_context *ul_libusb_ctx;
+	libusb_device_handle *ul_libusb_device_handle;
+	uint8_t interface;
+	uint8_t ep_tx;
+	uint8_t ep_rx;
+	libusb_transfer_s *req_trans;
+	libusb_transfer_s *rep_trans;
+	void *priv;
+} usb_link_s;
 #endif
-typedef struct bmp_info_s {
+
+typedef struct bmp_info {
 	bmp_type_t bmp_type;
 	char dev;
 	char serial[64];
@@ -68,24 +80,36 @@ typedef struct bmp_info_s {
 	bool is_jtag;
 #if HOSTED_BMP_ONLY != 1
 	libusb_context *libusb_ctx;
-	struct ftdi_context *ftdic;
-	usb_link_t *usb_link;
-	unsigned int vid;
-	unsigned int pid;
+	ftdi_context_s *ftdic;
+	usb_link_s *usb_link;
+	uint16_t vid;
+	uint16_t pid;
 	uint8_t interface_num;
 	uint8_t in_ep;
 	uint8_t out_ep;
 #endif
-} bmp_info_t;
+} bmp_info_s;
 
-extern bmp_info_t info;
-void bmp_ident(bmp_info_t *info);
-int find_debuggers(BMP_CL_OPTIONS_t *cl_opts,bmp_info_t *info);
-void libusb_exit_function(bmp_info_t *info);
+#if defined(__CYGWIN__)
+typedef TIMEVAL timeval_s;
+#else
+typedef struct timeval timeval_s;
+#endif
+
+extern bmp_info_s info;
+void bmp_ident(bmp_info_s *info);
+int find_debuggers(bmda_cli_options_s *cl_opts, bmp_info_s *info);
+void libusb_exit_function(bmp_info_s *info);
+
+#if HOSTED_BMP_ONLY == 1
+bool device_is_bmp_gdb_port(const char *device);
+#else
+int send_recv(usb_link_s *link, uint8_t *txbuf, size_t txsize, uint8_t *rxbuf, size_t rxsize);
+#endif
 
 #if defined(_WIN32) || defined(__CYGWIN__)
 #include <wchar.h>
-#define PRINT_INFO(fmt, ...) wprintf(L ## fmt, ##__VA_ARGS__)
+#define PRINT_INFO(fmt, ...) wprintf(L##fmt, ##__VA_ARGS__)
 #else
 #include <stdio.h>
 #define PRINT_INFO(fmt, ...) printf((fmt), ##__VA_ARGS__)

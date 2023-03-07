@@ -3,14 +3,21 @@ PLATFORM_DIR = platforms/$(PROBE_HOST)
 VPATH += $(PLATFORM_DIR) target
 ENABLE_DEBUG ?=
 
+SYS = $(shell $(CC) -dumpmachine)
+
 ifneq ($(V), 1)
 MAKEFLAGS += --no-print-dir
 Q := @
 endif
 
-CFLAGS += -Wall -Wextra -Werror -Wno-char-subscripts \
+CFLAGS += -Wall -Wextra -Werror -Wreturn-type \
+	-Wno-char-subscripts \
 	-std=c11 -g3 -MD -I./target \
 	-I. -Iinclude -I$(PLATFORM_DIR)
+
+ifeq (filter, macosx darwin, $(SYS))
+CFLAGS += -Wmaybe-uninitialized -Wstringop-overflow -Wunsafe-loop-optimizations 
+endif
 
 ifeq ($(ENABLE_DEBUG), 1)
 CFLAGS += -DENABLE_DEBUG
@@ -191,7 +198,7 @@ else
 	@# to the file. This is fine and probably makes the file more human-readable, but
 	@# also means we have to account for that newline in this comparison.
 	$(Q)if [ ! -f $@ ] || [ "$$(cat $@)" != "$$(echo '$(VERSION_HEADER)\n')" ]; then \
-		echo " GEN $@"; \
+		echo " GEN      $@"; \
 		echo '$(VERSION_HEADER)' > $@; \
 	fi
 endif
