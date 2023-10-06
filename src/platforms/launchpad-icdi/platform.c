@@ -16,6 +16,7 @@
  */
 
 #include "general.h"
+#include "platform.h"
 #include "gdb_if.h"
 #include "usb.h"
 #include "aux_serial.h"
@@ -35,7 +36,7 @@ char serial_no[DFU_SERIAL_LENGTH];
 uint8_t running_status;
 static volatile uint32_t time_ms;
 
-uint32_t swd_delay_cnt = 0;
+uint32_t target_clk_divider = 0;
 
 void sys_tick_handler(void)
 {
@@ -46,6 +47,11 @@ void sys_tick_handler(void)
 uint32_t platform_time_ms(void)
 {
 	return time_ms;
+}
+
+int platform_hwversion(void)
+{
+	return 0;
 }
 
 void platform_init(void)
@@ -148,4 +154,28 @@ uint32_t platform_max_frequency_get(void)
 void platform_target_clk_output_enable(bool enable)
 {
 	(void)enable;
+}
+
+bool platform_spi_init(const spi_bus_e bus)
+{
+	(void)bus;
+	return false;
+}
+
+bool platform_spi_deinit(const spi_bus_e bus)
+{
+	(void)bus;
+	return false;
+}
+
+bool platform_spi_chip_select(const uint8_t device_select)
+{
+	(void)device_select;
+	return false;
+}
+
+uint8_t platform_spi_xfer(const spi_bus_e bus, const uint8_t value)
+{
+	(void)bus;
+	return value;
 }

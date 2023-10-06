@@ -63,8 +63,7 @@ typedef struct bmda_cli_options {
 	size_t opt_position;
 	char *opt_cable;
 	char *opt_monitor;
-	int opt_debuglevel;
-	int opt_target_dev;
+	uint32_t opt_target_dev;
 	uint32_t opt_flash_start;
 	uint32_t opt_max_swj_frequency;
 	size_t opt_flash_size;
@@ -72,7 +71,7 @@ typedef struct bmda_cli_options {
 
 void cl_init(bmda_cli_options_s *opt, int argc, char **argv);
 int cl_execute(bmda_cli_options_s *opt);
-int serial_open(const bmda_cli_options_s *opt, const char *serial);
+bool serial_open(const bmda_cli_options_s *opt, const char *serial);
 void serial_close(void);
 
 #endif /* PLATFORMS_HOSTED_CLI_H */

@@ -54,6 +54,7 @@
 
 #define JEP106_MANUFACTURER_ARM          0x43bU /* ARM Ltd. */
 #define JEP106_MANUFACTURER_FREESCALE    0x00eU /* Freescale */
+#define JEP106_MANUFACTURER_NXP          0x015U /* NXP */
 #define JEP106_MANUFACTURER_TEXAS        0x017U /* Texas Instruments */
 #define JEP106_MANUFACTURER_ATMEL        0x01fU /* Atmel */
 #define JEP106_MANUFACTURER_STM          0x020U /* STMicroelectronics */
@@ -66,6 +67,7 @@
 #define JEP106_MANUFACTURER_GIGADEVICE   0x751U /* GigaDevice */
 #define JEP106_MANUFACTURER_RASPBERRY    0x913U /* Raspberry Pi */
 #define JEP106_MANUFACTURER_RENESAS      0x423U /* Renesas */
+#define JEP106_MANUFACTURER_XILINX       0x309U /* Xilinx */
 
 /*
  * This code is not listed in the JEP106 standard, but is used by some stm32f1 clones

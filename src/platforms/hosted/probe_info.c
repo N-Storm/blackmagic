@@ -35,15 +35,19 @@
 #include "probe_info.h"
 #include "general.h"
 
-probe_info_s *probe_info_add_by_serial(probe_info_s *const list, const bmp_type_t type, const char *const mfr,
+probe_info_s *probe_info_add_by_serial(probe_info_s *const list, const probe_type_e type, const char *const mfr,
 	const char *const product, const char *const serial, const char *const version)
 {
-	return probe_info_add_by_id(list, type, 0, 0, mfr, product, serial, version);
+	return probe_info_add_by_id(list, type, NULL, 0, 0, mfr, product, serial, version);
 }
 
-probe_info_s *probe_info_add_by_id(probe_info_s *const list, const bmp_type_t type, uint16_t vid, uint16_t pid,
-	const char *const mfr, const char *const product, const char *const serial, const char *const version)
+probe_info_s *probe_info_add_by_id(probe_info_s *const list, const probe_type_e type, libusb_device *device,
+	uint16_t vid, uint16_t pid, const char *const mfr, const char *const product, const char *const serial,
+	const char *const version)
 {
+#if HOSTED_BMP_ONLY == 1
+	(void)device;
+#endif
 	probe_info_s *probe_info = malloc(sizeof(*probe_info));
 	if (!probe_info) {
 		DEBUG_INFO("Fatal: Failed to allocate memory for a probe info structure\n");
@@ -53,6 +57,12 @@ probe_info_s *probe_info_add_by_id(probe_info_s *const list, const bmp_type_t ty
 	probe_info->type = type;
 	probe_info->vid = vid;
 	probe_info->pid = pid;
+#if HOSTED_BMP_ONLY == 0
+	if (device != NULL)
+		probe_info->device = libusb_ref_device(device);
+	else
+		probe_info->device = NULL;
+#endif
 	probe_info->manufacturer = mfr;
 	probe_info->product = product;
 	probe_info->serial = serial;
@@ -72,6 +82,10 @@ size_t probe_info_count(const probe_info_s *const list)
 
 void probe_info_free(probe_info_s *const probe_info)
 {
+#if HOSTED_BMP_ONLY == 0
+	if (probe_info->device)
+		libusb_unref_device(probe_info->device);
+#endif
 	free((void *)probe_info->manufacturer);
 	free((void *)probe_info->product);
 	free((void *)probe_info->serial);
@@ -110,29 +124,27 @@ const probe_info_s *probe_info_filter(const probe_info_s *const list, const char
 	return NULL;
 }
 
-void probe_info_to_bmp_info(const probe_info_s *const probe, bmp_info_s *info)
+static void copy_string(const char *const from, char *const to, const size_t max_len)
 {
-	info->bmp_type = probe->type;
+	const size_t length = MIN(strlen(from), max_len - 1U);
+	memcpy(to, from, length);
+	to[length] = '\0';
+}
+
+void probe_info_to_bmda_probe(const probe_info_s *const probe, bmda_probe_s *info)
+{
+	info->type = probe->type;
 #if HOSTED_BMP_ONLY != 1
 	info->pid = probe->pid;
 	info->vid = probe->vid;
 #endif
-	const size_t serial_len = MIN(strlen(probe->serial), sizeof(info->serial) - 1U);
-	memcpy(info->serial, probe->serial, serial_len);
-	info->serial[serial_len] = '\0';
+	copy_string(probe->serial, info->serial, sizeof(info->serial));
+	copy_string(probe->version, info->version, sizeof(info->version));
+	copy_string(probe->product, info->product, sizeof(info->product));
+	copy_string(probe->manufacturer, info->manufacturer, sizeof(info->manufacturer));
 
-	const size_t version_len = MIN(strlen(probe->version), sizeof(info->version) - 1U);
-	memcpy(info->version, probe->version, version_len);
-	info->version[version_len] = '\0';
-
-	const size_t product_len = strlen(probe->product);
-	const size_t manufacturer_len = strlen(probe->manufacturer);
-	/* + 4 as we're including two parens, a space and C's NUL character requirement */
-	const size_t descriptor_len = MIN(product_len + manufacturer_len + 4, sizeof(info->manufacturer));
-
-	if (snprintf(info->manufacturer, descriptor_len, "%s (%s)", probe->product, probe->manufacturer) !=
-		(int)descriptor_len - 1) {
-		DEBUG_WARN("Probe descriptor string '%s (%s)' exceeds allowable manufacturer description length\n",
-			probe->product, probe->manufacturer);
-	}
+#if HOSTED_BMP_ONLY == 0
+	if (probe->device)
+		info->libusb_dev = libusb_ref_device(probe->device);
+#endif
 }

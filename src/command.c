@@ -1,10 +1,11 @@
 /*
  * This file is part of the Black Magic Debug project.
  *
- * Copyright (C) 2011  Black Sphere Technologies Ltd.
+ * Copyright (C) 2011 Black Sphere Technologies Ltd.
  * Written by Gareth McMullin <gareth@blacksphere.co.nz>
- * Copyright (C) 2021 Uwe Bonnes
- *                            (bon@elektron.ikp.physik.tu-darmstadt.de)
+ * Copyright (C) 2021 Uwe Bonnes (bon@elektron.ikp.physik.tu-darmstadt.de)
+ * Copyright (C) 2023 1BitSquared <info@1bitsquared.com>
+ * Modified by Rachel Mant <git@dragonmux.network>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,11 +21,12 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* This file implements a basic command interpreter for GDB 'monitor'
- * commands.
+/* 
+ * This file implements a basic command interpreter for GDB 'monitor' commands.
  */
 
 #include "general.h"
+#include "platform.h"
 #include "exception.h"
 #include "command.h"
 #include "gdb_packet.h"
@@ -34,6 +36,7 @@
 #include "version.h"
 #include "serialno.h"
 #include "jtagtap.h"
+#include "jtag_scan.h"
 
 #ifdef ENABLE_RTT
 #include "rtt.h"
@@ -43,7 +46,7 @@
 #include "traceswo.h"
 #endif
 
-#if defined(_WIN32) || defined(__CYGWIN__)
+#if defined(_WIN32)
 #include <malloc.h>
 #else
 #include <alloca.h>
@@ -52,8 +55,8 @@
 static bool cmd_version(target_s *t, int argc, const char **argv);
 static bool cmd_help(target_s *t, int argc, const char **argv);
 
-static bool cmd_jtag_scan(target_s *t, int argc, const char **argv);
-static bool cmd_swdp_scan(target_s *t, int argc, const char **argv);
+static bool cmd_jtag_scan(target_s *target, int argc, const char **argv);
+static bool cmd_swd_scan(target_s *target, int argc, const char **argv);
 static bool cmd_auto_scan(target_s *t, int argc, const char **argv);
 static bool cmd_frequency(target_s *t, int argc, const char **argv);
 static bool cmd_targets(target_s *t, int argc, const char **argv);
@@ -83,32 +86,35 @@ const command_s cmd_list[] = {
 	{"version", cmd_version, "Display firmware version info"},
 	{"help", cmd_help, "Display help for monitor commands"},
 	{"jtag_scan", cmd_jtag_scan, "Scan JTAG chain for devices"},
-	{"swdp_scan", cmd_swdp_scan, "Scan SW-DP for devices"},
+	{"swd_scan", cmd_swd_scan, "Scan SWD interface for devices: [TARGET_ID]"},
+	{"swdp_scan", cmd_swd_scan, "Deprecated: use swd_scan instead"},
 	{"auto_scan", cmd_auto_scan, "Automatically scan all chain types for devices"},
-	{"frequency", cmd_frequency, "set minimum high and low times"},
+	{"frequency", cmd_frequency, "set minimum high and low times: [FREQ]"},
 	{"targets", cmd_targets, "Display list of available targets"},
 	{"morse", cmd_morse, "Display morse error message"},
-	{"halt_timeout", cmd_halt_timeout, "Timeout (ms) to wait until Cortex-M is halted: (Default 2000)"},
-	{"connect_rst", cmd_connect_reset, "Configure connect under reset: (enable|disable)"},
-	{"reset", cmd_reset, "Pulse the nRST line - disconnects target"},
+	{"halt_timeout", cmd_halt_timeout, "Timeout to wait until Cortex-M is halted: [TIMEOUT, default 2000ms]"},
+	{"connect_rst", cmd_connect_reset, "Configure connect under reset: [enable|disable]"},
+	{"reset", cmd_reset, "Pulse the nRST line - disconnects target: [PULSE_LEN, default 0ms]"},
 	{"tdi_low_reset", cmd_tdi_low_reset,
 		"Pulse nRST with TDI set low to attempt to wake certain targets up (eg LPC82x)"},
 #ifdef PLATFORM_HAS_POWER_SWITCH
-	{"tpwr", cmd_target_power, "Supplies power to the target: (enable|disable)"},
+	{"tpwr", cmd_target_power, "Supplies power to the target: [enable|disable]"},
 #endif
 #ifdef ENABLE_RTT
-	{"rtt", cmd_rtt, "enable|disable|status|channel 0..15|ident (str)|cblock|ram|poll maxms minms maxerr"},
+	{"rtt", cmd_rtt,
+		"[enable|disable|status|channel [0..15 ...]|ident [STR]|cblock|ram [RAM_START RAM_END]|poll [MAXMS MINMS "
+		"MAXERR]]"},
 #endif
 #ifdef PLATFORM_HAS_TRACESWO
 #if defined TRACESWO_PROTOCOL && TRACESWO_PROTOCOL == 2
-	{"traceswo", cmd_traceswo, "Start trace capture, NRZ mode: (baudrate) (decode channel ...)"},
+	{"traceswo", cmd_traceswo, "Start trace capture, NRZ mode: [BAUDRATE] [decode [CHANNEL_NR ...]]"},
 #else
-	{"traceswo", cmd_traceswo, "Start trace capture, Manchester mode: (decode channel ...)"},
+	{"traceswo", cmd_traceswo, "Start trace capture, Manchester mode: [decode [CHANNEL_NR ...]]"},
 #endif
 #endif
-	{"heapinfo", cmd_heapinfo, "Set semihosting heapinfo"},
+	{"heapinfo", cmd_heapinfo, "Set semihosting heapinfo: HEAPINFO HEAP_BASE HEAP_LIMIT STACK_BASE STACK_LIMIT"},
 #if defined(PLATFORM_HAS_DEBUG) && PC_HOSTED == 0
-	{"debug_bmp", cmd_debug_bmp, "Output BMP \"debug\" strings to the second vcom: (enable|disable)"},
+	{"debug_bmp", cmd_debug_bmp, "Output BMP \"debug\" strings to the second vcom: [enable|disable]"},
 #endif
 #if PC_HOSTED == 1
 	{"shutdown_bmda", cmd_shutdown_bmda, "Tell the BMDA server to shut down when the GDB connection closes"},
@@ -122,12 +128,12 @@ bool debug_bmp;
 #endif
 unsigned cortexm_wait_timeout = 2000; /* Timeout to wait for Cortex to react on halt command. */
 
-int command_process(target_s *t, char *cmd)
+int command_process(target_s *const t, char *const cmd_buffer)
 {
 	/* Initial estimate for argc */
 	size_t argc = 1;
-	for (size_t i = 0; i < strlen(cmd); ++i) {
-		if (cmd[i] == ' ' || cmd[i] == '\t')
+	for (size_t i = 0; i < strlen(cmd_buffer); ++i) {
+		if (cmd_buffer[i] == ' ' || cmd_buffer[i] == '\t')
 			++argc;
 	}
 
@@ -136,9 +142,11 @@ int command_process(target_s *t, char *cmd)
 	 */
 	const char **const argv = alloca(sizeof(const char *) * argc);
 
-	/* Tokenize cmd to find argv */
+	/* Tokenize cmd_buffer to find argv */
 	argc = 0;
-	for (const char *part = strtok(cmd, " \t"); part; part = strtok(NULL, " \t"))
+	/* Reentrant strtok needs a state pointer to the unprocessed part */
+	char *token_state = NULL;
+	for (const char *part = strtok_r(cmd_buffer, " \t", &token_state); part; part = strtok_r(NULL, " \t", &token_state))
 		argv[argc++] = part;
 
 	/* Look for match and call handler */
@@ -166,12 +174,13 @@ bool cmd_version(target_s *t, int argc, const char **argv)
 	char ident[256];
 	gdb_ident(ident, sizeof(ident));
 	DEBUG_WARN("%s\n", ident);
+	DEBUG_WARN("Copyright (C) 2010-2023 Black Magic Debug Project\n");
+	DEBUG_WARN("License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\n\n");
 #else
 	gdb_out(BOARD_IDENT);
 	gdb_outf(", Hardware Version %d\n", platform_hwversion());
-	gdb_out("Copyright (C) 2022 Black Magic Debug Project\n");
-	gdb_out("License GPLv3+: GNU GPL version 3 or later "
-			"<http://gnu.org/licenses/gpl.html>\n\n");
+	gdb_out("Copyright (C) 2010-2023 Black Magic Debug Project\n");
+	gdb_out("License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\n\n");
 #endif
 
 	return true;
@@ -194,31 +203,25 @@ bool cmd_help(target_s *t, int argc, const char **argv)
 	return true;
 }
 
-static bool cmd_jtag_scan(target_s *t, int argc, const char **argv)
+static bool cmd_jtag_scan(target_s *target, int argc, const char **argv)
 {
-	(void)t;
-	uint8_t irlens[argc];
+	(void)target;
+	(void)argc;
+	(void)argv;
 
 	if (platform_target_voltage())
 		gdb_outf("Target voltage: %s\n", platform_target_voltage());
 
-	if (argc > 1) {
-		/* Accept a list of IR lengths on command line */
-		for (size_t i = 1; i < (size_t)argc; i++)
-			irlens[i - 1U] = strtoul(argv[i], NULL, 0);
-		irlens[argc - 1] = 0;
-	}
-
 	if (connect_assert_nrst)
 		platform_nrst_set_val(true); /* will be deasserted after attach */
 
-	uint32_t devs = 0;
+	bool scan_result = false;
 	volatile exception_s e;
 	TRY_CATCH (e, EXCEPTION_ALL) {
 #if PC_HOSTED == 1
-		devs = platform_jtag_scan(argc > 1 ? irlens : NULL);
+		scan_result = bmda_jtag_scan();
 #else
-		devs = jtag_scan(argc > 1 ? irlens : NULL);
+		scan_result = jtag_scan();
 #endif
 	}
 	switch (e.type) {
@@ -230,7 +233,7 @@ static bool cmd_jtag_scan(target_s *t, int argc, const char **argv)
 		break;
 	}
 
-	if (devs == 0) {
+	if (!scan_result) {
 		platform_target_clk_output_enable(false);
 		platform_nrst_set_val(false);
 		gdb_out("JTAG device scan failed!\n");
@@ -243,25 +246,25 @@ static bool cmd_jtag_scan(target_s *t, int argc, const char **argv)
 	return true;
 }
 
-bool cmd_swdp_scan(target_s *t, int argc, const char **argv)
+bool cmd_swd_scan(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	volatile uint32_t targetid = 0;
 	if (argc > 1)
-		targetid = strtol(argv[1], NULL, 0);
+		targetid = strtoul(argv[1], NULL, 0);
 	if (platform_target_voltage())
 		gdb_outf("Target voltage: %s\n", platform_target_voltage());
 
 	if (connect_assert_nrst)
 		platform_nrst_set_val(true); /* will be deasserted after attach */
 
-	uint32_t devs = 0;
+	bool scan_result = false;
 	volatile exception_s e;
 	TRY_CATCH (e, EXCEPTION_ALL) {
 #if PC_HOSTED == 1
-		devs = platform_adiv5_swdp_scan(targetid);
+		scan_result = bmda_swd_scan(targetid);
 #else
-		devs = adiv5_swdp_scan(targetid);
+		scan_result = adiv5_swd_scan(targetid);
 #endif
 	}
 	switch (e.type) {
@@ -273,10 +276,10 @@ bool cmd_swdp_scan(target_s *t, int argc, const char **argv)
 		break;
 	}
 
-	if (devs == 0) {
+	if (!scan_result) {
 		platform_target_clk_output_enable(false);
 		platform_nrst_set_val(false);
-		gdb_out("SW-DP scan failed!\n");
+		gdb_out("SWD scan failed!\n");
 		return false;
 	}
 
@@ -297,27 +300,27 @@ bool cmd_auto_scan(target_s *t, int argc, const char **argv)
 	if (connect_assert_nrst)
 		platform_nrst_set_val(true); /* will be deasserted after attach */
 
-	uint32_t devs = 0;
+	bool scan_result = false;
 	volatile exception_s e;
 	TRY_CATCH (e, EXCEPTION_ALL) {
 #if PC_HOSTED == 1
-		devs = platform_jtag_scan(NULL);
+		scan_result = bmda_jtag_scan();
 #else
-		devs = jtag_scan(NULL);
+		scan_result = jtag_scan();
 #endif
-		if (devs > 0)
+		if (scan_result)
 			break;
 		gdb_out("JTAG scan found no devices, trying SWD!\n");
 
 #if PC_HOSTED == 1
-		devs = platform_adiv5_swdp_scan(0);
+		scan_result = bmda_swd_scan(0);
 #else
-		devs = adiv5_swdp_scan(0);
+		scan_result = adiv5_swd_scan(0);
 #endif
-		if (devs > 0)
+		if (scan_result)
 			break;
 
-		gdb_out("SW-DP scan found no devices.\n");
+		gdb_out("SWD scan found no devices.\n");
 	}
 	switch (e.type) {
 	case EXCEPTION_TIMEOUT:
@@ -328,7 +331,7 @@ bool cmd_auto_scan(target_s *t, int argc, const char **argv)
 		break;
 	}
 
-	if (devs == 0) {
+	if (!scan_result) {
 		platform_target_clk_output_enable(false);
 		platform_nrst_set_val(false);
 		gdb_out("auto scan failed!\n");
@@ -369,21 +372,21 @@ bool cmd_frequency(target_s *t, int argc, const char **argv)
 	return true;
 }
 
-static void display_target(int i, target_s *t, void *context)
+static void display_target(size_t idx, target_s *target, void *context)
 {
 	(void)context;
-	const char attached = target_attached(t) ? '*' : ' ';
-	const char *const core_name = target_core_name(t);
-	if (!strcmp(target_driver_name(t), "ARM Cortex-M"))
-		gdb_outf("***%2d %c Unknown %s Designer 0x%x Part ID 0x%x %s\n", i, attached, target_driver_name(t),
-			target_designer(t), target_part_id(t), core_name ? core_name : "");
+	const char attached = target_attached(target) ? '*' : ' ';
+	const char *const core_name = target_core_name(target);
+	if (!strcmp(target_driver_name(target), "ARM Cortex-M"))
+		gdb_outf("***%2u %c Unknown %s Designer 0x%x Part ID 0x%x %s\n", (unsigned)idx, attached,
+			target_driver_name(target), target_designer(target), target_part_id(target), core_name ? core_name : "");
 	else
-		gdb_outf("%2d   %c  %s %s\n", i, attached, target_driver_name(t), core_name ? core_name : "");
+		gdb_outf("%2u %3c  %s %s\n", (unsigned)idx, attached, target_driver_name(target), core_name ? core_name : "");
 }
 
-bool cmd_targets(target_s *t, int argc, const char **argv)
+bool cmd_targets(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	(void)argc;
 	(void)argv;
 	gdb_out("Available Targets:\n");
@@ -453,10 +456,12 @@ static bool cmd_halt_timeout(target_s *t, int argc, const char **argv)
 static bool cmd_reset(target_s *t, int argc, const char **argv)
 {
 	(void)t;
-	(void)argc;
-	(void)argv;
+	uint32_t pulse_len_ms = 0;
+	if (argc > 1)
+		pulse_len_ms = strtoul(argv[1], NULL, 0);
 	target_list_free();
 	platform_nrst_set_val(true);
+	platform_delay(pulse_len_ms);
 	platform_nrst_set_val(false);
 	return true;
 }
@@ -485,7 +490,8 @@ static bool cmd_target_power(target_s *t, int argc, const char **argv)
 				/* want to enable target power, but VREF > 0.5V sensed -> cancel */
 				gdb_outf("Target already powered (%s)\n", platform_target_voltage());
 			} else {
-				platform_target_set_power(want_enable);
+				if (!platform_target_set_power(want_enable))
+					DEBUG_ERROR("%s target power failed\n", want_enable ? "Enabling" : "Disabling");
 				gdb_outf("%s target power\n", want_enable ? "Enabling" : "Disabling");
 			}
 		}

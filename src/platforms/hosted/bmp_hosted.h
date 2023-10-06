@@ -45,33 +45,33 @@
 #define TRANSFER_IS_DONE   (1U << 0U)
 #define TRANSFER_HAS_ERROR (1U << 1U)
 
+#define BMDA_USB_NO_TIMEOUT 0
+
 typedef struct transfer_ctx {
 	volatile size_t flags;
 } transfer_ctx_s;
 
+typedef struct libusb_device_descriptor libusb_device_descriptor_s;
 typedef struct libusb_config_descriptor libusb_config_descriptor_s;
 typedef struct libusb_interface_descriptor libusb_interface_descriptor_s;
 typedef struct libusb_endpoint_descriptor libusb_endpoint_descriptor_s;
 typedef struct libusb_interface libusb_interface_s;
-typedef struct libusb_transfer libusb_transfer_s;
 typedef enum libusb_error libusb_error_e;
 
 typedef struct ftdi_context ftdi_context_s;
 
 typedef struct usb_link {
-	libusb_context *ul_libusb_ctx;
-	libusb_device_handle *ul_libusb_device_handle;
+	libusb_context *context;
+	libusb_device_handle *device_handle;
 	uint8_t interface;
 	uint8_t ep_tx;
 	uint8_t ep_rx;
-	libusb_transfer_s *req_trans;
-	libusb_transfer_s *rep_trans;
 	void *priv;
 } usb_link_s;
 #endif
 
-typedef struct bmp_info {
-	bmp_type_t bmp_type;
+typedef struct bmda_probe {
+	probe_type_e type;
 	char dev;
 	char serial[64];
 	char manufacturer[512];
@@ -80,7 +80,8 @@ typedef struct bmp_info {
 	bool is_jtag;
 #if HOSTED_BMP_ONLY != 1
 	libusb_context *libusb_ctx;
-	ftdi_context_s *ftdic;
+	libusb_device *libusb_dev;
+	ftdi_context_s *ftdi_ctx;
 	usb_link_s *usb_link;
 	uint16_t vid;
 	uint16_t pid;
@@ -88,31 +89,20 @@ typedef struct bmp_info {
 	uint8_t in_ep;
 	uint8_t out_ep;
 #endif
-} bmp_info_s;
+} bmda_probe_s;
 
-#if defined(__CYGWIN__)
-typedef TIMEVAL timeval_s;
-#else
 typedef struct timeval timeval_s;
-#endif
 
-extern bmp_info_s info;
-void bmp_ident(bmp_info_s *info);
-int find_debuggers(bmda_cli_options_s *cl_opts, bmp_info_s *info);
-void libusb_exit_function(bmp_info_s *info);
+extern bmda_probe_s bmda_probe_info;
+void bmp_ident(bmda_probe_s *info);
+int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info);
+void libusb_exit_function(bmda_probe_s *info);
 
 #if HOSTED_BMP_ONLY == 1
 bool device_is_bmp_gdb_port(const char *device);
 #else
-int send_recv(usb_link_s *link, uint8_t *txbuf, size_t txsize, uint8_t *rxbuf, size_t rxsize);
-#endif
-
-#if defined(_WIN32) || defined(__CYGWIN__)
-#include <wchar.h>
-#define PRINT_INFO(fmt, ...) wprintf(L##fmt, ##__VA_ARGS__)
-#else
-#include <stdio.h>
-#define PRINT_INFO(fmt, ...) printf((fmt), ##__VA_ARGS__)
+int bmda_usb_transfer(
+	usb_link_s *link, const void *tx_buffer, size_t tx_len, void *rx_buffer, size_t rx_len, uint16_t timeout);
 #endif
 
 #endif /* PLATFORMS_HOSTED_BMP_HOSTED_H */

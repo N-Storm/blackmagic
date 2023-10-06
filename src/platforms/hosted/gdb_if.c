@@ -23,13 +23,20 @@
  * uses a TCP server on port 2000.
  */
 
+#ifndef __CYGWIN__
 #include "general.h"
+#endif
 
 #if defined(_WIN32) || defined(__CYGWIN__)
-#define __USE_MINGW_ANSI_STDIO 1
-#include <winsock2.h>
-#include <windows.h>
+#define WIN32_LEAN_AND_MEAN
 #include <ws2tcpip.h>
+#include <winsock2.h>
+
+typedef SOCKET socket_t;
+#define PRI_SOCKET "zu"
+#ifndef __CYGWIN__
+typedef signed long long ssize_t;
+#endif
 #else
 #include <sys/socket.h>
 #include <netdb.h>
@@ -38,6 +45,14 @@
 #include <netinet/tcp.h>
 #include <sys/select.h>
 #include <fcntl.h>
+
+typedef int32_t socket_t;
+#define PRI_SOCKET     "d"
+#define INVALID_SOCKET (-1)
+#endif
+
+#ifdef __CYGWIN__
+#include "general.h"
 #endif
 
 #include <string.h>
@@ -65,8 +80,8 @@ static inline int closesocket(const int s)
 }
 #endif
 
-static int gdb_if_serv = -1;
-static int gdb_if_conn = -1;
+static socket_t gdb_if_serv = INVALID_SOCKET;
+static socket_t gdb_if_conn = INVALID_SOCKET;
 bool shutdown_bmda = false;
 
 #define GDB_BUFFER_LEN 2048U
@@ -105,7 +120,7 @@ static inline uint16_t u16_to_be(const uint16_t value)
 
 static sockaddr_storage_s sockaddr_prepare(const uint16_t port)
 {
-	addrinfo_s hints = {};
+	addrinfo_s hints = {0};
 	/* Use AF_UNSPEC here to support either IPv4 or v6 */
 	hints.ai_family = AF_UNSPEC;
 	/* Ask for a normal TCP socket */
@@ -148,7 +163,7 @@ static int socket_error()
 #endif
 }
 
-static void display_socket_error(const int error, const int socket, const char *const operation)
+static void display_socket_error(const int error, const socket_t socket, const char *const operation)
 {
 #if defined(_WIN32) || defined(__CYGWIN__)
 	char *message = NULL;
@@ -157,19 +172,19 @@ static void display_socket_error(const int error, const int socket, const char *
 #else
 	const char *message = strerror(error);
 #endif
-	DEBUG_WARN("Error %s %d, got error %d: %s\n", operation, socket, error, message);
+	DEBUG_ERROR("Error %s %" PRI_SOCKET ", got error %d: %s\n", operation, socket, error, message);
 #if defined(_WIN32) || defined(__CYGWIN__)
 	LocalFree(message);
 #endif
 }
 
-static void handle_error(const int socket, const char *const operation)
+static void handle_error(const socket_t socket, const char *const operation)
 {
 	display_socket_error(socket_error(), socket, operation);
 	closesocket(socket);
 }
 
-static bool socket_set_int_opt(const int socket, const int level, const int option, const int value)
+static bool socket_set_int_opt(const socket_t socket, const int level, const int option, const int value)
 {
 	/* Windows forces the cast to void pointer for the 4th parameter as it defines this as taking `const char *`. */
 	const int result = setsockopt(socket, level, option, (const void *)&value, sizeof(int));
@@ -178,7 +193,7 @@ static bool socket_set_int_opt(const int socket, const int level, const int opti
 	return result != -1;
 }
 
-static int socket_get_flags(const int socket)
+static int socket_get_flags(const socket_t socket)
 {
 #if defined(_WIN32) || defined(__CYGWIN__)
 	(void)socket;
@@ -188,13 +203,13 @@ static int socket_get_flags(const int socket)
 #endif
 }
 
-static void socket_set_flags(const int socket, const int flags)
+static void socket_set_flags(const socket_t socket, const int flags)
 {
 #if defined(_WIN32) || defined(__CYGWIN__)
 	ULONG option = (flags & O_NONBLOCK) ? 1U : 0U;
 	const int result = ioctlsocket(socket, FIONBIO, &option);
 	if (result != NO_ERROR)
-		DEBUG_WARN("ioctlsocket failed with error: %d\n", result);
+		DEBUG_ERROR("ioctlsocket failed with error: %d\n", result);
 #else
 	fcntl(socket, F_SETFL, flags);
 #endif
@@ -203,22 +218,22 @@ static void socket_set_flags(const int socket, const int flags)
 int gdb_if_init(void)
 {
 #if defined(_WIN32) || defined(__CYGWIN__)
-	WSADATA wsa_data = {};
+	WSADATA wsa_data = {0};
 	const int result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
 	if (result != NO_ERROR) {
-		DEBUG_WARN("WSAStartup failed with error: %d\n", result);
+		DEBUG_ERROR("WSAStartup failed with error: %d\n", result);
 		return -1;
 	}
 #endif
 	for (uint16_t port = default_port; port < max_port; ++port) {
 		const sockaddr_storage_s addr = sockaddr_prepare(port);
 		if (addr.ss_family == AF_UNSPEC) {
-			DEBUG_WARN("Failed to get a suitable socket address\n");
+			DEBUG_ERROR("Failed to get a suitable socket address\n");
 			return -1;
 		}
 
 		gdb_if_serv = socket(addr.ss_family, SOCK_STREAM, IPPROTO_TCP);
-		if (gdb_if_serv == -1) {
+		if (gdb_if_serv == INVALID_SOCKET) {
 			display_socket_error(socket_error(), gdb_if_serv, "socket returned");
 			continue;
 		}
@@ -241,21 +256,21 @@ int gdb_if_init(void)
 		return 0;
 	}
 
-	DEBUG_WARN("Failed to acquire a port to listen on\n");
+	DEBUG_ERROR("Failed to acquire a port to listen on\n");
 	return -1;
 }
 
 char gdb_if_getchar(void)
 {
-	if (gdb_if_conn == -1) {
+	if (gdb_if_conn == INVALID_SOCKET) {
 		if (shutdown_bmda)
 			return '\x04';
 		const int flags = socket_get_flags(gdb_if_serv);
 		socket_set_flags(gdb_if_serv, flags | O_NONBLOCK);
-		gdb_if_conn = -1;
-		while (gdb_if_conn == -1) {
+		gdb_if_conn = INVALID_SOCKET;
+		while (gdb_if_conn == INVALID_SOCKET) {
 			gdb_if_conn = accept(gdb_if_serv, NULL, NULL);
-			if (gdb_if_conn == -1) {
+			if (gdb_if_conn == INVALID_SOCKET) {
 				const int error = socket_error();
 				if (error == op_would_block) {
 					SET_IDLE_STATE(1);
@@ -275,7 +290,7 @@ char gdb_if_getchar(void)
 	char value = '\0';
 	int error = op_needs_retry;
 	while (error == op_needs_retry) {
-		const int result = recv(gdb_if_conn, &value, 1, 0);
+		const ssize_t result = recv(gdb_if_conn, &value, 1, 0);
 		if (result < 0) {
 			error = socket_error();
 			if (error == op_needs_retry)
@@ -285,7 +300,7 @@ char gdb_if_getchar(void)
 
 		if (result <= 0) {
 			handle_error(gdb_if_conn, "on socket");
-			gdb_if_conn = -1;
+			gdb_if_conn = INVALID_SOCKET;
 			/* Return '+' in case we were waiting for an ACK */
 			return '+';
 		}
@@ -295,10 +310,14 @@ char gdb_if_getchar(void)
 
 char gdb_if_getchar_to(uint32_t timeout)
 {
-	if (gdb_if_conn == -1)
+	if (gdb_if_conn == INVALID_SOCKET)
 		return -1;
 
+#ifndef __CYGWIN__
 	timeval_s select_timeout;
+#else
+	TIMEVAL select_timeout;
+#endif
 	select_timeout.tv_sec = timeout / 1000U;
 	select_timeout.tv_usec = (timeout % 1000U) * 1000U;
 
@@ -313,7 +332,7 @@ char gdb_if_getchar_to(uint32_t timeout)
 
 void gdb_if_putchar(char c, int flush)
 {
-	if (gdb_if_conn == -1)
+	if (gdb_if_conn == INVALID_SOCKET)
 		return;
 	gdb_buffer[gdb_buffer_used++] = c;
 	if (flush || gdb_buffer_used == GDB_BUFFER_LEN) {

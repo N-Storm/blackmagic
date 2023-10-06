@@ -2,6 +2,8 @@
  * This file is part of the Black Magic Debug project.
  *
  * Copyright (C) 2019 Uwe Bonnes
+ * Copyright (C) 2022-2023 1BitSquared <info@1bitsquared.com>
+ * Modified by Rachel Mant <git@dragonmux.network>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,85 +22,18 @@
 #ifndef PLATFORMS_HOSTED_JLINK_H
 #define PLATFORMS_HOSTED_JLINK_H
 
-#include <stdbool.h>
 #include "bmp_hosted.h"
 
-/** @cond PRIVATE */
-#define CMD_GET_VERSION    0x01U
-#define CMD_SET_SPEED      0x05U
-#define CMD_GET_HW_STATUS  0x07U
-#define CMD_GET_SPEEDS     0xc0U
-#define CMD_GET_SELECT_IF  0xc7U
-#define CMD_HW_JTAG3       0xcfU
-#define CMD_HW_RESET0      0xdcU
-#define CMD_HW_RESET1      0xddU
-#define CMD_GET_CAPS       0xe8U
-#define CMD_GET_EXT_CAPS   0xedU
-#define CMD_GET_HW_VERSION 0xf0U
-
-#define JLINK_IF_GET_ACTIVE    0xfeU
-#define JLINK_IF_GET_AVAILABLE 0xffU
-
-#define JLINK_CAP_GET_SPEEDS     (1U << 9U)
-#define JLINK_CAP_GET_HW_VERSION (1U << 1U)
-#define JLINK_IF_JTAG            1U
-#define JLINK_IF_SWD             2U
-
-#define SELECT_IF_JTAG 0U
-#define SELECT_IF_SWD  1U
-
-#if HOSTED_BMP_ONLY == 1
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-
-bool jlink_init(bmp_info_s *info)
-{
-	return false;
-}
-
-uint32_t jlink_swdp_scan(bmp_info_s *info)
-{
-	return 0;
-}
-
-bool jlink_jtagtap_init(bmp_info_s *info)
-{
-	return false;
-}
-
-const char *jlink_target_voltage(bmp_info_s *info)
-{
-	return "ERROR";
-}
-
-void jlink_nrst_set_val(bmp_info_s *info, bool assert)
-{
-}
-
-bool jlink_nrst_get_val(bmp_info_s *info)
-{
-	return true;
-}
-
-void jlink_max_frequency_set(bmp_info_s *info, uint32_t freq)
-{
-}
-
-uint32_t jlink_max_frequency_get(bmp_info_s *info)
-{
-	return 0;
-}
-
-#pragma GCC diagnostic pop
-#else
-bool jlink_init(bmp_info_s *info);
-uint32_t jlink_swdp_scan(bmp_info_s *info);
-bool jlink_jtagtap_init(bmp_info_s *info);
-const char *jlink_target_voltage(bmp_info_s *info);
-void jlink_nrst_set_val(bmp_info_s *info, bool assert);
-bool jlink_nrst_get_val(bmp_info_s *info);
-void jlink_max_frequency_set(bmp_info_s *info, uint32_t freq);
-uint32_t jlink_max_frequency_get(bmp_info_s *info);
-#endif
+bool jlink_init(void);
+bool jlink_swd_init(adiv5_debug_port_s *dp);
+bool jlink_jtag_init(void);
+uint32_t jlink_target_voltage_sense(void);
+const char *jlink_target_voltage_string(void);
+void jlink_nrst_set_val(bool assert);
+bool jlink_nrst_get_val(void);
+void jlink_max_frequency_set(uint32_t frequency);
+uint32_t jlink_max_frequency_get(void);
+bool jlink_target_set_power(bool power);
+bool jlink_target_get_power(void);
 
 #endif /* PLATFORMS_HOSTED_JLINK_H */

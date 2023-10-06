@@ -148,7 +148,7 @@ static void stm32f4_add_flash(target_s *const t, const uint32_t addr, const size
 
 	stm32f4_flash_s *sf = calloc(1, sizeof(*sf));
 	if (!sf) { /* calloc failed: heap exhaustion */
-		DEBUG_WARN("calloc: failed in %s\n", __func__);
+		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return;
 	}
 
@@ -162,7 +162,7 @@ static void stm32f4_add_flash(target_s *const t, const uint32_t addr, const size
 	f->erased = 0xffU;
 	sf->base_sector = base_sector;
 	sf->bank_split = split;
-	sf->psize = ALIGN_WORD;
+	sf->psize = ALIGN_32BIT;
 	target_add_flash(t, f);
 }
 
@@ -212,7 +212,7 @@ static uint16_t stm32f4_read_idcode(target_s *const t)
 	 * distinction with F205. Revision is also wrong (0x2000 instead
 	 * of 0x1000). See F40x/F41x errata.
 	 */
-	if (idcode == ID_STM32F20X && (t->cpuid & CPUID_PARTNO_MASK) == CORTEX_M4)
+	if (idcode == ID_STM32F20X && (t->cpuid & CORTEX_CPUID_PARTNO_MASK) == CORTEX_M4)
 		return ID_STM32F40X;
 	return idcode;
 }
@@ -351,7 +351,7 @@ static bool stm32f4_attach(target_s *t)
 	/* Allocate target-specific storage */
 	stm32f4_priv_s *priv_storage = calloc(1, sizeof(*priv_storage));
 	if (!priv_storage) { /* calloc failed: heap exhaustion */
-		DEBUG_WARN("calloc: failed in %s\n", __func__);
+		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return false;
 	}
 	t->target_storage = priv_storage;
@@ -469,7 +469,7 @@ static bool stm32f4_flash_busy_wait(target_s *const t, platform_timeout_s *const
 	while (status & FLASH_SR_BSY) {
 		status = target_mem_read32(t, FLASH_SR);
 		if ((status & SR_ERROR_MASK) || target_check_error(t)) {
-			DEBUG_WARN("stm32f4 flash error 0x%" PRIx32 "\n", status);
+			DEBUG_ERROR("stm32f4 flash error 0x%" PRIx32 "\n", status);
 			return false;
 		}
 		if (timeout)
@@ -484,7 +484,7 @@ static bool stm32f4_flash_erase(target_flash_s *f, target_addr_t addr, size_t le
 	stm32f4_flash_s *sf = (stm32f4_flash_s *)f;
 	stm32f4_flash_unlock(t);
 
-	align_e psize = ALIGN_WORD;
+	align_e psize = ALIGN_32BIT;
 	/*
 	 * XXX: What is this and why does it exist?
 	 * A dry-run walk-through says it'll pull out the psize for the Flash region added first by stm32f4_attach()
@@ -675,7 +675,7 @@ static bool stm32f4_option_write(target_s *t, uint32_t *const val, size_t count)
 
 static bool stm32f4_option_write_default(target_s *t)
 {
-	uint32_t val[3] = {};
+	uint32_t val[3] = {0};
 	switch (t->part_id) {
 	case ID_STM32F42X:
 	case ID_STM32F46X:
@@ -723,7 +723,7 @@ static bool stm32f4_cmd_option(target_s *t, int argc, const char **argv)
 	if (argc == 2 && partial_match(argv[1], option_cmd_erase, OPTION_CMD_LEN(option_cmd_erase)))
 		stm32f4_option_write_default(t);
 	else if (argc > 2 && partial_match(argv[1], option_cmd_write, OPTION_CMD_LEN(option_cmd_write))) {
-		uint32_t val[3] = {};
+		uint32_t val[3] = {0};
 		size_t count = argc > 4 ? 3 : argc - 1;
 		val[0] = strtoul(argv[2], NULL, 0);
 		if (argc > 3) {
@@ -740,7 +740,7 @@ static bool stm32f4_cmd_option(target_s *t, int argc, const char **argv)
 		tc_printf(t, "usage: monitor option erase\nusage: monitor option write <OPTCR>%s%s\n",
 			opt_bytes > 1U ? " <OPTCR1>" : "", opt_bytes == 3U ? " <OPTCR2>" : "");
 
-	uint32_t val[3] = {};
+	uint32_t val[3] = {0};
 	val[0] = target_mem_read32(t, FLASH_OPTCR);
 	if (opt_bytes > 1U) {
 		val[1] = target_mem_read32(t, FLASH_OPTCR + 4U);
@@ -761,7 +761,7 @@ static bool stm32f4_cmd_option(target_s *t, int argc, const char **argv)
 static bool stm32f4_cmd_psize(target_s *t, int argc, const char **argv)
 {
 	if (argc == 1) {
-		align_e psize = ALIGN_WORD;
+		align_e psize = ALIGN_32BIT;
 		/*
 		 * XXX: What is this and why does it exist?
 		 * A dry-run walk-through says it'll pull out the psize for the Flash region added first by stm32f4_attach()

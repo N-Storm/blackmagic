@@ -71,14 +71,12 @@ typedef struct mmap_data {
 #endif
 } mmap_data_s;
 
-int cl_debuglevel;
-
 static bool bmp_mmap(char *file, mmap_data_s *map)
 {
 #if defined(_WIN32) || defined(__CYGWIN__)
 	map->hFile = CreateFile(file, GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_ALWAYS, 0, NULL);
 	if (map->hFile == INVALID_HANDLE_VALUE) {
-		DEBUG_WARN("Open file %s failed: %s\n", file, strerror(errno));
+		DEBUG_ERROR("Open file %s failed: %s\n", file, strerror(errno));
 		return false;
 	}
 	map->size = GetFileSize(map->hFile, NULL);
@@ -89,23 +87,23 @@ static bool bmp_mmap(char *file, mmap_data_s *map)
 		NULL);                                          /* name of mapping object */
 
 	if (map->hMapFile == NULL || map->hMapFile == INVALID_HANDLE_VALUE) {
-		DEBUG_WARN("Map file %s failed: %s\n", file, strerror(errno));
+		DEBUG_ERROR("Map file %s failed: %s\n", file, strerror(errno));
 		CloseHandle(map->hFile);
 		return false;
 	}
 	map->data = MapViewOfFile(map->hMapFile, FILE_MAP_READ, 0, 0, 0);
 	if (!map->data) {
-		DEBUG_WARN("Could not create file mapping object (%s).\n", strerror(errno));
+		DEBUG_ERROR("Could not create file mapping object (%s).\n", strerror(errno));
 		CloseHandle(map->hMapFile);
 		return false;
 	}
 #else
 	map->fd = open(file, O_RDONLY | O_BINARY);
 	if (map->fd < 0) {
-		DEBUG_WARN("Open file %s failed: %s\n", file, strerror(errno));
+		DEBUG_ERROR("Open file %s failed: %s\n", file, strerror(errno));
 		return false;
 	}
-	struct stat stat = {};
+	struct stat stat = {0};
 	if (fstat(map->fd, &stat))
 		return false;
 	map->real_size = stat.st_size;
@@ -130,17 +128,19 @@ static void bmp_munmap(mmap_data_s *map)
 static void cl_help(char **argv)
 {
 	bmp_ident(NULL);
-	PRINT_INFO("\n"
-			   "Usage: %s [-h | -l | [-vBITMASK] [-d PATH | -P NUMBER | -s SERIAL | -c TYPE]\n"
+	DEBUG_INFO("\n"
+			   "Usage: %s [-h | -l | [-v BITMASK] [-O] [-d PATH | -P NUMBER | -s SERIAL | -c TYPE]\n"
 			   "\t[-n NUMBER] [-j | -A] [-C] [-t | -T] [-e] [-p] [-R[h]] [-H] [-M STRING ...]\n"
 			   "\t[-f | -m] [-E | -w | -V | -r] [-a ADDR] [-S number] [file]]\n"
 			   "\n"
 			   "The default is to start a debug server at localhost:2000\n\n"
-			   "Single-shot and verbosity options [-h | -l | -vBITMASK]:\n"
+			   "Single-shot and verbosity options [-h | -l | -v BITMASK]:\n"
 			   "\t-h, --help       Show the version and this help, then exit\n"
 			   "\t-l, --list       List available supported probes\n"
 			   "\t-v, --verbose    Set the output verbosity level based on some combination of:\n"
-			   "\t                   1 = INFO, 2 = GDB, 4 = TARGET, 8 = PROBE, 16 = WIRE\n"
+			   "\t                   1 = INFO, 2 = GDB, 4 = TARGET, 8 = PROTO, 16 = PROBE, 32 = WIRE\n"
+			   "\t-O, --no-stdout  Don't use stdout for debugging output, making it available\n"
+			   "\t                   for use by RTT, Semihosting, or other target output\n"
 			   "\n"
 			   "Probe selection arguments [-d PATH | -P NUMBER | -s SERIAL | -c TYPE]:\n"
 			   "\t-d, --device     Use a serial device at the given path\n"
@@ -200,6 +200,7 @@ static const getopt_option_s long_options[] = {
 	{"help", no_argument, NULL, 'h'},
 	{"list", no_argument, NULL, 'l'},
 	{"verbose", required_argument, NULL, 'v'},
+	{"no-stdout", no_argument, NULL, 'O'},
 	{"device", required_argument, NULL, 'd'},
 	{"probe", required_argument, NULL, 'P'},
 	{"serial", required_argument, NULL, 's'},
@@ -236,25 +237,40 @@ void cl_init(bmda_cli_options_s *opt, int argc, char **argv)
 	opt->opt_scanmode = BMP_SCAN_SWD;
 	opt->opt_mode = BMP_MODE_DEBUG;
 	while (true) {
-		const int option = getopt_long(argc, argv, "eEFhHv:d:f:s:I:c:Cln:m:M:wVtTa:S:jApP:rR::", long_options, NULL);
+		const int option = getopt_long(argc, argv, "eEFhHv:Od:f:s:I:c:Cln:m:M:wVtTa:S:jApP:rR::", long_options, NULL);
 		if (option == -1)
 			break;
 
 		switch (option) {
 		case 'c':
-			if (optarg)
-				opt->opt_cable = optarg;
+			if (optarg) {
+				char *opt_pointer = optarg;
+				while (opt_pointer && *opt_pointer == ' ')
+					opt_pointer++;
+				opt->opt_cable = opt_pointer;
+			}
 			break;
 		case 'h':
-			cl_debuglevel = 3;
+			bmda_debug_flags |= BMD_DEBUG_INFO;
 			cl_help(argv);
 			break;
 		case 'H':
 			opt->opt_no_hl = true;
 			break;
 		case 'v':
-			if (optarg)
-				cl_debuglevel = strtol(optarg, NULL, 0) & (BMP_DEBUG_MAX - 1U);
+			if (optarg) {
+				const char *end = optarg + strlen(optarg);
+				char *valid = NULL;
+				const uint16_t level = (strtoul(optarg, &valid, 10) << BMD_DEBUG_LEVEL_SHIFT) & BMD_DEBUG_LEVEL_MASK;
+				if (valid != end) {
+					DEBUG_ERROR("Value after verbosity flag was not a valid positive integer, got '%s'\n", optarg);
+					exit(1);
+				}
+				bmda_debug_flags |= level;
+			}
+			break;
+		case 'O':
+			bmda_debug_flags |= BMD_DEBUG_USE_STDERR;
 			break;
 		case 'j':
 			opt->opt_scanmode = BMP_SCAN_JTAG;
@@ -264,7 +280,6 @@ void cl_init(bmda_cli_options_s *opt, int argc, char **argv)
 			break;
 		case 'l':
 			opt->opt_list_only = true;
-			cl_debuglevel |= BMP_DEBUG_STDOUT;
 			break;
 		case 'C':
 			opt->opt_connect_under_reset = true;
@@ -307,7 +322,7 @@ void cl_init(bmda_cli_options_s *opt, int argc, char **argv)
 			break;
 		case 't':
 			opt->opt_mode = BMP_MODE_TEST;
-			cl_debuglevel |= BMP_DEBUG_INFO | BMP_DEBUG_STDOUT;
+			bmda_debug_flags |= BMD_DEBUG_INFO;
 			break;
 		case 'T':
 			opt->opt_mode = BMP_MODE_SWJ_TEST;
@@ -391,25 +406,35 @@ void cl_init(bmda_cli_options_s *opt, int argc, char **argv)
 	}
 }
 
-static void display_target(int i, target_s *t, void *context)
+static void display_target(size_t idx, target_s *target, void *context)
 {
 	(void)context;
-	const char *const core_name = target_core_name(t);
-	if (strcmp(target_driver_name(t), "ARM Cortex-M") == 0)
-		DEBUG_INFO("*** %2d %c Unknown %s Designer %x Part ID %x %s\n", i, target_attached(t) ? '*' : ' ',
-			target_driver_name(t), target_designer(t), target_part_id(t), core_name ? core_name : "");
+	const char *const core_name = target_core_name(target);
+	if (strcmp(target_driver_name(target), "ARM Cortex-M") == 0)
+		DEBUG_INFO("*** %2zu %c Unknown %s Designer %x Part ID %x %s\n", idx, target_attached(target) ? '*' : ' ',
+			target_driver_name(target), target_designer(target), target_part_id(target), core_name ? core_name : "");
 	else
-		DEBUG_INFO(
-			"*** %2d %c %s %s\n", i, target_attached(t) ? '*' : ' ', target_driver_name(t), core_name ? core_name : "");
+		DEBUG_INFO("*** %2zu %c %s %s\n", idx, target_attached(target) ? '*' : ' ', target_driver_name(target),
+			core_name ? core_name : "");
+}
+
+bool scan_for_targets(const bmda_cli_options_s *const opt)
+{
+	if (opt->opt_scanmode == BMP_SCAN_JTAG)
+		return bmda_jtag_scan();
+	if (opt->opt_scanmode == BMP_SCAN_SWD)
+		return bmda_swd_scan(opt->opt_targetid);
+	if (bmda_jtag_scan())
+		return true;
+	DEBUG_WARN("JTAG scan found no devices, trying SWD.\n");
+	if (bmda_swd_scan(opt->opt_targetid))
+		return true;
+	DEBUG_ERROR("SWD scan failed!\n");
+	return false;
 }
 
 int cl_execute(bmda_cli_options_s *opt)
 {
-	int num_targets;
-	if (opt->opt_tpwr) {
-		platform_target_set_power(true);
-		platform_delay(500);
-	}
 	if (opt->opt_mode == BMP_MODE_RESET_HW) {
 		platform_nrst_set_val(true);
 		platform_delay(1);
@@ -424,52 +449,36 @@ int cl_execute(bmda_cli_options_s *opt)
 		DEBUG_INFO("Running in Test Mode\n");
 	DEBUG_INFO("Target voltage: %s Volt\n", platform_target_voltage());
 
-	int res = 0;
-	if (opt->opt_scanmode == BMP_SCAN_JTAG)
-		num_targets = platform_jtag_scan(NULL);
-	else if (opt->opt_scanmode == BMP_SCAN_SWD)
-		num_targets = platform_adiv5_swdp_scan(opt->opt_targetid);
-	else {
-		num_targets = platform_jtag_scan(NULL);
-		if (num_targets > 0)
-			goto found_targets;
-		DEBUG_INFO("JTAG scan found no devices, trying SWD.\n");
-		num_targets = platform_adiv5_swdp_scan(opt->opt_targetid);
-		if (num_targets > 0)
-			goto found_targets;
-		DEBUG_INFO("SW-DP scan failed!\n");
-	}
-
-found_targets:
-	if (!num_targets) {
-		DEBUG_WARN("No target found\n");
+	if (!scan_for_targets(opt)) {
+		DEBUG_ERROR("No target found\n");
 		return -1;
 	}
-	num_targets = target_foreach(display_target, &num_targets);
 
+	const size_t num_targets = target_foreach(display_target, NULL);
 	if (opt->opt_target_dev > num_targets) {
-		DEBUG_WARN("Given target number %d not available max %d\n", opt->opt_target_dev, num_targets);
+		DEBUG_ERROR("Given target number %" PRIu32 " not available max %zu\n", opt->opt_target_dev, num_targets);
 		return -1;
 	}
-	target_s *t = target_attach_n(opt->opt_target_dev, &cl_controller);
+	target_s *target = target_attach_n(opt->opt_target_dev, &cl_controller);
 
+	int res = 0;
 	int read_file = -1;
-	if (!t) {
-		DEBUG_WARN("Can not attach to target %d\n", opt->opt_target_dev);
+	if (!target) {
+		DEBUG_ERROR("Can not attach to target %" PRIu32 "\n", opt->opt_target_dev);
 		res = -1;
 		goto target_detach;
 	}
 
 	/* List each defined RAM region */
 	size_t ram_regions = 0;
-	for (target_ram_s *r = t->ram; r; r = r->next)
+	for (target_ram_s *ram = target->ram; ram; ram = ram->next)
 		++ram_regions;
 
 	for (size_t region = 0; region < ram_regions; ++region) {
-		target_ram_s *r = t->ram;
-		for (size_t i = ram_regions - 1U; r; r = r->next, --i) {
+		target_ram_s *ram = target->ram;
+		for (size_t i = ram_regions - 1U; ram; ram = ram->next, --i) {
 			if (region == i) {
-				DEBUG_INFO("RAM   Start: 0x%08" PRIx32 " length = 0x%zx\n", r->start, r->length);
+				DEBUG_INFO("RAM   Start: 0x%08" PRIx32 " length = 0x%zx\n", ram->start, ram->length);
 				break;
 			}
 		}
@@ -481,20 +490,20 @@ found_targets:
 	size_t lowest_flash_size = 0;
 
 	size_t flash_regions = 0;
-	for (target_flash_s *f = t->flash; f; f = f->next) {
+	for (target_flash_s *flash = target->flash; flash; flash = flash->next) {
 		++flash_regions;
-		if (f->start < lowest_flash_start) {
-			lowest_flash_start = f->start;
-			lowest_flash_size = f->length;
+		if (flash->start < lowest_flash_start) {
+			lowest_flash_start = flash->start;
+			lowest_flash_size = flash->length;
 		}
 	}
 
 	for (size_t region = 0; region < flash_regions; ++region) {
-		target_flash_s *f = t->flash;
-		for (size_t i = flash_regions - 1U; f; f = f->next, --i) {
+		target_flash_s *flash = target->flash;
+		for (size_t i = flash_regions - 1U; flash; flash = flash->next, --i) {
 			if (region == i) {
-				DEBUG_INFO(
-					"Flash Start: 0x%08" PRIx32 " length = 0x%zx blocksize 0x%zx\n", f->start, f->length, f->blocksize);
+				DEBUG_INFO("Flash Start: 0x%08" PRIx32 " length = 0x%zx blocksize 0x%zx\n", flash->start, flash->length,
+					flash->blocksize);
 				break;
 			}
 		}
@@ -510,25 +519,25 @@ found_targets:
 		 * XXX: This is bugprone - any core, even if it's not just a Cortex-M* that
 		 * matches on the first letter triggers this
 		 */
-		if (t->core[0] == 'M') {
+		if (target->core[0] == 'M') {
 			DEBUG_WARN("Continuous read/write-back DEMCR. Abort with ^C\n");
 			while (true) {
 				uint32_t demcr;
-				target_mem_read(t, &demcr, CORTEXM_DEMCR, 4);
-				target_mem_write32(t, CORTEXM_DEMCR, demcr);
+				target_mem_read(target, &demcr, CORTEXM_DEMCR, 4);
+				target_mem_write32(target, CORTEXM_DEMCR, demcr);
 				platform_delay(1); /* To allow trigger */
 			}
 		} else
-			DEBUG_WARN("No test for this core type yet\n");
+			DEBUG_ERROR("No test for this core type yet\n");
 	}
 	if (opt->opt_mode == BMP_MODE_TEST || opt->opt_mode == BMP_MODE_SWJ_TEST)
 		goto target_detach;
 
-	mmap_data_s map = {};
+	mmap_data_s map = {0};
 	if (opt->opt_mode == BMP_MODE_FLASH_WRITE || opt->opt_mode == BMP_MODE_FLASH_VERIFY ||
 		opt->opt_mode == BMP_MODE_FLASH_WRITE_VERIFY) {
 		if (!bmp_mmap(opt->opt_flash_file, &map)) {
-			DEBUG_WARN("Can not map file: %s. Aborting!\n", strerror(errno));
+			DEBUG_ERROR("Can not map file: %s. Aborting!\n", strerror(errno));
 			res = -1;
 			goto target_detach;
 		}
@@ -536,7 +545,7 @@ found_targets:
 		/* Open as binary */
 		read_file = open(opt->opt_flash_file, O_TRUNC | O_CREAT | O_RDWR | O_BINARY, S_IRUSR | S_IWUSR);
 		if (read_file == -1) {
-			DEBUG_WARN("Error opening flashfile %s for read: %s\n", opt->opt_flash_file, strerror(errno));
+			DEBUG_ERROR("Error opening flashfile %s for read: %s\n", opt->opt_flash_file, strerror(errno));
 			res = -1;
 			goto target_detach;
 		}
@@ -545,32 +554,32 @@ found_targets:
 		/* restrict to size given on command line */
 		map.size = opt->opt_flash_size;
 	if (opt->opt_monitor) {
-		res = command_process(t, opt->opt_monitor);
+		res = command_process(target, opt->opt_monitor);
 		if (res)
-			DEBUG_WARN("Command \"%s\" failed\n", opt->opt_monitor);
+			DEBUG_ERROR("Command \"%s\" failed\n", opt->opt_monitor);
 	}
 	if (opt->opt_mode == BMP_MODE_RESET)
-		target_reset(t);
+		target_reset(target);
 	else if (opt->opt_mode == BMP_MODE_FLASH_ERASE) {
 		DEBUG_INFO("Erase %zu bytes at 0x%08" PRIx32 "\n", opt->opt_flash_size, opt->opt_flash_start);
-		if (!target_flash_erase(t, opt->opt_flash_start, opt->opt_flash_size)) {
-			DEBUG_WARN("Erasure failed!\n");
+		if (!target_flash_erase(target, opt->opt_flash_start, opt->opt_flash_size)) {
+			DEBUG_ERROR("Flash erase failed!\n");
 			res = -1;
 			goto free_map;
 		}
-		target_reset(t);
+		target_reset(target);
 	} else if (opt->opt_mode == BMP_MODE_FLASH_WRITE || opt->opt_mode == BMP_MODE_FLASH_WRITE_VERIFY) {
-		DEBUG_INFO("Erasing  %zu bytes at 0x%08" PRIx32 "\n", map.size, opt->opt_flash_start);
+		DEBUG_INFO("Erasing %zu bytes at 0x%08" PRIx32 "\n", map.size, opt->opt_flash_start);
 		const uint32_t start_time = platform_time_ms();
-		if (!target_flash_erase(t, opt->opt_flash_start, map.size)) {
-			DEBUG_WARN("Erasure failed!\n");
+		if (!target_flash_erase(target, opt->opt_flash_start, map.size)) {
+			DEBUG_ERROR("Flash erase failed!\n");
 			res = -1;
 			goto free_map;
 		}
 		DEBUG_INFO("Flashing %zu bytes at 0x%08" PRIx32 "\n", map.size, opt->opt_flash_start);
 		/* Buffered write cares for padding*/
-		if (!target_flash_write(t, opt->opt_flash_start, map.data, map.size) || !target_flash_complete(t)) {
-			DEBUG_WARN("Flashing failed!\n");
+		if (!target_flash_write(target, opt->opt_flash_start, map.data, map.size) || !target_flash_complete(target)) {
+			DEBUG_ERROR("Flashing failed!\n");
 			res = -1;
 			goto free_map;
 		}
@@ -579,7 +588,7 @@ found_targets:
 		DEBUG_WARN(
 			"Flash Write succeeded for %zu bytes, %8.3fkiB/s\n", map.size, (double)map.size / (end_time - start_time));
 		if (opt->opt_mode != BMP_MODE_FLASH_WRITE_VERIFY) {
-			target_reset(t);
+			target_reset(target);
 			goto free_map;
 		}
 	}
@@ -597,18 +606,18 @@ found_targets:
 		const uint32_t start_time = platform_time_ms();
 		for (size_t offset = 0; offset < size; offset += WORKSIZE) {
 			const size_t worksize = MIN(size - offset, WORKSIZE);
-			int n_read = target_mem_read(t, data, flash_src + offset, worksize);
+			int n_read = target_mem_read(target, data, flash_src + offset, worksize);
 			if (n_read) {
 				if (opt->opt_flash_size == 0) /* we reached end of flash */
-					DEBUG_INFO("Reached end of flash at size %" PRId32 "\n", flash_src - opt->opt_flash_start);
+					DEBUG_INFO("Reached end of flash at size %" PRIu32 "\n", flash_src - opt->opt_flash_start);
 				else
-					DEBUG_WARN("Read failed at flash address 0x%08" PRIx32 "\n", flash_src);
+					DEBUG_ERROR("Read failed at flash address 0x%08" PRIx32 "\n", flash_src);
 				break;
 			}
 			bytes_read += worksize;
 			if (opt->opt_mode == BMP_MODE_FLASH_VERIFY || opt->opt_mode == BMP_MODE_FLASH_WRITE_VERIFY) {
 				if (memcmp(data, flash + offset, worksize) != 0) {
-					DEBUG_WARN("Verify failed at flash region 0x%08" PRIx32 "\n", flash_src);
+					DEBUG_ERROR("Verify failed at flash region 0x%08" PRIx32 "\n", flash_src);
 					res = -1;
 					goto free_map;
 				}
@@ -616,12 +625,12 @@ found_targets:
 				const ssize_t written = write(read_file, data, worksize);
 				if (written < 0) {
 					const int error = errno;
-					DEBUG_INFO("Write to %s failed (%d): %s\n", opt->opt_flash_file, error, strerror(error));
+					DEBUG_ERROR("Write to %s failed (%d): %s\n", opt->opt_flash_file, error, strerror(error));
 					res = -1;
 					goto free_map;
 				}
 				if ((size_t)written < worksize) {
-					DEBUG_WARN("Read failed at flash region 0x%08" PRIx32 "\n", flash_src);
+					DEBUG_ERROR("Read failed at flash region 0x%08" PRIx32 "\n", flash_src);
 					res = -1;
 					goto free_map;
 				}
@@ -633,7 +642,7 @@ found_targets:
 		DEBUG_WARN("Read/Verify succeeded for %zu bytes, %8.3fkiB/s\n", bytes_read,
 			(double)bytes_read / (end_time - start_time));
 		if (opt->opt_mode == BMP_MODE_FLASH_WRITE_VERIFY)
-			target_reset(t);
+			target_reset(target);
 	}
 free_map:
 	if (map.size)
@@ -641,8 +650,8 @@ free_map:
 target_detach:
 	if (read_file != -1)
 		close(read_file);
-	if (t)
-		target_detach(t);
+	if (target)
+		target_detach(target);
 	target_list_free();
 	return res;
 }

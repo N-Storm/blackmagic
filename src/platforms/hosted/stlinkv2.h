@@ -2,6 +2,8 @@
  * This file is part of the Black Magic Debug project.
  *
  * Copyright (C) 2019 Uwe Bonnes
+ * Copyright (C) 2022-2023 1BitSquared <info@1bitsquared.com>
+ * Modified by Rachel Mant <git@dragonmux.network>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,86 +24,26 @@
 
 #include "bmp_hosted.h"
 
-#define STLINK_ERROR_FAIL (-1)
-#define STLINK_ERROR_OK   0
-#define STLINK_ERROR_WAIT 1
+#define STLINK_ERROR_OK          0U
+#define STLINK_ERROR_WAIT        1U
+#define STLINK_ERROR_FAULT       2U
+#define STLINK_ERROR_PARITY      3U
+#define STLINK_ERROR_GENERAL     4U
+#define STLINK_ERROR_NO_RESPONSE 7U
+#define STLINK_ERROR_FAIL        (-1)
 
-#define STLINK_DEBUG_PORT_ACCESS 0xffffU
-
-#if HOSTED_BMP_ONLY == 1
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-
-int stlink_init(bmp_info_s *info)
-{
-	return -1;
-}
-
-int stlink_hwversion(void)
-{
-	return -1;
-}
-
-const char *stlink_target_voltage(bmp_info_s *info)
-{
-	return "ERROR";
-}
-
-void stlink_nrst_set_val(bmp_info_s *info, bool assert)
-{
-}
-
-bool stlink_nrst_get_val(void)
-{
-	return true;
-}
-
-uint32_t stlink_swdp_scan(bmp_info_s *info)
-{
-	return 0;
-}
-
-void stlink_adiv5_dp_defaults(adiv5_debug_port_s *dp)
-{
-}
-
-void stlink_jtag_dp_init(adiv5_debug_port_s *dp)
-{
-	(void)dp;
-}
-
-uint32_t jtag_scan_stlinkv2(bmp_info_s *info, const uint8_t *irlens)
-{
-	return 0;
-}
-
-void stlink_exit_function(bmp_info_s *info)
-{
-}
-
-void stlink_max_frequency_set(bmp_info_s *info, uint32_t freq)
-{
-}
-
-uint32_t stlink_max_frequency_get(bmp_info_s *info)
-{
-	return 0;
-}
-
-#pragma GCC diagnostic pop
-#else
-int stlink_init(bmp_info_s *info);
+bool stlink_init(void);
+void stlink_deinit(void);
+bool stlink_swd_scan(void);
+bool stlink_jtag_scan(void);
 int stlink_hwversion(void);
-const char *stlink_target_voltage(bmp_info_s *info);
-void stlink_nrst_set_val(bmp_info_s *info, bool assert);
+const char *stlink_target_voltage(void);
+void stlink_nrst_set_val(bool assert);
 bool stlink_nrst_get_val(void);
-uint32_t stlink_swdp_scan(bmp_info_s *info);
-void stlink_adiv5_dp_defaults(adiv5_debug_port_s *dp);
+void stlink_adiv5_dp_init(adiv5_debug_port_s *dp);
 void stlink_jtag_dp_init(adiv5_debug_port_s *dp);
-uint32_t jtag_scan_stlinkv2(bmp_info_s *info, const uint8_t *irlens);
-void stlink_exit_function(bmp_info_s *info);
-void stlink_max_frequency_set(bmp_info_s *info, uint32_t freq);
-uint32_t stlink_max_frequency_get(bmp_info_s *info);
-#endif
+void stlink_exit_function(bmda_probe_s *info);
+void stlink_max_frequency_set(uint32_t freq);
+uint32_t stlink_max_frequency_get(void);
 
 #endif /* PLATFORMS_HOSTED_STLINKV2_H */

@@ -55,7 +55,7 @@ extern bool debug_bmp;
  * nTRST    = PB1  (output) [blackmagic]
  * PWR_BR   = PB1  (output) [blackmagic_mini] -- supply power to the target, active low
  * TMS_DIR  = PA1  (output) [blackmagic_mini v2.1] -- choose direction of the TCK pin, input low, output high
- * nRST_OUT = PA2  (output) -- Hardware 5 and older
+ * nRST     = PA2  (output) -- Hardware 5 and older
  *          = PA9  (output) -- Hardware 6 and newer
  * TDI      = PA3  (output) -- Hardware 5 and older
  *          = PA7  (output) -- Hardware 6 and newer
@@ -67,7 +67,7 @@ extern bool debug_bmp;
  *                             Hardware 4 has a normally open jumper between TDO and TRACESWO
  *                             Hardware 5 has hardwired connection between TDO and TRACESWO
  *          = PA10 (input)  -- Hardware 6 and newer
- * nRST     = PA7  (input)  -- Hardware 5 and older
+ * nRST_SNS = PA7  (input)  -- Hardware 5 and older
  *          = PC13 (input)  -- Hardware 6 and newer
  *
  * USB_PU   = PA8  (output)
@@ -100,6 +100,8 @@ extern bool debug_bmp;
  * BTN1       = PB12 (input)  -- Shared with the DFU bootloader button
  * BTN2       = PB9  (input)
  * VBAT       = PA0  (input)  -- Battery voltage sense ADC2, CH0
+ *
+ * nRST_SNS is the nRST sense line
  */
 
 /* Hardware definitions... */
@@ -126,12 +128,19 @@ extern bool debug_bmp;
 
 #define TRST_PORT       GPIOB
 #define TRST_PIN        GPIO1
-#define PWR_BR_PORT     GPIOB
-#define PWR_BR_PIN      GPIO1
 #define NRST_PORT       GPIOA
 #define NRST_PIN        HW_SWITCH(6, GPIO2, GPIO9)
-#define NRST_SENSE_PORT GPIOA
+#define NRST_SENSE_PORT HW_SWITCH(6, GPIOA, GPIOC)
 #define NRST_SENSE_PIN  HW_SWITCH(6, GPIO7, GPIO13)
+
+/*
+ * These are the control output pin definitions for TPWR.
+ * TPWR is sensed via PB0 by sampling ADC1's channel 8.
+ */
+#define PWR_BR_PORT GPIOB
+#define PWR_BR_PIN  GPIO1
+#define TPWR_PORT   GPIOB
+#define TPWR_PIN    GPIO0
 
 #define USB_PU_PORT GPIOA
 #define USB_PU_PIN  GPIO8
@@ -173,7 +182,6 @@ extern bool debug_bmp;
 #define AUX_DDC_PORT  AUX_PORT
 #define AUX_BTN1_PORT AUX_PORT
 #define AUX_BTN2_PORT AUX_PORT
-#define AUX_VBAT_PORT GPIOA
 #define AUX_SCLK      GPIO13
 #define AUX_COPI      GPIO15
 #define AUX_CIPO      GPIO14
@@ -184,7 +192,15 @@ extern bool debug_bmp;
 #define AUX_DDC       GPIO8
 #define AUX_BTN1      GPIO12
 #define AUX_BTN2      GPIO9
+/* Note that VBat is on PA0, not PB. */
+#define AUX_VBAT_PORT GPIOA
 #define AUX_VBAT      GPIO0
+
+/* SPI bus definitions */
+#define AUX_SPI         SPI2
+#define EXT_SPI         SPI1
+#define EXT_SPI_CS_PORT GPIOA
+#define EXT_SPI_CS      GPIO4
 
 #define SWD_CR       GPIO_CRL(SWDIO_PORT)
 #define SWD_CR_SHIFT (4U << 2U)
@@ -276,26 +292,39 @@ extern bool debug_bmp;
 #define SET_IDLE_STATE(state)  gpio_set_val(LED_PORT, LED_IDLE_RUN, state)
 #define SET_ERROR_STATE(state) gpio_set_val(LED_PORT, LED_ERROR, state)
 
-/* Use newlib provided integer-only stdio functions */
+/* Frequency constants (in Hz) for the bitbanging routines */
+#define BITBANG_CALIBRATED_FREQS
+/*
+ * The 3 major JTAG bitbanging routines that get called result in these stats for
+ * clock frequency being generated with the _no_delay routines:
+ * jtag_proc.jtagtap_next(): 705.882kHz
+ * jtag_proc.jtagtap_tms_seq(): 4.4MHz
+ * jtag_proc.jtagtap_tdi_tdo_seq(): 750kHz
+ * The result is an average 1.95MHz achieved.
+ */
+#define BITBANG_NO_DELAY_FREQ 1951961U
+/*
+ * On the _swd_delay routines with the delay loops inoperative, we then get:
+ * jtag_proc.jtagtap_next(): 626.181kHz
+ * jtag_proc.jtagtap_tms_seq(): 2.8MHz
+ * jtag_proc.jtagtap_tdi_tdo_seq(): 727.27kHz
+ * The result is an average 1.38MHz achieved.
+ */
+#define BITBANG_0_DELAY_FREQ 1384484U
+/*
+ * On the _swd_delay routines with the delay set to 1, we then get:
+ * jtag_proc.jtagtap_next(): 521.739kHz
+ * jtag_proc.jtagtap_tms_seq(): 1.378MHz
+ * jtag_proc.jtagtap_tdi_tdo_seq(): 583.624kHz
+ * The result is an average 827.788kHz achieved
+ */
 
-#ifdef sscanf
-#undef sscanf
-#endif
-#define sscanf siscanf
-
-#ifdef sprintf
-#undef sprintf
-#endif
-#define sprintf siprintf
-
-#ifdef vasprintf
-#undef vasprintf
-#endif
-#define vasprintf vasiprintf
-
-#ifdef snprintf
-#undef snprintf
-#endif
-#define snprintf sniprintf
+/*
+ * After taking samples with the delay set to 2, 3, and 4 as well, then running
+ * a linear regression on the results using the divider calculation tool, we arrive
+ * at an offset of 52 for the ratio and a division factor of 30 to produce divider numbers
+ */
+#define BITBANG_DIVIDER_OFFSET 52U
+#define BITBANG_DIVIDER_FACTOR 30U
 
 #endif /* PLATFORMS_NATIVE_PLATFORM_H */

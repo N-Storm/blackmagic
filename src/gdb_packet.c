@@ -31,138 +31,233 @@
 
 #include <stdarg.h>
 
-size_t gdb_getpacket(char *const packet, const size_t size)
+typedef enum packet_state {
+	PACKET_IDLE,
+	PACKET_GDB_CAPTURE,
+	PACKET_GDB_ESCAPE,
+	PACKET_GDB_CHECKSUM_UPPER,
+	PACKET_GDB_CHECKSUM_LOWER,
+} packet_state_e;
+
+static bool noackmode = false;
+
+/* https://sourceware.org/gdb/onlinedocs/gdb/Packet-Acknowledgment.html */
+void gdb_set_noackmode(bool enable)
 {
-	unsigned char csum;
-	char recv_csum[3];
-	size_t offset = 0;
+	/*
+	 * If we were asked to disable NoAckMode, and it was previously enabled,
+	 * it might mean we got a packet we determined to be the first of a new
+	 * GDB session, and as such it was not acknoledged (before GDB enabled NoAckMode),
+	 * better late than never.
+	 *
+	 * If we were asked after the connection was terminated, sending the ack will have no effect.
+	 */
+	if (!enable && noackmode)
+		gdb_if_putchar(GDB_PACKET_ACK, 1U);
 
-	while (true) {
-		/* Wait for packet start */
-		do {
-			/*
-			 * Spin waiting for a start of packet character - either a gdb
-             * start ('$') or a BMP remote packet start ('!').
-			 */
-			do {
-				/* Smells like bad code */
-				packet[0] = gdb_if_getchar();
-				if (packet[0] == '\x04')
-					return 1;
-			} while (packet[0] != '$' && packet[0] != REMOTE_SOM);
-#if PC_HOSTED == 0
-			if (packet[0] == REMOTE_SOM) {
-				/* This is probably a remote control packet - get and handle it */
-				offset = 0;
-				bool getting_remote_packet = true;
-				while (getting_remote_packet) {
-					/* Smells like bad code */
-					const char c = gdb_if_getchar();
-					switch (c) {
-					case REMOTE_SOM: /* Oh dear, packet restarts */
-						offset = 0;
-						break;
-
-					case REMOTE_EOM: /* Complete packet for processing */
-						packet[offset] = 0;
-						remote_packet_process(offset, packet);
-						getting_remote_packet = false;
-						break;
-
-					case '$': /* A 'real' gdb packet, best stop squatting now */
-						packet[0] = '$';
-						getting_remote_packet = false;
-						break;
-
-					default:
-						if (offset < size)
-							packet[offset++] = c;
-						else
-							/* Who knows what is going on...return to normality */
-							getting_remote_packet = false;
-						break;
-					}
-				}
-				/*
-				 * Reset the packet buffer start character to zero, because function
-				 * 'remote_packet_process()' above overwrites this buffer, and
-				 * an arbitrary character may have been placed there. If this is a '$'
-				 * character, this will cause this loop to be terminated, which is wrong.
-				 */
-				packet[0] = '\0';
-			}
-#endif
-		} while (packet[0] != '$');
-
-		offset = 0;
-		csum = 0;
-		char c = '\0';
-		/* Capture packet data into buffer */
-		while (c != '#') {
-			c = gdb_if_getchar();
-			if (c == '#')
-				break;
-			/* If we run out of buffer space, exit early */
-			if (offset == size)
-				break;
-
-			if (c == '$') { /* Restart capture */
-				offset = 0;
-				csum = 0;
-				continue;
-			}
-			if (c == '}') { /* Escaped char */
-				c = gdb_if_getchar();
-				csum += c + '}';
-				packet[offset++] = c ^ 0x20U;
-				continue;
-			}
-			csum += c;
-			packet[offset++] = c;
-		}
-		recv_csum[0] = gdb_if_getchar();
-		recv_csum[1] = gdb_if_getchar();
-		recv_csum[2] = 0;
-
-		/* Return packet if checksum matches */
-		if (csum == strtol(recv_csum, NULL, 16))
-			break;
-
-		/* Get here if checksum fails */
-		gdb_if_putchar('-', 1); /* Send nack */
-	}
-	gdb_if_putchar('+', 1); /* Send ack */
-	packet[offset] = '\0';
-
-#if PC_HOSTED == 1
-	DEBUG_GDB_WIRE("%s : ", __func__);
-	for (size_t j = 0; j < offset; j++) {
-		const char c = packet[j];
-		if (c >= ' ' && c < '\x7f')
-			DEBUG_GDB_WIRE("%c", c);
-		else
-			DEBUG_GDB_WIRE("\\x%02X", c);
-	}
-	DEBUG_GDB_WIRE("\n");
-#endif
-	return offset;
+	DEBUG_GDB("%s NoAckMode\n", enable ? "Enabling" : "Disabling");
+	noackmode = enable;
 }
 
-static void gdb_next_char(const char c, uint8_t *const csum)
+packet_state_e consume_remote_packet(char *const packet, const size_t size)
 {
-#if PC_HOSTED == 1
-	if (c >= 32 && c < 127)
-		DEBUG_GDB_WIRE("%c", c);
-	else
-		DEBUG_GDB_WIRE("\\x%02X", c);
+#if PC_HOSTED == 0
+	/* We got what looks like probably a remote control packet */
+	size_t offset = 0;
+	while (true) {
+		/* Consume bytes until we either have a complete remote control packet or have to leave this mode */
+		const char rx_char = gdb_if_getchar();
+
+		switch (rx_char) {
+		case '\x04':
+			packet[0] = rx_char;
+			/* EOT (end of transmission) - connection was closed */
+			return PACKET_IDLE;
+
+		case REMOTE_SOM:
+			/* Oh dear, restart remote packet capture */
+			offset = 0;
+			break;
+
+		case REMOTE_EOM:
+			/* Complete packet for processing */
+
+			/* Null terminate packet */
+			packet[offset] = '\0';
+			/* Handle packet */
+			remote_packet_process(offset, packet);
+
+			/* Restart packet capture */
+			packet[0] = '\0';
+			return PACKET_IDLE;
+
+		case GDB_PACKET_START:
+			/* A 'real' gdb packet, best stop squatting now */
+			return PACKET_GDB_CAPTURE;
+
+		default:
+			if (offset < size)
+				packet[offset++] = rx_char;
+			else {
+				packet[0] = '\0';
+				/* Buffer overflow, restart packet capture */
+				return PACKET_IDLE;
+			}
+		}
+	}
+#else
+	(void)packet;
+	(void)size;
+
+	/* Hosted builds ignore remote control packets */
+	return PACKET_IDLE;
 #endif
-	if (c == '$' || c == '#' || c == '}' || c == '*') {
-		gdb_if_putchar('}', 0);
-		gdb_if_putchar(c ^ 0x20U, 0);
-		*csum += '}' + (c ^ 0x20U);
+}
+
+size_t gdb_getpacket(char *const packet, const size_t size)
+{
+	packet_state_e state = PACKET_IDLE; /* State of the packet capture */
+
+	size_t offset = 0;
+	uint8_t checksum = 0;
+	uint8_t rx_checksum = 0;
+
+	while (true) {
+		const char rx_char = gdb_if_getchar();
+
+		switch (state) {
+		case PACKET_IDLE:
+			packet[0U] = rx_char;
+			if (rx_char == GDB_PACKET_START) {
+				/* Start of GDB packet */
+				state = PACKET_GDB_CAPTURE;
+				offset = 0;
+				checksum = 0;
+			}
+#if PC_HOSTED == 0
+			else if (rx_char == REMOTE_SOM) {
+				/* Start of BMP remote packet */
+				/*
+				 * Let consume_remote_packet handle this
+				 * returns PACKET_IDLE or PACKET_GDB_CAPTURE if it detects the start of a GDB packet
+				 */
+				state = consume_remote_packet(packet, size);
+				offset = 0;
+				checksum = 0;
+			}
+#endif
+			/* EOT (end of transmission) - connection was closed */
+			if (packet[0U] == '\x04') {
+				packet[1U] = 0;
+				return 1U;
+			}
+			break;
+
+		case PACKET_GDB_CAPTURE:
+			if (rx_char == GDB_PACKET_START) {
+				/* Restart GDB packet capture */
+				offset = 0;
+				checksum = 0;
+				break;
+			}
+			if (rx_char == GDB_PACKET_END) {
+				/* End of GDB packet */
+
+				/* Move to checksum capture */
+				state = PACKET_GDB_CHECKSUM_UPPER;
+				break;
+			}
+
+			/* Not start or end of packet, add to checksum */
+			checksum += rx_char;
+
+			/* Add to packet buffer, unless it is an escape char */
+			if (rx_char == GDB_PACKET_ESCAPE)
+				/* GDB Escaped char */
+				state = PACKET_GDB_ESCAPE;
+			else
+				/* Add to packet buffer */
+				packet[offset++] = rx_char;
+			break;
+
+		case PACKET_GDB_ESCAPE:
+			/* Add to checksum */
+			checksum += rx_char;
+
+			/* Resolve escaped char */
+			packet[offset++] = rx_char ^ GDB_PACKET_ESCAPE_XOR;
+
+			/* Return to normal packet capture */
+			state = PACKET_GDB_CAPTURE;
+			break;
+
+		case PACKET_GDB_CHECKSUM_UPPER:
+			/* Checksum upper nibble */
+			if (!noackmode)
+				/* As per GDB spec, checksums can be ignored in NoAckMode */
+				rx_checksum = unhex_digit(rx_char) << 4U; /* This also clears the lower nibble */
+			state = PACKET_GDB_CHECKSUM_LOWER;
+			break;
+
+		case PACKET_GDB_CHECKSUM_LOWER:
+			/* Checksum lower nibble */
+			if (!noackmode) {
+				/* As per GDB spec, checksums can be ignored in NoAckMode */
+				rx_checksum |= unhex_digit(rx_char); /* BITWISE OR lower nibble with upper nibble */
+
+				/* (N)Acknowledge packet */
+				gdb_if_putchar(rx_checksum == checksum ? GDB_PACKET_ACK : GDB_PACKET_NACK, 1U);
+			}
+
+			if (noackmode || rx_checksum == checksum) {
+				/* Null terminate packet */
+				packet[offset] = '\0';
+
+				/* Log packet for debugging */
+				DEBUG_GDB("%s: ", __func__);
+				for (size_t j = 0; j < offset; j++) {
+					const char value = packet[j];
+					if (value >= ' ' && value < '\x7f')
+						DEBUG_GDB("%c", value);
+					else
+						DEBUG_GDB("\\x%02X", (uint8_t)value);
+				}
+				DEBUG_GDB("\n");
+
+				/* Return packet captured size */
+				return offset;
+			}
+
+			/* Restart packet capture */
+			state = PACKET_IDLE;
+			break;
+
+		default:
+			/* Something is not right, restart packet capture */
+			state = PACKET_IDLE;
+			break;
+		}
+
+		if (offset >= size)
+			/* Buffer overflow, restart packet capture */
+			state = PACKET_IDLE;
+	}
+}
+
+static void gdb_next_char(const char value, uint8_t *const csum)
+{
+	if (value >= ' ' && value < '\x7f')
+		DEBUG_GDB("%c", value);
+	else
+		DEBUG_GDB("\\x%02X", (uint8_t)value);
+	if (value == GDB_PACKET_START || value == GDB_PACKET_END || value == GDB_PACKET_ESCAPE ||
+		value == GDB_PACKET_RUNLENGTH_START) {
+		gdb_if_putchar(GDB_PACKET_ESCAPE, 0);
+		gdb_if_putchar((char)((uint8_t)value ^ GDB_PACKET_ESCAPE_XOR), 0);
+		*csum += GDB_PACKET_ESCAPE + ((uint8_t)value ^ GDB_PACKET_ESCAPE_XOR);
 	} else {
-		gdb_if_putchar(c, 0);
-		*csum += c;
+		gdb_if_putchar(value, 0);
+		*csum += value;
 	}
 }
 
@@ -172,21 +267,21 @@ void gdb_putpacket2(const char *const packet1, const size_t size1, const char *c
 	size_t tries = 0;
 
 	do {
-		DEBUG_GDB_WIRE("%s: ", __func__);
+		DEBUG_GDB("%s: ", __func__);
 		uint8_t csum = 0;
-		gdb_if_putchar('$', 0);
+		gdb_if_putchar(GDB_PACKET_START, 0);
 
 		for (size_t i = 0; i < size1; ++i)
 			gdb_next_char(packet1[i], &csum);
 		for (size_t i = 0; i < size2; ++i)
 			gdb_next_char(packet2[i], &csum);
 
-		gdb_if_putchar('#', 0);
+		gdb_if_putchar(GDB_PACKET_END, 0);
 		snprintf(xmit_csum, sizeof(xmit_csum), "%02X", csum);
 		gdb_if_putchar(xmit_csum[0], 0);
 		gdb_if_putchar(xmit_csum[1], 1);
-		DEBUG_GDB_WIRE("\n");
-	} while (gdb_if_getchar_to(2000) != '+' && tries++ < 3U);
+		DEBUG_GDB("\n");
+	} while (!noackmode && gdb_if_getchar_to(2000) != GDB_PACKET_ACK && tries++ < 3U);
 }
 
 void gdb_putpacket(const char *const packet, const size_t size)
@@ -195,33 +290,33 @@ void gdb_putpacket(const char *const packet, const size_t size)
 	size_t tries = 0;
 
 	do {
-		DEBUG_GDB_WIRE("%s: ", __func__);
+		DEBUG_GDB("%s: ", __func__);
 		uint8_t csum = 0;
-		gdb_if_putchar('$', 0);
+		gdb_if_putchar(GDB_PACKET_START, 0);
 		for (size_t i = 0; i < size; ++i)
 			gdb_next_char(packet[i], &csum);
-		gdb_if_putchar('#', 0);
+		gdb_if_putchar(GDB_PACKET_END, 0);
 		snprintf(xmit_csum, sizeof(xmit_csum), "%02X", csum);
 		gdb_if_putchar(xmit_csum[0], 0);
 		gdb_if_putchar(xmit_csum[1], 1);
-		DEBUG_GDB_WIRE("\n");
-	} while (gdb_if_getchar_to(2000) != '+' && tries++ < 3U);
+		DEBUG_GDB("\n");
+	} while (!noackmode && gdb_if_getchar_to(2000) != GDB_PACKET_ACK && tries++ < 3U);
 }
 
 void gdb_put_notification(const char *const packet, const size_t size)
 {
 	char xmit_csum[3];
 
-	DEBUG_GDB_WIRE("%s: ", __func__);
+	DEBUG_GDB("%s: ", __func__);
 	uint8_t csum = 0;
-	gdb_if_putchar('%', 0);
+	gdb_if_putchar(GDB_PACKET_NOTIFICATION_START, 0);
 	for (size_t i = 0; i < size; ++i)
 		gdb_next_char(packet[i], &csum);
-	gdb_if_putchar('#', 0);
+	gdb_if_putchar(GDB_PACKET_END, 0);
 	snprintf(xmit_csum, sizeof(xmit_csum), "%02X", csum);
 	gdb_if_putchar(xmit_csum[0], 0);
 	gdb_if_putchar(xmit_csum[1], 1);
-	DEBUG_GDB_WIRE("\n");
+	DEBUG_GDB("\n");
 }
 
 void gdb_putpacket_f(const char *const fmt, ...)

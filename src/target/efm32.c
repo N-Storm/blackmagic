@@ -43,7 +43,7 @@
 #include "adiv5.h"
 
 #define SRAM_BASE        0x20000000U
-#define STUB_BUFFER_BASE ALIGN(SRAM_BASE + sizeof(efm32_flash_write_stub), 4)
+#define STUB_BUFFER_BASE ALIGN(SRAM_BASE + sizeof(efm32_flash_write_stub), 4U)
 
 static bool efm32_flash_erase(target_flash_s *f, target_addr_t addr, size_t len);
 static bool efm32_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len);
@@ -475,16 +475,15 @@ static uint16_t efm32_read_radio_part_number(target_s *t, uint8_t di_version)
 /* Reads the EFM32 Misc. Chip definitions */
 static efm32_v2_di_miscchip_s efm32_v2_read_miscchip(target_s *t, uint8_t di_version)
 {
-	uint32_t meminfo;
-	efm32_v2_di_miscchip_s miscchip;
-	memset(&miscchip, 0, sizeof(efm32_v2_di_miscchip_s) / sizeof(char));
+	efm32_v2_di_miscchip_s miscchip = {0};
 
 	switch (di_version) {
-	case 2:
-		meminfo = target_mem_read32(t, EFM32_V2_DI_MEMINFO);
+	case 2: {
+		const uint32_t meminfo = target_mem_read32(t, EFM32_V2_DI_MEMINFO);
 		miscchip.pincount = (meminfo >> 16U) & 0xffU;
 		miscchip.pkgtype = (meminfo >> 8U) & 0xffU;
 		miscchip.tempgrade = (meminfo >> 0U) & 0xffU;
+	}
 	}
 
 	return miscchip;
@@ -498,7 +497,7 @@ static void efm32_add_flash(target_s *t, target_addr_t addr, size_t length, size
 {
 	target_flash_s *f = calloc(1, sizeof(*f));
 	if (!f) { /* calloc failed: heap exhaustion */
-		DEBUG_WARN("calloc: failed in %s\n", __func__);
+		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return;
 	}
 
@@ -567,6 +566,10 @@ bool efm32_probe(target_s *t)
 	uint32_t flash_page_size = device->flash_page_size;
 
 	efm32_priv_s *priv_storage = calloc(1, sizeof(*priv_storage));
+	if (!priv_storage) { /* calloc failed: heap exhaustion */
+		DEBUG_ERROR("calloc: failed in %s\n", __func__);
+		return false;
+	}
 	t->target_storage = (void *)priv_storage;
 
 	priv_storage->di_version = di_version;
@@ -959,7 +962,7 @@ bool efm32_aap_probe(adiv5_access_port_s *ap)
 	efm32_aap_priv_s *priv_storage = calloc(1, sizeof(*priv_storage));
 	sprintf(priv_storage->aap_driver_string, "EFM32 Authentication Access Port rev.%hu", aap_revision);
 	t->driver = priv_storage->aap_driver_string;
-	t->regs_size = 4;
+	t->regs_size = 0;
 
 	return true;
 }

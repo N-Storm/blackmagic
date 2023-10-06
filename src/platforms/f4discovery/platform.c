@@ -21,11 +21,12 @@
 /* This file implements the platform specific functions for the F4 Discovery implementation. */
 
 #include "general.h"
+#include "platform.h"
 #include "usb.h"
 #include "aux_serial.h"
 #include "morse.h"
+#include "exception.h"
 
-#include <setjmp.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/cm3/nvic.h>
@@ -38,6 +39,11 @@
 
 jmp_buf fatal_error_jmpbuf;
 extern uint32_t _ebss; // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+
+int platform_hwversion(void)
+{
+	return 0;
+}
 
 void platform_init(void)
 {
@@ -133,13 +139,38 @@ bool platform_target_get_power(void)
 	return !gpio_get(PWR_BR_PORT, PWR_BR_PIN);
 }
 
-void platform_target_set_power(const bool power)
+bool platform_target_set_power(const bool power)
 {
 	gpio_set_val(PWR_BR_PORT, PWR_BR_PIN, !power);
+	return true;
 }
 #endif
 
 void platform_target_clk_output_enable(bool enable)
 {
 	(void)enable;
+}
+
+bool platform_spi_init(const spi_bus_e bus)
+{
+	(void)bus;
+	return false;
+}
+
+bool platform_spi_deinit(const spi_bus_e bus)
+{
+	(void)bus;
+	return false;
+}
+
+bool platform_spi_chip_select(const uint8_t device_select)
+{
+	(void)device_select;
+	return false;
+}
+
+uint8_t platform_spi_xfer(const spi_bus_e bus, const uint8_t value)
+{
+	(void)bus;
+	return value;
 }

@@ -28,8 +28,6 @@
 #include "timing_stm32.h"
 #include "version.h"
 
-#include <setjmp.h>
-
 #define PLATFORM_HAS_TRACESWO
 #define PLATFORM_IDENT "(Carbon)"
 
@@ -146,32 +144,5 @@
 	{                                                   \
 		gpio_set_val(LED_PORT_ERROR, LED_ERROR, state); \
 	}
-
-static inline int platform_hwversion(void)
-{
-	return 0;
-}
-
-/* Use newlib provided integer-only stdio functions */
-
-#ifdef sscanf
-#undef sscanf
-#endif
-#define sscanf siscanf
-
-#ifdef sprintf
-#undef sprintf
-#endif
-#define sprintf siprintf
-
-#ifdef vasprintf
-#undef vasprintf
-#endif
-#define vasprintf vasiprintf
-
-#ifdef snprintf
-#undef snprintf
-#endif
-#define snprintf sniprintf
 
 #endif /* PLATFORMS_96B_CARBON_PLATFORM_H */

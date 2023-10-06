@@ -22,12 +22,15 @@
 #define INCLUDE_GENERAL_H
 
 #ifndef _GNU_SOURCE
+// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
 #define _GNU_SOURCE
 #endif
 #ifndef _DEFAULT_SOURCE
+// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
 #define _DEFAULT_SOURCE
 #endif
 #if !defined(__USE_MINGW_ANSI_STDIO)
+// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
 #define __USE_MINGW_ANSI_STDIO 1
 #endif
 #include <stdint.h>
@@ -39,34 +42,24 @@
 #include <inttypes.h>
 #include <sys/types.h>
 
-#include "platform.h"
+#include "maths_utils.h"
+#include "timing.h"
 #include "platform_support.h"
+#include "align.h"
 
 #ifndef ARRAY_LENGTH
-#define ARRAY_LENGTH(arr) (sizeof(arr) / sizeof(arr[0]))
+#define ARRAY_LENGTH(arr) (sizeof(arr) / sizeof((arr)[0]))
 #endif
-
-extern uint32_t delay_cnt;
-
-#define BMP_DEBUG_NONE   0U
-#define BMP_DEBUG_INFO   (1U << 0U)
-#define BMP_DEBUG_GDB    (1U << 1U)
-#define BMP_DEBUG_TARGET (1U << 2U)
-#define BMP_DEBUG_PROBE  (1U << 3U)
-#define BMP_DEBUG_WIRE   (1U << 4U)
-#define BMP_DEBUG_MAX    (1U << 5U)
-#define BMP_DEBUG_STDOUT (1U << 15U)
 
 #define FREQ_FIXED 0xffffffffU
 
 #if PC_HOSTED == 0
 /*
  * XXX: This entire system needs replacing with something better thought out
- * XXX: This has no error diagnostic level.
  *
- * When built as firmware, if the target supports debugging, DEBUG_WARN and DEBUG_INFO
- * get defined to a macro that turns them into printf() calls. The rest of the levels
- * turn into no-ops.
+ * When built as firmware, if the target supports debugging, DEBUG_ERROR, DEBUG_WARN and
+ * DEBUG_INFO get defined to a macro that turns them into printf() calls. The rest of the
+ * levels turn into no-ops.
  *
  * When built as BMDA, the debug macros all turn into various kinds of console-printing
  * function, w/ gating for diagnostics other than warnings and info.
@@ -84,113 +77,37 @@ extern uint32_t delay_cnt;
 	do {                \
 	} while (false)
 #if defined(ENABLE_DEBUG)
-#define DEBUG_WARN(...) PLATFORM_PRINTF(__VA_ARGS__)
-#define DEBUG_INFO(...) PLATFORM_PRINTF(__VA_ARGS__)
+#define DEBUG_ERROR(...) PLATFORM_PRINTF(__VA_ARGS__)
+#define DEBUG_WARN(...)  PLATFORM_PRINTF(__VA_ARGS__)
+#define DEBUG_INFO(...)  PLATFORM_PRINTF(__VA_ARGS__)
 #else
-#define DEBUG_WARN(...) PRINT_NOOP(__VA_ARGS__)
-#define DEBUG_INFO(...) PRINT_NOOP(__VA_ARGS__)
+#define DEBUG_ERROR(...) PRINT_NOOP(__VA_ARGS__)
+#define DEBUG_WARN(...)  PRINT_NOOP(__VA_ARGS__)
+#define DEBUG_INFO(...)  PRINT_NOOP(__VA_ARGS__)
 #endif
-#define DEBUG_GDB(...)      PRINT_NOOP(__VA_ARGS__)
-#define DEBUG_TARGET(...)   PRINT_NOOP(__VA_ARGS__)
-#define DEBUG_PROBE(...)    PRINT_NOOP(__VA_ARGS__)
-#define DEBUG_WIRE(...)     PRINT_NOOP(__VA_ARGS__)
-#define DEBUG_GDB_WIRE(...) PRINT_NOOP(__VA_ARGS__)
+#define DEBUG_GDB(...)    PRINT_NOOP(__VA_ARGS__)
+#define DEBUG_TARGET(...) PRINT_NOOP(__VA_ARGS__)
+#define DEBUG_PROTO(...)  PRINT_NOOP(__VA_ARGS__)
+#define DEBUG_PROBE(...)  PRINT_NOOP(__VA_ARGS__)
+#define DEBUG_WIRE(...)   PRINT_NOOP(__VA_ARGS__)
 
 void debug_serial_send_stdout(const uint8_t *data, size_t len);
 #else
-#include <stdarg.h>
-extern int cl_debuglevel;
+#include "debug.h"
 
-static inline void DEBUG_WARN(const char *format, ...)
-{
-	va_list ap;
-	va_start(ap, format);
-	vfprintf(stderr, format, ap);
-	va_end(ap);
-	return;
-}
-
-static inline void DEBUG_INFO(const char *format, ...)
-{
-	if (~cl_debuglevel & BMP_DEBUG_INFO)
-		return;
-	va_list ap;
-	va_start(ap, format);
-	if (cl_debuglevel & BMP_DEBUG_STDOUT)
-		vfprintf(stdout, format, ap);
-	else
-		vfprintf(stderr, format, ap);
-	va_end(ap);
-	return;
-}
-
-static inline void DEBUG_GDB(const char *format, ...)
-{
-	if (~cl_debuglevel & BMP_DEBUG_GDB)
-		return;
-	va_list ap;
-	va_start(ap, format);
-	vfprintf(stderr, format, ap);
-	va_end(ap);
-	return;
-}
-
-static inline void DEBUG_GDB_WIRE(const char *format, ...)
-{
-	if ((cl_debuglevel & (BMP_DEBUG_GDB | BMP_DEBUG_WIRE)) != (BMP_DEBUG_GDB | BMP_DEBUG_WIRE))
-		return;
-	va_list ap;
-	va_start(ap, format);
-	vfprintf(stderr, format, ap);
-	va_end(ap);
-	return;
-}
-
-static inline void DEBUG_TARGET(const char *format, ...)
-{
-	if (~cl_debuglevel & BMP_DEBUG_TARGET)
-		return;
-	va_list ap;
-	va_start(ap, format);
-	vfprintf(stderr, format, ap);
-	va_end(ap);
-	return;
-}
-
-static inline void DEBUG_PROBE(const char *format, ...)
-{
-	if (~cl_debuglevel & BMP_DEBUG_PROBE)
-		return;
-	va_list ap;
-	va_start(ap, format);
-	vfprintf(stderr, format, ap);
-	va_end(ap);
-	return;
-}
-
-static inline void DEBUG_WIRE(const char *format, ...)
-{
-	if (~cl_debuglevel & BMP_DEBUG_WIRE)
-		return;
-	va_list ap;
-	va_start(ap, format);
-	vfprintf(stderr, format, ap);
-	va_end(ap);
-	return;
-}
+#define DEBUG_ERROR(...)  debug_error(__VA_ARGS__)
+#define DEBUG_WARN(...)   debug_warning(__VA_ARGS__)
+#define DEBUG_INFO(...)   debug_info(__VA_ARGS__)
+#define DEBUG_GDB(...)    debug_gdb(__VA_ARGS__)
+#define DEBUG_TARGET(...) debug_target(__VA_ARGS__)
+#define DEBUG_PROTO(...)  debug_protocol(__VA_ARGS__)
+#define DEBUG_PROBE(...)  debug_probe(__VA_ARGS__)
+#define DEBUG_WIRE(...)   debug_wire(__VA_ARGS__)
 #endif
 
-#define ALIGN(x, n) (((x) + (n)-1) & ~((n)-1))
 #undef MIN
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #undef MAX
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
-
-#if !defined(SYSTICKHZ)
-#define SYSTICKHZ 100U
-#endif
-
-#define SYSTICKMS (1000U / SYSTICKHZ)
-#define MORSECNT  ((SYSTICKHZ / 10U) - 1U)
 
 #endif /* INCLUDE_GENERAL_H */

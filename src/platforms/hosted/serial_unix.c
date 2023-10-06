@@ -37,13 +37,13 @@ static int fd; /* File descriptor for connection to GDB remote */
 /* A nice routine grabbed from
  * https://stackoverflow.com/questions/6947413/how-to-open-read-and-write-from-serial-port-in-c
  */
-static int set_interface_attribs(void)
+static bool set_interface_attribs(void)
 {
 	struct termios tty;
 	memset(&tty, 0, sizeof tty);
 	if (tcgetattr(fd, &tty) != 0) {
-		DEBUG_WARN("error %d from tcgetattr", errno);
-		return -1;
+		DEBUG_ERROR("error %d from tcgetattr", errno);
+		return false;
 	}
 
 	tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8-bit chars
@@ -65,21 +65,21 @@ static int set_interface_attribs(void)
 	tty.c_cflag &= ~CRTSCTS;
 #endif
 	if (tcsetattr(fd, TCSANOW, &tty) != 0) {
-		DEBUG_WARN("error %d from tcsetattr", errno);
-		return -1;
+		DEBUG_ERROR("error %d from tcsetattr", errno);
+		return false;
 	}
-	return 0;
+	return true;
 }
 
 #ifdef __APPLE__
-int serial_open(const bmda_cli_options_s *cl_opts, const char *serial)
+bool serial_open(const bmda_cli_options_s *cl_opts, const char *serial)
 {
 	char name[4096];
 	if (!cl_opts->opt_device) {
 		/* Try to find some BMP if0*/
 		if (!serial) {
 			DEBUG_WARN("No serial device found\n");
-			return -1;
+			return false;
 		} else {
 			sprintf(name, "/dev/cu.usbmodem%s1", serial);
 		}
@@ -88,8 +88,8 @@ int serial_open(const bmda_cli_options_s *cl_opts, const char *serial)
 	}
 	fd = open(name, O_RDWR | O_SYNC | O_NOCTTY);
 	if (fd < 0) {
-		DEBUG_WARN("Couldn't open serial port %s\n", name);
-		return -1;
+		DEBUG_ERROR("Couldn't open serial port %s\n", name);
+		return false;
 	}
 	/* BMP only offers an USB-Serial connection with no real serial
      * line in between. No need for baudrate or parity.!
@@ -128,7 +128,7 @@ static bool match_serial(const char *const device, const char *const serial)
 	return contains_substring(begin, end - begin, serial);
 }
 
-int serial_open(const bmda_cli_options_s *const cl_opts, const char *const serial)
+bool serial_open(const bmda_cli_options_s *const cl_opts, const char *const serial)
 {
 	char name[4096];
 	if (!cl_opts->opt_device) {
@@ -136,7 +136,7 @@ int serial_open(const bmda_cli_options_s *const cl_opts, const char *const seria
 		DIR *dir = opendir(DEVICE_BY_ID);
 		if (!dir) {
 			DEBUG_WARN("No serial devices found\n");
-			return -1;
+			return false;
 		}
 		size_t matches = 0;
 		size_t total = 0;
@@ -159,8 +159,8 @@ int serial_open(const bmda_cli_options_s *const cl_opts, const char *const seria
 		}
 		closedir(dir);
 		if (total == 0) {
-			DEBUG_WARN("No Black Magic Probes found\n");
-			return -1;
+			DEBUG_ERROR("No Black Magic Probes found\n");
+			return false;
 		}
 		if (matches != 1) {
 			DEBUG_INFO("Available Probes:\n");
@@ -175,12 +175,12 @@ int serial_open(const bmda_cli_options_s *const cl_opts, const char *const seria
 				}
 				closedir(dir);
 				if (serial)
-					DEBUG_WARN("No match for (partial) serial number \"%s\"\n", serial);
+					DEBUG_ERROR("No match for (partial) serial number \"%s\"\n", serial);
 				else
 					DEBUG_WARN("Select probe with `-s <(Partial) Serial Number>`\n");
 			} else
-				DEBUG_WARN("Could not scan %s: %s\n", name, strerror(errno));
-			return -1;
+				DEBUG_ERROR("Could not scan %s: %s\n", name, strerror(errno));
+			return false;
 		}
 	} else {
 		const size_t path_len = strlen(cl_opts->opt_device);
@@ -190,8 +190,8 @@ int serial_open(const bmda_cli_options_s *const cl_opts, const char *const seria
 	}
 	fd = open(name, O_RDWR | O_SYNC | O_NOCTTY);
 	if (fd < 0) {
-		DEBUG_WARN("Couldn't open serial port %s\n", name);
-		return -1;
+		DEBUG_ERROR("Couldn't open serial port %s\n", name);
+		return false;
 	}
 	/* BMP only offers an USB-Serial connection with no real serial
 	 * line in between. No need for baudrate or parity.!
@@ -205,21 +205,21 @@ void serial_close(void)
 	close(fd);
 }
 
-int platform_buffer_write(const uint8_t *data, int size)
+bool platform_buffer_write(const void *const data, const size_t length)
 {
-	DEBUG_WIRE("%s\n", data);
-	const int written = write(fd, data, size);
+	DEBUG_WIRE("%s\n", (const char *)data);
+	const ssize_t written = write(fd, data, length);
 	if (written < 0) {
 		const int error = errno;
-		DEBUG_WARN("Failed to write (%d): %s\n", errno, strerror(error));
+		DEBUG_ERROR("Failed to write (%d): %s\n", errno, strerror(error));
 		exit(-2);
 	}
-	return size;
+	return (size_t)written == length;
 }
 
-/* XXX: The size parameter should be size_t and we should either return size_t or bool */
+/* XXX: We should either return size_t or bool */
 /* XXX: This needs documenting that it can abort the program with exit(), or the error handling fixed */
-int platform_buffer_read(uint8_t *data, int maxsize)
+int platform_buffer_read(void *const data, size_t length)
 {
 	char response = 0;
 	timeval_s timeout = {
@@ -235,46 +235,47 @@ int platform_buffer_read(uint8_t *data, int maxsize)
 
 		const int result = select(FD_SETSIZE, &select_set, NULL, NULL, &timeout);
 		if (result < 0) {
-			DEBUG_WARN("Failed on select\n");
+			DEBUG_ERROR("Failed on select\n");
 			return -3;
 		}
 		if (result == 0) {
-			DEBUG_WARN("Timeout while waiting for BMP response\n");
+			DEBUG_ERROR("Timeout while waiting for BMP response\n");
 			return -4;
 		}
 		if (read(fd, &response, 1) != 1) {
 			const int error = errno;
-			DEBUG_WARN("Failed to read response (%d): %s\n", error, strerror(error));
+			DEBUG_ERROR("Failed to read response (%d): %s\n", error, strerror(error));
 			return -6;
 		}
 	}
 	/* Now collect the response */
-	for (size_t offset = 0; offset < (size_t)maxsize;) {
+	for (size_t offset = 0; offset < length;) {
 		fd_set select_set;
 		FD_ZERO(&select_set);
 		FD_SET(fd, &select_set);
 		const int result = select(FD_SETSIZE, &select_set, NULL, NULL, &timeout);
 		if (result < 0) {
-			DEBUG_WARN("Failed on select\n");
+			DEBUG_ERROR("Failed on select\n");
 			exit(-4);
 		}
 		if (result == 0) {
-			DEBUG_WARN("Timeout on read\n");
+			DEBUG_ERROR("Timeout on read\n");
 			return -5;
 		}
 		if (read(fd, data + offset, 1) != 1) {
 			const int error = errno;
-			DEBUG_WARN("Failed to read response (%d): %s\n", error, strerror(error));
+			DEBUG_ERROR("Failed to read response (%d): %s\n", error, strerror(error));
 			return -6;
 		}
-		if (data[offset] == REMOTE_EOM) {
-			data[offset] = 0;
-			DEBUG_WIRE("       %s\n", data);
+		char *const buffer = (char *)data;
+		if (buffer[offset] == REMOTE_EOM) {
+			buffer[offset] = 0;
+			DEBUG_WIRE("       %s\n", buffer);
 			return offset;
 		}
 		++offset;
 	}
 
-	DEBUG_WARN("Failed to read\n");
+	DEBUG_ERROR("Failed to read\n");
 	return -6;
 }

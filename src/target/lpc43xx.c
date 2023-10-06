@@ -26,6 +26,7 @@
 #include "target_internal.h"
 #include "cortexm.h"
 #include "lpc_common.h"
+#include "spi.h"
 #include "sfdp.h"
 
 #define LPC43xx_CHIPID                0x40043200U
@@ -137,10 +138,20 @@
 #define LPC43xx_EMC_DYN_CONFIG_MAPPING_8    0x00000000U
 #define LPC43xx_EMC_DYN_CONFIG_MAPPING_16   0x00001000U
 
+#define LPC43xx_RGU_BASE  0x40053000U
+#define LPC43xx_RGU_CTRL0 (LPC43xx_RGU_BASE + 0x100U)
+#define LPC43xx_RGU_CTRL1 (LPC43xx_RGU_BASE + 0x104U)
+
 /* Cortex-M4 Application Interrupt and Reset Control Register */
 #define LPC43xx_AIRCR 0xe000ed0cU
 /* Magic value reset key */
 #define LPC43xx_AIRCR_RESET 0x05fa0004U
+
+#define LPC43xx_MPU_CTRL 0xe000ed94U
+#define LPC43xx_M4MEMMAP 0x40043100U
+#define LPC43xx_ETB_CFG  0x40043128U
+
+#define LPC43xx_M4MEMMAP_BOOT_ROM 0x10400000U
 
 #define LPC43xx_WDT_MODE       0x40080000U
 #define LPC43xx_WDT_CNT        0x40080004U
@@ -179,9 +190,10 @@
 #define LPC43x0_SPIFI_STAT (LPC43x0_SPIFI_BASE + 0x01cU)
 
 #define LPC43x0_SPIFI_DATA_LENGTH(x)       ((x)&0x00003fffU)
+#define LPC43x0_SPIFI_DATA_SHIFT           15U
 #define LPC43x0_SPIFI_DATA_IN              (0U << 15U)
 #define LPC43x0_SPIFI_DATA_OUT             (1U << 15U)
-#define LPC43x0_SPIFI_INTER_LENGTH(x)      (((x)&7U) << 16U)
+#define LPC43x0_SPIFI_DUMMY_SHIFT          16U
 #define LPC43x0_SPIFI_CMD_SERIAL           (0U << 19U)
 #define LPC43x0_SPIFI_CMD_QUAD_OPCODE      (1U << 19U)
 #define LPC43x0_SPIFI_CMD_SERIAL_OPCODE    (2U << 19U)
@@ -192,7 +204,8 @@
 #define LPC43x0_SPIFI_FRAME_OPCODE_3B_ADDR (4U << 21U)
 #define LPC43x0_SPIFI_FRAME_OPCODE_4B_ADDR (5U << 21U)
 #define LPC43x0_SPIFI_FRAME_MASK           0x00e00000U
-#define LPC43x0_SPIFI_OPCODE(x)            ((x) << 24U)
+#define LPC43x0_SPIFI_FRAME_SHIFT          21U
+#define LPC43x0_SPIFI_OPCODE_SHIFT         24U
 #define LPC43x0_SPIFI_STATUS_CMD_ACTIVE    (1U << 1U)
 #define LPC43x0_SPIFI_STATUS_RESET         (1U << 4U)
 #define LPC43x0_SPIFI_STATUS_INTRQ         (1U << 5U)
@@ -214,33 +227,6 @@
 #define LPC43xx_GPIO_PORT0_SET (LPC43xx_GPIO_BASE + 0x2200U)
 #define LPC43xx_GPIO_PORT0_CLR (LPC43xx_GPIO_BASE + 0x2280U)
 
-#define SPI_FLASH_CMD_WRITE_ENABLE                                                              \
-	(LPC43x0_SPIFI_CMD_SERIAL | LPC43x0_SPIFI_FRAME_OPCODE_ONLY | LPC43x0_SPIFI_OPCODE(0x06U) | \
-		LPC43x0_SPIFI_INTER_LENGTH(0))
-#define SPI_FLASH_CMD_PAGE_PROGRAM                                                                \
-	(LPC43x0_SPIFI_CMD_SERIAL | LPC43x0_SPIFI_FRAME_OPCODE_3B_ADDR | LPC43x0_SPIFI_OPCODE(0x02) | \
-		LPC43x0_SPIFI_DATA_OUT | LPC43x0_SPIFI_INTER_LENGTH(0))
-#define SPI_FLASH_CMD_SECTOR_ERASE \
-	(LPC43x0_SPIFI_CMD_SERIAL | LPC43x0_SPIFI_FRAME_OPCODE_3B_ADDR | LPC43x0_SPIFI_INTER_LENGTH(0))
-#define SPI_FLASH_CMD_CHIP_ERASE                                                                \
-	(LPC43x0_SPIFI_CMD_SERIAL | LPC43x0_SPIFI_FRAME_OPCODE_ONLY | LPC43x0_SPIFI_OPCODE(0x60U) | \
-		LPC43x0_SPIFI_INTER_LENGTH(0))
-#define SPI_FLASH_CMD_READ_STATUS                                                               \
-	(LPC43x0_SPIFI_CMD_SERIAL | LPC43x0_SPIFI_FRAME_OPCODE_ONLY | LPC43x0_SPIFI_OPCODE(0x05U) | \
-		LPC43x0_SPIFI_DATA_IN | LPC43x0_SPIFI_INTER_LENGTH(0))
-#define SPI_FLASH_CMD_READ_JEDEC_ID                                                             \
-	(LPC43x0_SPIFI_CMD_SERIAL | LPC43x0_SPIFI_FRAME_OPCODE_ONLY | LPC43x0_SPIFI_OPCODE(0x9fU) | \
-		LPC43x0_SPIFI_DATA_IN | LPC43x0_SPIFI_INTER_LENGTH(0))
-#define SPI_FLASH_CMD_READ_SFDP                                                                    \
-	(LPC43x0_SPIFI_CMD_SERIAL | LPC43x0_SPIFI_FRAME_OPCODE_3B_ADDR | LPC43x0_SPIFI_OPCODE(0x5aU) | \
-		LPC43x0_SPIFI_DATA_IN | LPC43x0_SPIFI_INTER_LENGTH(1))
-#define SPI_FLASH_CMD_WAKE_UP                                                                   \
-	(LPC43x0_SPIFI_CMD_SERIAL | LPC43x0_SPIFI_FRAME_OPCODE_ONLY | LPC43x0_SPIFI_OPCODE(0xabU) | \
-		LPC43x0_SPIFI_INTER_LENGTH(0))
-
-#define SPI_FLASH_STATUS_BUSY          0x01U
-#define SPI_FLASH_STATUS_WRITE_ENABLED 0x02U
-
 typedef enum lpc43x0_flash_interface {
 	FLASH_NONE,
 	FLASH_SPIFI,
@@ -256,14 +242,16 @@ typedef struct lpc43xx_partid {
 } lpc43xx_partid_s;
 
 typedef struct lpc43xx_spi_flash {
-	target_flash_s flash_low;
-	target_flash_s flash_high;
+	spi_flash_s flash_low;
+	spi_flash_s *flash_high;
 	uint32_t page_size;
 	uint8_t sector_erase_opcode;
 } lpc43xx_spi_flash_s;
 
 typedef struct lpc43xx_priv {
 	uint8_t flash_banks;
+	uint32_t mpu_ctrl;
+	uint32_t shadow_map;
 } lpc43xx_priv_s;
 
 typedef struct lpc43x0_priv {
@@ -283,17 +271,15 @@ static bool lpc43xx_cmd_reset(target_s *t, int argc, const char **argv);
 static bool lpc43xx_cmd_mkboot(target_s *t, int argc, const char **argv);
 
 static lpc43xx_partid_s lpc43x0_spi_read_partid(target_s *t);
-static bool lpc43x0_attach(target_s *t);
-static void lpc43x0_detach(target_s *t);
+static bool lpc43x0_attach(target_s *target);
+static void lpc43x0_detach(target_s *target);
 static bool lpc43x0_enter_flash_mode(target_s *t);
 static bool lpc43x0_exit_flash_mode(target_s *t);
 static void lpc43x0_spi_abort(target_s *t);
-static void lpc43x0_spi_read(target_s *t, uint32_t command, target_addr_t address, void *buffer, size_t length);
-static void lpc43x0_spi_write(target_s *t, uint32_t command, target_addr_t address, const void *buffer, size_t length);
-static void lpc43x0_spi_run_command(target_s *t, uint32_t command);
-static bool lpc43x0_spi_mass_erase(target_s *t);
-static bool lpc43x0_spi_flash_erase(target_flash_s *f, target_addr_t addr, size_t length);
-static bool lpc43x0_spi_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t length);
+static void lpc43x0_spi_read(target_s *target, uint16_t command, target_addr_t address, void *buffer, size_t length);
+static void lpc43x0_spi_write(
+	target_s *target, uint16_t command, target_addr_t address, const void *buffer, size_t length);
+static void lpc43x0_spi_run_command(target_s *target, uint16_t command, target_addr_t address);
 
 static bool lpc43xx_iap_init(target_flash_s *flash);
 static lpc43xx_partid_s lpc43xx_iap_read_partid(target_s *t);
@@ -309,52 +295,53 @@ const command_s lpc43xx_cmd_list[] = {
 	{NULL, NULL, NULL},
 };
 
-static void lpc43xx_add_iap_flash(
-	target_s *t, uint32_t iap_entry, uint8_t bank, uint8_t base_sector, uint32_t addr, size_t len, size_t erasesize)
+static void lpc43xx_add_iap_flash(target_s *target, uint32_t iap_entry, uint8_t bank, uint8_t base_sector,
+	uint32_t addr, size_t len, size_t erasesize)
 {
-	lpc_flash_s *lf = lpc_add_flash(t, addr, len);
-	lf->f.erase = lpc43xx_iap_flash_erase;
-	lf->f.blocksize = erasesize;
-	lf->f.writesize = IAP_PGM_CHUNKSIZE;
-	lf->bank = bank;
-	lf->base_sector = base_sector;
-	lf->iap_entry = iap_entry;
-	lf->iap_ram = IAP_RAM_BASE;
-	lf->iap_msp = IAP_RAM_BASE + IAP_RAM_SIZE;
-	lf->wdt_kick = lpc43xx_wdt_kick;
+	lpc_flash_s *flash = lpc_add_flash(target, addr, len, IAP_PGM_CHUNKSIZE);
+	flash->f.blocksize = erasesize;
+	flash->f.erase = lpc43xx_iap_flash_erase;
+	flash->bank = bank;
+	flash->base_sector = base_sector;
+	flash->iap_entry = iap_entry;
+	flash->iap_ram = IAP_RAM_BASE;
+	flash->iap_msp = IAP_RAM_BASE + IAP_RAM_SIZE;
+	flash->wdt_kick = lpc43xx_wdt_kick;
 }
 
 static void lpc43xx_detect(target_s *const t, const lpc43xx_partid_s part_id)
 {
 	lpc43xx_priv_s *const priv = (lpc43xx_priv_s *)t->target_storage;
 	const uint32_t iap_entry = target_mem_read32(t, IAP_ENTRYPOINT_LOCATION);
+	uint32_t sram_ahb_size = 0;
 
 	switch (part_id.part) {
 	case LPC43xx_PARTID_LPC4312:
 		t->driver = "LPC4312/3";
-		target_add_ram(t, LPC43xx_AHB_SRAM_BASE, LPC43x2_AHB_SRAM_SIZE);
+		sram_ahb_size = LPC43x2_AHB_SRAM_SIZE;
 		break;
 	case LPC43xx_PARTID_LPC4315:
 		t->driver = "LPC4315/7";
-		target_add_ram(t, LPC43xx_AHB_SRAM_BASE, LPC43x5_AHB_SRAM_SIZE);
+		sram_ahb_size = LPC43x5_AHB_SRAM_SIZE;
 		break;
 	case LPC43xx_PARTID_LPC4322:
 		t->driver = "LPC4322/3";
-		target_add_ram(t, LPC43xx_AHB_SRAM_BASE, LPC43x2_AHB_SRAM_SIZE);
+		sram_ahb_size = LPC43x2_AHB_SRAM_SIZE;
 		break;
 	case LPC43xx_PARTID_LPC4325:
 		t->driver = "LPC4325/7";
-		target_add_ram(t, LPC43xx_AHB_SRAM_BASE, LPC43x5_AHB_SRAM_SIZE);
+		sram_ahb_size = LPC43x5_AHB_SRAM_SIZE;
 		break;
 	case LPC43xx_PARTID_LPC433x:
 		t->driver = "LPC433x";
-		target_add_ram(t, LPC43xx_AHB_SRAM_BASE, LPC43x5_AHB_SRAM_SIZE);
+		sram_ahb_size = LPC43x5_AHB_SRAM_SIZE;
 		break;
 	case LPC43xx_PARTID_LPC435x:
 		t->driver = "LPC435x";
-		target_add_ram(t, LPC43xx_AHB_SRAM_BASE, LPC43x5_AHB_SRAM_SIZE);
+		sram_ahb_size = LPC43x5_AHB_SRAM_SIZE;
 		break;
 	}
+	target_add_ram(t, LPC43xx_AHB_SRAM_BASE, sram_ahb_size);
 	target_add_ram(t, LPC43xx_SHADOW_BASE, LPC43xx_SHADOW_SIZE);
 	target_add_ram(t, LPC43xx_LOCAL_SRAM1_BASE, LPC43xx_LOCAL_SRAM1_SIZE);
 	target_add_ram(t, LPC43xx_LOCAL_SRAM2_BASE, LPC43xx_LOCAL_SRAM2_SIZE);
@@ -403,93 +390,75 @@ static void lpc43xx_detect(target_s *const t, const lpc43xx_partid_s part_id)
 	target_add_commands(t, lpc43xx_cmd_list, "LPC43xx");
 }
 
-static void lpc43x0_spi_read_sfdp(target_s *const t, const uint32_t address, void *const buffer, const size_t length)
-{
-	lpc43x0_spi_read(t, SPI_FLASH_CMD_READ_SFDP, address, buffer, length);
-}
-
-static void lpc43x0_add_spi_flash(target_s *const t, const size_t length)
+static void lpc43x0_add_spi_flash(target_s *const target, const size_t length)
 {
 	lpc43xx_spi_flash_s *const flash = calloc(1, sizeof(*flash));
 	if (!flash) {
-		DEBUG_WARN("calloc: failed in %s\n", __func__);
+		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return;
 	}
-	lpc43x0_priv_s *const priv = (lpc43x0_priv_s *)t->target_storage;
+	lpc43x0_priv_s *const priv = (lpc43x0_priv_s *)target->target_storage;
 	priv->flash = flash;
 
-	spi_parameters_s spi_parameters;
-	if (!sfdp_read_parameters(t, &spi_parameters, lpc43x0_spi_read_sfdp)) {
-		/* SFDP readout failed, so make some assumptions and hope for the best. */
-		spi_parameters.page_size = 256U;
-		spi_parameters.sector_size = 4096U;
-		spi_parameters.capacity = length;
-		spi_parameters.sector_erase_opcode = 0x20U;
-	}
-
 	/* Add the high region first so it appears second in the map */
-	target_flash_s *const flash_high = &flash->flash_high;
-	flash_high->start = LPC43x0_SPI_FLASH_HIGH_BASE;
-	flash_high->length = MIN(spi_parameters.capacity, LPC43x0_SPI_FLASH_HIGH_SIZE);
-	flash_high->blocksize = spi_parameters.sector_size;
-	flash_high->write = lpc43x0_spi_flash_write;
-	flash_high->erase = lpc43x0_spi_flash_erase;
-	flash_high->erased = 0xffU;
-	target_add_flash(t, flash_high);
+	flash->flash_high = bmp_spi_add_flash(target, LPC43x0_SPI_FLASH_HIGH_BASE, MIN(length, LPC43x0_SPI_FLASH_HIGH_SIZE),
+		lpc43x0_spi_read, lpc43x0_spi_write, lpc43x0_spi_run_command);
 
 	/*
 	 * Then add the low region - the reason for this is that
 	 * target_add_flash inserts new entries to the beginning of the
 	 * Flash linked-list in the target structure, so this becomes t->flash.
 	 */
-	target_flash_s *const flash_low = &flash->flash_low;
+	memcpy(&flash->flash_low, flash->flash_high, sizeof(spi_flash_s));
+	target_flash_s *const flash_low = &flash->flash_low.flash;
 	flash_low->start = LPC43x0_SPI_FLASH_LOW_BASE;
-	flash_low->length = MIN(spi_parameters.capacity, LPC43x0_SPI_FLASH_LOW_SIZE);
-	flash_low->blocksize = spi_parameters.sector_size;
-	flash_low->write = lpc43x0_spi_flash_write;
-	flash_low->erase = lpc43x0_spi_flash_erase;
-	flash_low->erased = 0xffU;
-	target_add_flash(t, flash_low);
-
-	flash->page_size = spi_parameters.page_size;
-	flash->sector_erase_opcode = spi_parameters.sector_erase_opcode;
+	target_add_flash(target, flash_low);
 }
 
 static void lpc43x0_detect(target_s *const t, const lpc43xx_partid_s part_id)
 {
+	uint32_t sram1_size;
+	uint32_t sram2_size;
+	uint32_t sram_ahb_size;
 	target_add_ram(t, LPC43xx_SHADOW_BASE, LPC43xx_SHADOW_SIZE);
 	switch (part_id.part) {
 	case LPC43xx_PARTID_LPC4310:
 		t->driver = "LPC4310";
-		target_add_ram(t, LPC43xx_LOCAL_SRAM1_BASE, LPC4310_LOCAL_SRAM1_SIZE);
-		target_add_ram(t, LPC43xx_LOCAL_SRAM2_BASE, LPC43xx_LOCAL_SRAM2_SIZE);
-		target_add_ram(t, LPC43xx_AHB_SRAM_BASE, LPC43x2_AHB_SRAM_SIZE);
+		sram1_size = LPC4310_LOCAL_SRAM1_SIZE;
+		sram2_size = LPC43xx_LOCAL_SRAM2_SIZE;
+		sram_ahb_size = LPC43x2_AHB_SRAM_SIZE;
 		break;
 	case LPC43xx_PARTID_LPC4320:
 		t->driver = "LPC4320";
-		target_add_ram(t, LPC43xx_LOCAL_SRAM1_BASE, LPC4310_LOCAL_SRAM1_SIZE);
-		target_add_ram(t, LPC43xx_LOCAL_SRAM2_BASE, LPC43xx_LOCAL_SRAM2_SIZE);
-		target_add_ram(t, LPC43xx_AHB_SRAM_BASE, LPC43x5_AHB_SRAM_SIZE);
+		sram1_size = LPC4310_LOCAL_SRAM1_SIZE;
+		sram2_size = LPC43xx_LOCAL_SRAM2_SIZE;
+		sram_ahb_size = LPC43x5_AHB_SRAM_SIZE;
 		break;
 	case LPC43xx_PARTID_LPC4330:
 	case LPC43xx_PARTID_LPC4350:
 		t->driver = "LPC4330/50";
-		target_add_ram(t, LPC43xx_LOCAL_SRAM1_BASE, LPC4330_LOCAL_SRAM1_SIZE);
-		target_add_ram(t, LPC43xx_LOCAL_SRAM2_BASE, LPC43x0_LOCAL_SRAM2_SIZE);
-		target_add_ram(t, LPC43xx_AHB_SRAM_BASE, LPC43x5_AHB_SRAM_SIZE);
+		sram1_size = LPC4330_LOCAL_SRAM1_SIZE;
+		sram2_size = LPC43x0_LOCAL_SRAM2_SIZE;
+		sram_ahb_size = LPC43x5_AHB_SRAM_SIZE;
 		break;
 	case LPC43xx_PARTID_LPC4370:
 	case LPC43xx_PARTID_LPC4370_ERRATA:
 		t->driver = "LPC4370";
-		target_add_ram(t, LPC43xx_LOCAL_SRAM1_BASE, LPC4330_LOCAL_SRAM1_SIZE);
-		target_add_ram(t, LPC43xx_LOCAL_SRAM2_BASE, LPC43x0_LOCAL_SRAM2_SIZE);
+		sram1_size = LPC4330_LOCAL_SRAM1_SIZE;
+		sram2_size = LPC43x0_LOCAL_SRAM2_SIZE;
+		sram_ahb_size = LPC43x5_AHB_SRAM_SIZE;
 		target_add_ram(t, LPC4370_M0_SRAM_BASE, LPC4370_M0_SRAM_SIZE);
-		target_add_ram(t, LPC43xx_AHB_SRAM_BASE, LPC43x5_AHB_SRAM_SIZE);
 		break;
 	default:
 		DEBUG_WARN("Probable LPC43x0 with ID errata: %08" PRIx32 "\n", part_id.part);
-		break;
+		t->attach = lpc43x0_attach;
+		t->detach = lpc43x0_detach;
+		return;
 	}
+	/* Finally, call these once to append the linked list of ram */
+	target_add_ram(t, LPC43xx_LOCAL_SRAM1_BASE, sram1_size);
+	target_add_ram(t, LPC43xx_LOCAL_SRAM2_BASE, sram2_size);
+	target_add_ram(t, LPC43xx_AHB_SRAM_BASE, sram_ahb_size);
 	t->attach = lpc43x0_attach;
 	t->detach = lpc43x0_detach;
 }
@@ -503,19 +472,28 @@ bool lpc43xx_probe(target_s *const t)
 	const uint32_t chip_code = (chipid & LPC43xx_CHIPID_CHIP_MASK) >> LPC43xx_CHIPID_CHIP_SHIFT;
 	t->target_options |= CORTEXM_TOPT_INHIBIT_NRST;
 
+	/* If we're on the M4 core, poke the M0APP and M0SUB core resets to make them available */
+	if ((t->cpuid & CORTEX_CPUID_PARTNO_MASK) == CORTEX_M4) {
+		target_mem_write32(t, LPC43xx_RGU_CTRL0, 0);
+		target_mem_write32(t, LPC43xx_RGU_CTRL1, 0);
+	}
+
 	/* 4 is for rev '-' parts with on-chip Flash, 7 is for rev 'A' parts with on-chip Flash */
 	if (chip_code == 4U || chip_code == 7U) {
-		const lpc43xx_partid_s part_id = lpc43xx_iap_read_partid(t);
-		DEBUG_WARN("LPC43xx part ID: 0x%08" PRIx32 ":%02x\n", part_id.part, part_id.flash_config);
-		if (part_id.part == LPC43xx_PARTID_INVALID)
-			return false;
-
 		lpc43xx_priv_s *priv = calloc(1, sizeof(lpc43xx_priv_s));
 		if (!priv) { /* calloc failed: heap exhaustion */
-			DEBUG_WARN("calloc: failed in %s\n", __func__);
+			DEBUG_ERROR("calloc: failed in %s\n", __func__);
 			return false;
 		}
 		t->target_storage = priv;
+
+		const lpc43xx_partid_s part_id = lpc43xx_iap_read_partid(t);
+		DEBUG_WARN("LPC43xx part ID: 0x%08" PRIx32 ":%02x\n", part_id.part, part_id.flash_config);
+		if (part_id.part == LPC43xx_PARTID_INVALID) {
+			free(priv);
+			t->target_storage = NULL;
+			return false;
+		}
 
 		t->mass_erase = lpc43xx_iap_mass_erase;
 		t->enter_flash_mode = lpc43xx_enter_flash_mode;
@@ -526,7 +504,7 @@ bool lpc43xx_probe(target_s *const t)
 		if (part_id.part == LPC43xx_PARTID_INVALID)
 			return false;
 
-		t->mass_erase = lpc43x0_spi_mass_erase;
+		t->mass_erase = bmp_spi_mass_erase;
 		t->enter_flash_mode = lpc43x0_enter_flash_mode;
 		t->exit_flash_mode = lpc43x0_exit_flash_mode;
 		lpc43x0_detect(t, part_id);
@@ -640,73 +618,76 @@ static void lpc43x0_determine_flash_interface(target_s *const t)
 	}
 }
 
-static bool lpc43x0_attach(target_s *const t)
+static bool lpc43x0_attach(target_s *const target)
 {
-	if (!cortexm_attach(t))
+	if (!cortexm_attach(target))
 		return false;
 
-	if (!t->target_storage) {
+	if (!target->target_storage) {
 		lpc43x0_priv_s *priv = calloc(1, sizeof(lpc43x0_priv_s));
 		if (!priv) { /* calloc failed: heap exhaustion */
-			DEBUG_WARN("calloc: failed in %s\n", __func__);
+			DEBUG_ERROR("calloc: failed in %s\n", __func__);
 			return false;
 		}
-		t->target_storage = priv;
+		target->target_storage = priv;
 
 		/*
-		* Before we can go down a specific route here, we first have to figure out how the device was booted:
-		* - Was it bought up on the SPIFI interface
-		* - Was it bought up on SSP0
-		* - Was it bought up on the EMC interface
-		*
-		* Once this is ascertained, we can pick how to proceed.
-		*
-		* Start by reading 0x40045030 - OTP[3,0], Customer control data.
-		* If bits 25:28 read as 0, boot is controlled by the external pins, otherwise
-		* this determines the boot source. 2 for SPIFI, 3 through 5 for EMC, and 8 for SPI
-		* For external pins, P1_1, P1_2, P2_8 and P2_9 control the process.
-		*
-		* When assembled as [P2_9, P2_9, P1_2, P1_1] and interpreted as a bitvector, the following holds:
-		* - 0b0001 -> SPIFI
-		* - 0b0010 -> EMC (8-bit)
-		* - 0b0011 -> EMC (16-bit)
-		* - 0b0100 -> EMC (32-bit)
-		* - 0b0111 -> SPI (SSP0)
-		*
-		* We don't actually care about any of the other modes as they're inconsequential.
-		* If the boot source contains a header prior to the image or is SPI boot, the header
-		* is validated and the image copied to SRAM at 0x10000000, then executed from there.
-		* If the boot source is anything other than SPI and the image contains no header,
-		* the chip sets switches execution to that boot source.
-		*
-		* This process is laid out in Chaper 5 of UM10503. See Fig 16 on pg 59 for a more detailed view.
-		*/
-		lpc43x0_determine_flash_interface(t);
+		 * Before we can go down a specific route here, we first have to figure out how the device was booted:
+		 * - Was it bought up on the SPIFI interface
+		 * - Was it bought up on SSP0
+		 * - Was it bought up on the EMC interface
+		 *
+		 * Once this is ascertained, we can pick how to proceed.
+		 *
+		 * Start by reading 0x40045030 - OTP[3,0], Customer control data.
+		 * If bits 25:28 read as 0, boot is controlled by the external pins, otherwise
+		 * this determines the boot source. 2 for SPIFI, 3 through 5 for EMC, and 8 for SPI
+		 * For external pins, P1_1, P1_2, P2_8 and P2_9 control the process.
+		 *
+		 * When assembled as [P2_9, P2_9, P1_2, P1_1] and interpreted as a bitvector, the following holds:
+		 * - 0b0001 -> SPIFI
+		 * - 0b0010 -> EMC (8-bit)
+		 * - 0b0011 -> EMC (16-bit)
+		 * - 0b0100 -> EMC (32-bit)
+		 * - 0b0111 -> SPI (SSP0)
+		 *
+		 * We don't actually care about any of the other modes as they're inconsequential.
+		 * If the boot source contains a header prior to the image or is SPI boot, the header
+		 * is validated and the image copied to SRAM at 0x10000000, then executed from there.
+		 * If the boot source is anything other than SPI and the image contains no header,
+		 * the chip sets switches execution to that boot source.
+		 *
+		 * This process is laid out in Chaper 5 of UM10503. See Fig 16 on pg 59 for a more detailed view.
+		 */
+		lpc43x0_determine_flash_interface(target);
 	}
 
-	lpc43x0_enter_flash_mode(t);
+	lpc43x0_enter_flash_mode(target);
 	spi_flash_id_s flash_id;
-	lpc43x0_spi_read(t, SPI_FLASH_CMD_READ_JEDEC_ID, 0, &flash_id, sizeof(flash_id));
+	lpc43x0_spi_read(target, SPI_FLASH_CMD_READ_JEDEC_ID, 0, &flash_id, sizeof(flash_id));
 
 	/* If we read out valid Flash information, set up a region for it */
 	if (flash_id.manufacturer != 0xffU && flash_id.type != 0xffU && flash_id.capacity != 0xffU) {
 		const uint32_t capacity = 1U << flash_id.capacity;
 		DEBUG_INFO("SPI Flash: mfr = %02x, type = %02x, capacity = %08" PRIx32 "\n", flash_id.manufacturer,
 			flash_id.type, capacity);
-		lpc43x0_add_spi_flash(t, capacity);
+		lpc43x0_add_spi_flash(target, capacity);
 	} else
 		DEBUG_INFO("Flash identification failed\n");
 
-	return lpc43x0_exit_flash_mode(t);
+	return lpc43x0_exit_flash_mode(target);
 }
 
-static void lpc43x0_detach(target_s *const t)
+static void lpc43x0_detach(target_s *const target)
 {
-	lpc43x0_priv_s *const priv = (lpc43x0_priv_s *)t->target_storage;
-	free(priv->flash);
-	priv->flash = NULL;
-	t->flash = NULL;
-	cortexm_detach(t);
+	lpc43x0_priv_s *const priv = (lpc43x0_priv_s *)target->target_storage;
+	if (priv->flash) {
+		free(priv->flash->flash_high);
+		free(priv->flash);
+		priv->flash = NULL;
+		target->flash = NULL;
+	}
+	cortexm_detach(target);
 }
 
 static bool lpc43x0_enter_flash_mode(target_s *const t)
@@ -833,7 +814,7 @@ static void lpc43x0_spi_abort(target_s *const t)
 			target_mem_read32(t, LPC43x0_SSP0_DR);
 		target_mem_write32(t, LPC43xx_GPIO_PORT0_CLR, 1U << 6U);
 	}
-	lpc43x0_spi_run_command(t, SPI_FLASH_CMD_WAKE_UP);
+	lpc43x0_spi_run_command(t, SPI_FLASH_CMD_WAKE_UP, 0U);
 }
 
 static inline void lpc43x0_spi_wait_complete(target_s *const t)
@@ -856,7 +837,7 @@ static void lpc43x0_ssp0_setup_command(target_s *const t, const uint32_t command
 	/* Start by sending the command opcode byte */
 	lpc43x0_ssp0_transfer(t, (command >> 24U) & 0xffU);
 	/* Next, if the command has an address, deal with that */
-	const uint8_t address_bytes = ((command & LPC43x0_SPIFI_FRAME_MASK) >> 21U) - 1U;
+	const uint8_t address_bytes = (command & SPI_FLASH_OPCODE_MODE_MASK) == SPI_FLASH_OPCODE_3B_ADDR ? 3U : 0U;
 	for (size_t i = 0; i < address_bytes; ++i) {
 		const size_t shift = (address_bytes - (i + 1U)) * 8U;
 		lpc43x0_ssp0_transfer(t, (address >> shift) & 0xffU);
@@ -867,143 +848,119 @@ static void lpc43x0_ssp0_setup_command(target_s *const t, const uint32_t command
 		lpc43x0_ssp0_transfer(t, 0U);
 }
 
-static void lpc43x0_spi_read(
-	target_s *const t, const uint32_t command, const target_addr_t address, void *const buffer, const size_t length)
+static void lpc43x0_spi_setup_xfer(
+	target_s *const target, const uint16_t command, const target_addr_t address, const size_t length)
 {
-	lpc43x0_priv_s *const priv = (lpc43x0_priv_s *)t->target_storage;
+	/* Rebuild the command for the SPIFI controller */
+	uint32_t spifi_command = LPC43x0_SPIFI_CMD_SERIAL |
+		((command & SPI_FLASH_OPCODE_MASK) << LPC43x0_SPIFI_OPCODE_SHIFT) |
+		(((command & SPI_FLASH_DUMMY_MASK) >> SPI_FLASH_DUMMY_SHIFT) << LPC43x0_SPIFI_DUMMY_SHIFT) |
+		(((command & SPI_FLASH_DATA_MASK) >> SPI_FLASH_DATA_SHIFT) << LPC43x0_SPIFI_DATA_SHIFT) |
+		LPC43x0_SPIFI_DATA_LENGTH(length);
+
+	/* Setup addressing for the instruction */
+	if ((command & SPI_FLASH_OPCODE_MODE_MASK) != SPI_FLASH_OPCODE_ONLY) {
+		target_mem_write32(target, LPC43x0_SPIFI_ADDR, address);
+		spifi_command |= LPC43x0_SPIFI_FRAME_OPCODE_3B_ADDR;
+	} else
+		spifi_command |= LPC43x0_SPIFI_FRAME_OPCODE_ONLY;
+
+	/* Write the resulting command to the command register */
+	target_mem_write32(target, LPC43x0_SPIFI_CMD, spifi_command);
+}
+
+static void lpc43x0_spi_read(target_s *const target, const uint16_t command, const target_addr_t address,
+	void *const buffer, const size_t length)
+{
+	lpc43x0_priv_s *const priv = (lpc43x0_priv_s *)target->target_storage;
 	if (priv->interface == FLASH_SPIFI) {
-		if ((command & LPC43x0_SPIFI_FRAME_MASK) != LPC43x0_SPIFI_FRAME_OPCODE_ONLY)
-			target_mem_write32(t, LPC43x0_SPIFI_ADDR, address);
-		target_mem_write32(t, LPC43x0_SPIFI_CMD, command | LPC43x0_SPIFI_DATA_LENGTH(length));
+		lpc43x0_spi_setup_xfer(target, command, address, length);
 		uint8_t *const data = (uint8_t *)buffer;
 		for (size_t i = 0; i < length; ++i)
-			data[i] = target_mem_read8(t, LPC43x0_SPIFI_DATA);
-		lpc43x0_spi_wait_complete(t);
+			data[i] = target_mem_read8(target, LPC43x0_SPIFI_DATA);
+		lpc43x0_spi_wait_complete(target);
 	} else if (priv->interface == FLASH_SPI) {
 		/* Select the Flash */
-		target_mem_write32(t, LPC43xx_GPIO_PORT0_SET, 1U << 6U);
-		lpc43x0_ssp0_setup_command(t, command, address);
+		target_mem_write32(target, LPC43xx_GPIO_PORT0_SET, 1U << 6U);
+		lpc43x0_ssp0_setup_command(target, command, address);
 		/* And finally do the meat and potatoes of the transfer */
 		uint8_t *const data = (uint8_t *)buffer;
 		for (size_t i = 0; i < length; ++i)
-			data[i] = lpc43x0_ssp0_transfer(t, 0U);
+			data[i] = lpc43x0_ssp0_transfer(target, 0U);
 		/* Deselect the Flash */
-		target_mem_write32(t, LPC43xx_GPIO_PORT0_CLR, 1U << 6U);
+		target_mem_write32(target, LPC43xx_GPIO_PORT0_CLR, 1U << 6U);
 	} else
 		memset(buffer, 0xffU, length);
 }
 
-static void lpc43x0_spi_write(target_s *const t, const uint32_t command, const target_addr_t address,
+static void lpc43x0_spi_write(target_s *const target, const uint16_t command, const target_addr_t address,
 	const void *const buffer, const size_t length)
 {
-	lpc43x0_priv_s *const priv = (lpc43x0_priv_s *)t->target_storage;
+	lpc43x0_priv_s *const priv = (lpc43x0_priv_s *)target->target_storage;
 	if (priv->interface == FLASH_SPIFI) {
-		if ((command & LPC43x0_SPIFI_FRAME_MASK) != LPC43x0_SPIFI_FRAME_OPCODE_ONLY)
-			target_mem_write32(t, LPC43x0_SPIFI_ADDR, address);
-		target_mem_write32(t, LPC43x0_SPIFI_CMD, command | LPC43x0_SPIFI_DATA_LENGTH(length));
+		lpc43x0_spi_setup_xfer(target, command, address, length);
 		const uint8_t *const data = (const uint8_t *)buffer;
 		for (size_t i = 0; i < length; ++i)
-			target_mem_write8(t, LPC43x0_SPIFI_DATA, data[i]);
-		lpc43x0_spi_wait_complete(t);
+			target_mem_write8(target, LPC43x0_SPIFI_DATA, data[i]);
+		lpc43x0_spi_wait_complete(target);
 	} else if (priv->interface == FLASH_SPI) {
 		/* Select the Flash */
-		target_mem_write32(t, LPC43xx_GPIO_PORT0_SET, 1U << 6U);
-		lpc43x0_ssp0_setup_command(t, command, address);
+		target_mem_write32(target, LPC43xx_GPIO_PORT0_SET, 1U << 6U);
+		lpc43x0_ssp0_setup_command(target, command, address);
 		/* And finally do the meat and potatoes of the transfer */
 		uint8_t *const data = (uint8_t *)buffer;
 		for (size_t i = 0; i < length; ++i)
-			lpc43x0_ssp0_transfer(t, data[i]);
+			lpc43x0_ssp0_transfer(target, data[i]);
 		/* Deselect the Flash */
-		target_mem_write32(t, LPC43xx_GPIO_PORT0_CLR, 1U << 6U);
+		target_mem_write32(target, LPC43xx_GPIO_PORT0_CLR, 1U << 6U);
 	}
 }
 
-static inline uint8_t lpc43x0_spi_read_status(target_s *const t)
+static void lpc43x0_spi_run_command(target_s *const target, const uint16_t command, target_addr_t address)
 {
-	uint8_t status = 0;
-	lpc43x0_spi_read(t, SPI_FLASH_CMD_READ_STATUS, 0, &status, sizeof(status));
-	return status;
-}
-
-static void lpc43x0_spi_run_command(target_s *const t, const uint32_t command)
-{
-	lpc43x0_priv_s *const priv = (lpc43x0_priv_s *)t->target_storage;
+	lpc43x0_priv_s *const priv = (lpc43x0_priv_s *)target->target_storage;
 	if (priv->interface == FLASH_SPIFI) {
-		target_mem_write32(t, LPC43x0_SPIFI_CMD, command);
-		lpc43x0_spi_wait_complete(t);
+		lpc43x0_spi_setup_xfer(target, command, address, 0U);
+		lpc43x0_spi_wait_complete(target);
 	} else if (priv->interface == FLASH_SPI)
-		lpc43x0_spi_write(t, command, 0U, NULL, 0U);
-}
-
-static bool lpc43x0_spi_mass_erase(target_s *const t)
-{
-	platform_timeout_s timeout;
-	platform_timeout_set(&timeout, 500);
-	lpc43x0_enter_flash_mode(t);
-	lpc43x0_spi_run_command(t, SPI_FLASH_CMD_WRITE_ENABLE);
-	if (!(lpc43x0_spi_read_status(t) & SPI_FLASH_STATUS_WRITE_ENABLED)) {
-		lpc43x0_exit_flash_mode(t);
-		return false;
-	}
-
-	lpc43x0_spi_run_command(t, SPI_FLASH_CMD_CHIP_ERASE);
-	while (lpc43x0_spi_read_status(t) & SPI_FLASH_STATUS_BUSY)
-		target_print_progress(&timeout);
-
-	return lpc43x0_exit_flash_mode(t);
-}
-
-static bool lpc43x0_spi_flash_erase(target_flash_s *f, target_addr_t addr, size_t length)
-{
-	target_s *const t = f->t;
-	const lpc43xx_spi_flash_s *const flash = (lpc43xx_spi_flash_s *)t->flash;
-	const target_addr_t begin = addr - f->start;
-	for (size_t offset = 0; offset < length; offset += f->blocksize) {
-		lpc43x0_spi_run_command(t, SPI_FLASH_CMD_WRITE_ENABLE);
-		if (!(lpc43x0_spi_read_status(t) & SPI_FLASH_STATUS_WRITE_ENABLED))
-			return false;
-
-		lpc43x0_spi_write(
-			t, SPI_FLASH_CMD_SECTOR_ERASE | LPC43x0_SPIFI_OPCODE(flash->sector_erase_opcode), begin + offset, NULL, 0);
-		while (lpc43x0_spi_read_status(t) & SPI_FLASH_STATUS_BUSY)
-			continue;
-	}
-	return true;
-}
-
-static bool lpc43x0_spi_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t length)
-{
-	target_s *const t = f->t;
-	const lpc43xx_spi_flash_s *const flash = (lpc43xx_spi_flash_s *)t->flash;
-	const target_addr_t begin = dest - f->start;
-	const char *buffer = src;
-	for (size_t offset = 0; offset < length; offset += flash->page_size) {
-		lpc43x0_spi_run_command(t, SPI_FLASH_CMD_WRITE_ENABLE);
-		if (!(lpc43x0_spi_read_status(t) & SPI_FLASH_STATUS_WRITE_ENABLED))
-			return false;
-
-		const size_t amount = MIN(length - offset, flash->page_size);
-		lpc43x0_spi_write(t, SPI_FLASH_CMD_PAGE_PROGRAM, begin + offset, buffer + offset, amount);
-		while (lpc43x0_spi_read_status(t) & SPI_FLASH_STATUS_BUSY)
-			continue;
-	}
-	return true;
+		lpc43x0_spi_write(target, command, address, NULL, 0U);
 }
 
 /* LPC43xx IAP On-board Flash part routines */
 
-static bool lpc43xx_iap_init(target_flash_s *const flash)
+static bool lpc43xx_iap_init(target_flash_s *const target_flash)
 {
-	target_s *const t = flash->t;
-	lpc_flash_s *const f = (lpc_flash_s *)flash;
+	target_s *const target = target_flash->t;
+	lpc43xx_priv_s *const priv = (lpc43xx_priv_s *)target->target_storage;
+	lpc_flash_s *const flash = (lpc_flash_s *)target_flash;
+	/* If on the M4 core, check and set the shadow region mapping */
+	if ((target->cpuid & CORTEX_CPUID_PARTNO_MASK) == CORTEX_M4) {
+		priv->shadow_map = target_mem_read32(target, LPC43xx_M4MEMMAP);
+		target_mem_write32(target, LPC43xx_M4MEMMAP, LPC43xx_M4MEMMAP_BOOT_ROM);
+	}
+
+	/* Check if the block we use (shared with the ETB) is in ETB mode, and reset that if it is */
+	const uint32_t etb_cfg = target_mem_read32(target, LPC43xx_ETB_CFG);
+	target_mem_write32(target, LPC43xx_ETB_CFG, 1U);
+	(void)etb_cfg;
+
+	/* Check MPU state and disable */
+	priv->mpu_ctrl = target_mem_read32(target, LPC43xx_MPU_CTRL);
+	target_mem_write32(target, LPC43xx_MPU_CTRL, 0);
+
 	/* Deal with WDT */
-	lpc43xx_wdt_set_period(t);
+	lpc43xx_wdt_set_period(target);
 
 	/* Force internal clock */
-	target_mem_write32(t, LPC43xx_CGU_CPU_CLK, LPC43xx_CGU_BASE_CLK_AUTOBLOCK | LPC43xx_CGU_BASE_CLK_SEL_IRC);
+	target_mem_write32(target, LPC43xx_CGU_CPU_CLK, LPC43xx_CGU_BASE_CLK_AUTOBLOCK | LPC43xx_CGU_BASE_CLK_SEL_IRC);
 
-	/* Initialize flash IAP */
-	return lpc_iap_call(f, NULL, IAP_CMD_INIT) == IAP_STATUS_CMD_SUCCESS;
+	/*
+	 * Initialize flash IAP
+	 * errata: should return IAP_STATUS_SUCCESS, may just not alter the result code resulting in
+	 * returning IAP_CMD_INIT. Test instead that it didn't fail by testing for the internally
+	 * generated IAP_STATUS_INVALID_COMMAND used by lpc_iap_call()'s failure paths.
+	 */
+	return lpc_iap_call(flash, NULL, IAP_CMD_INIT) != IAP_STATUS_INVALID_COMMAND;
 }
 
 /*
@@ -1025,17 +982,14 @@ static lpc43xx_partid_s lpc43xx_iap_read_partid(target_s *const t)
 	result.part = LPC43xx_PARTID_INVALID;
 	result.flash_config = LPC43xx_PARTID_FLASH_CONFIG_NONE;
 
-	/* Read back the part ID
-	 * XXX: We only use the first 2 values but because of limitations in lpc_iap_call,
-	 * we have to declare an array of 4
-	 */
-	uint32_t part_id[4];
-	if (!lpc43xx_iap_init(&flash.f) || lpc_iap_call(&flash, part_id, IAP_CMD_PARTID) != IAP_STATUS_CMD_SUCCESS)
+	/* Read back the part ID */
+	iap_result_s iap_result;
+	if (!lpc43xx_iap_init(&flash.f) || lpc_iap_call(&flash, &iap_result, IAP_CMD_PARTID) != IAP_STATUS_CMD_SUCCESS)
 		return result;
 
 	/* Prepare the result and return it */
-	result.part = part_id[0];
-	result.flash_config = part_id[1] & LPC43xx_PARTID_FLASH_CONFIG_MASK;
+	result.part = iap_result.values[0];
+	result.flash_config = iap_result.values[1] & LPC43xx_PARTID_FLASH_CONFIG_MASK;
 	return result;
 }
 

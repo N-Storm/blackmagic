@@ -23,11 +23,18 @@
 
 #include <stdint.h>
 
+#if !defined(SYSTICKHZ)
+#define SYSTICKHZ 1000U
+#endif
+
+#define SYSTICKMS (1000U / SYSTICKHZ)
+#define MORSECNT  ((SYSTICKHZ / 10U) - 1U)
+
 struct platform_timeout {
 	uint32_t time;
 };
 
-extern int32_t swj_delay_cnt;
+extern uint32_t target_clk_divider;
 uint32_t platform_time_ms(void);
 
 #endif /* INCLUDE_TIMING_H */

@@ -3,8 +3,9 @@
  *
  * Copyright (C) 2015  Black Sphere Technologies Ltd.
  * Written by Gareth McMullin <gareth@blacksphere.co.nz>
- * Copyright (C) 2018 - 2021 Uwe Bonnes
- *                           (bon@elektron.ikp.physik.tu-darmstadt.de)
+ * Copyright (C) 2018-2021 Uwe Bonnes (bon@elektron.ikp.physik.tu-darmstadt.de)
+ * Copyright (C) 2022-2023 1BitSquared <info@1bitsquared.com>
+ * Modified by Rachel Mant <git@dragonmux.network>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,10 +21,11 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* This file implements the transport generic functions.
- * See the following ARM Reference Documents:
+/*
+ * This file implements transport generic ADIv5 functions.
  *
- * ARM Debug Interface v5 Architecture Specification, ARM IHI 0031E
+ * See the following ARM Reference Documents:
+ * - ARM Debug Interface v5 Architecture Specification, ARM IHI 0031E
  */
 #include "general.h"
 #include "target.h"
@@ -32,18 +34,23 @@
 #include "jep106.h"
 #include "adiv5.h"
 #include "cortexm.h"
+#include "cortex_internal.h"
 #include "exception.h"
+#if PC_HOSTED == 1
+#include "bmp_hosted.h"
+#endif
 
-/* All this should probably be defined in a dedicated ADIV5 header, so that they
+/*
+ * All this should probably be defined in a dedicated ADIV5 header, so that they
  * are consistently named and accessible when needed in the codebase.
  */
 
-/* Values from ST RM0436 (STM32MP157), 66.9 APx_IDR
- * and ST RM0438 (STM32L5) 52.3.1, AP_IDR */
-#define ARM_AP_TYPE_AHB  1U
-#define ARM_AP_TYPE_APB  3U
-#define ARM_AP_TYPE_AXI  4U
-#define ARM_AP_TYPE_AHB5 5U
+/*
+ * This value is taken from the ADIv5 spec table C1-2
+ * "AP Identification types for an AP designed by Arm"
+ * §C1.3 pg146. This defines a AHB3 AP when the class value is 8
+ */
+#define ARM_AP_TYPE_AHB3 1U
 
 /* ROM table CIDR values */
 #define CIDR0_OFFSET 0xff0U /* DBGCID0 */
@@ -51,7 +58,8 @@
 #define CIDR2_OFFSET 0xff8U /* DBGCID2 */
 #define CIDR3_OFFSET 0xffcU /* DBGCID3 */
 
-/* Component class ID register can be broken down into the following logical
+/*
+ * Component class ID register can be broken down into the following logical
  * interpretation of the 32bit value consisting of the least significant bytes
  * of the 4 CID registers:
  * |7   ID3 reg   0|7   ID2 reg   0|7   ID1 reg   0|7   ID0 reg   0|
@@ -69,39 +77,20 @@
 #define CID_CLASS_MASK  UINT32_C(0x0000f000)
 #define CID_CLASS_SHIFT 12U
 
-/* The following enum is based on the Component Class value table 13-3 of the
- * ADIv5 standard.
- */
+/* The following enum is based on the Component Class value table 13-3 of the ADIv5 specification. */
 typedef enum cid_class {
-	cidc_gvc = 0x0,    /* Generic verification component*/
-	cidc_romtab = 0x1, /* ROM Table, std. layout (ADIv5 Chapter 14) */
-	/* 0x2 - 0x8 */    /* Reserved */
-	cidc_dc = 0x9,     /* Debug component, std. layout (CoreSight Arch. Spec.) */
-	/* 0xa */          /* Reserved */
-	cidc_ptb = 0xb,    /* Peripheral Test Block (PTB) */
-	/* 0xc */          /* Reserved */
-	cidc_dess = 0xd,   /* OptimoDE Data Engine SubSystem (DESS) component */
-	cidc_gipc = 0xe,   /* Generic IP Component */
-	cidc_sys = 0xf,    /* CoreLink, PrimeCell, or other system component with no standard register layout */
-	cidc_unknown = 0x10
+	cidc_gvc = 0x0,     /* Generic verification component*/
+	cidc_romtab = 0x1,  /* ROM Table, std. layout (ADIv5 Chapter 14) */
+	/* 0x2 - 0x8 */     /* Reserved */
+	cidc_dc = 0x9,      /* Debug component, std. layout (CoreSight Arch. Spec.) */
+	/* 0xa */           /* Reserved */
+	cidc_ptb = 0xb,     /* Peripheral Test Block (PTB) */
+	/* 0xc */           /* Reserved */
+	cidc_dess = 0xd,    /* OptimoDE Data Engine SubSystem (DESS) component */
+	cidc_gipc = 0xe,    /* Generic IP Component */
+	cidc_sys = 0xf,     /* CoreLink, PrimeCell, or other system component with no standard register layout */
+	cidc_unknown = 0x10 /* Not a valid component class */
 } cid_class_e;
-
-#ifdef ENABLE_DEBUG
-/* The reserved ones only have an R in them, to save a bit of space. */
-static const char *const cidc_debug_strings[] = {
-	[cidc_gvc] = "Generic verification component",            /* 0x0 */
-	[cidc_romtab] = "ROM Table",                              /* 0x1 */
-	[0x2 ... 0x8] = "R",                                      /* 0x2 - 0x8 */
-	[cidc_dc] = "Debug component",                            /* 0x9 */
-	[0xa] = "R",                                              /* 0xa */
-	[cidc_ptb] = "Peripheral Test Block",                     /* 0xb */
-	[0xc] = "R",                                              /* 0xc */
-	[cidc_dess] = "OptimoDE Data Engine SubSystem component", /* 0xd */
-	[cidc_gipc] = "Generic IP component",                     /* 0xe */
-	[cidc_sys] = "Non STD System component",                  /* 0xf */
-	[cidc_unknown] = "Unknown component class"                /* 0x10 */
-};
-#endif
 
 #define PIDR0_OFFSET 0xfe0U /* DBGPID0 */
 #define PIDR1_OFFSET 0xfe4U /* DBGPID1 */
@@ -142,7 +131,8 @@ typedef enum arm_arch {
 #define ARM_COMPONENT_STR(...)
 #endif
 
-/* The part number list was adopted from OpenOCD:
+/*
+ * The part number list was adopted from OpenOCD:
  * https://sourceforge.net/p/openocd/code/ci/406f4/tree/src/target/arm_adi_v5.c#l932
  *
  * The product ID register consists of several parts. For a full description
@@ -278,8 +268,72 @@ static const struct {
 	{0x132, 0x00, 0x2a04, aa_cortexm, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 SCS", "(System Control Space)")},
 	{0x132, 0x13, 0x4a13, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 ETM", "(Embedded Trace)")},
 	{0x132, 0x11, 0, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 TPIU", "(Trace Port Interface Unit)")},
+	{0x9a3, 0x13, 0, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("nRF NTB", "(Nordic Trace Buffer)")},
 	{0xfff, 0x00, 0, aa_end, cidc_unknown, ARM_COMPONENT_STR("end", "end")},
 };
+
+#ifdef ENABLE_DEBUG
+static const char *adiv5_arm_ap_type_string(const uint8_t ap_type, const uint8_t ap_class)
+{
+	/*
+	 * Values taken from ADIv5 spec §C1.3 pg146.
+	 * table C1-2 "AP Identification types for an AP designed by Arm"
+	 */
+
+	/* All types except 0 are only valid for ap_class == 0x8 */
+	if (ap_class == 0x8U || ap_type == 0U) {
+		switch (ap_type) {
+		case 0U:
+			/* Type 0 APs are determined by the class code */
+			if (ap_class == 0U)
+				return "JTAG-AP";
+			if (ap_class == 1U)
+				return "COM-AP";
+			break;
+		case 0x1U:
+			return "AHB3-AP";
+		case 0x2U:
+			return "APB2/3-AP";
+		/* 0x3 is not defined */
+		case 0x4U:
+			return "AXI3/4-AP";
+		case 0x5U:
+			return "AHB5-AP";
+		case 0x6U:
+			return "APB4/5-AP";
+		case 0x7U:
+			return "AXI5-AP";
+		case 0x8U:
+			return "AHB5-AP";
+		default:
+			break;
+		}
+	}
+	return "Unknown";
+}
+
+static const char *adiv5_cid_class_string(const cid_class_e cid_class)
+{
+	switch (cid_class) {
+	case cidc_gvc:
+		return "Generic verification component";
+	case cidc_romtab:
+		return "ROM Table";
+	case cidc_dc:
+		return "Debug component";
+	case cidc_ptb:
+		return "Peripheral Test Block";
+	case cidc_dess:
+		return "OptimoDE Data Engine SubSystem component";
+	case cidc_gipc:
+		return "Generic IP component";
+	case cidc_sys:
+		return "Non STD System component";
+	default:
+		return "Unknown component"; /* Noted as reserved in the spec */
+	}
+};
+#endif
 
 /* Used to probe for a protected SAMX5X device */
 #define SAMX5X_DSU_CTRLSTAT 0x41002100U
@@ -330,95 +384,95 @@ uint64_t adiv5_ap_read_pidr(adiv5_access_port_s *ap, uint32_t addr)
 	return pidr;
 }
 
-/* Halt CortexM
- *
- * Run in tight loop to catch small windows of awakeness.
- * Repeat the write command with the highest possible value
- * of the trannsaction counter, if not on MINDP
+/*
+ * This function tries to halt Cortex-M processors.
+ * To handle WFI and other sleep states, it does this in as tight a loop as it can,
+ * either using the TRNCNT bits, or, if on a minimal DP implementation by doing the
+ * memory writes as fast as possible.
  */
 static uint32_t cortexm_initial_halt(adiv5_access_port_s *ap)
 {
+	/* Read the current CTRL/STATUS register value to use in the non-minimal DP case */
 	const uint32_t ctrlstat = adiv5_dp_read(ap->dp, ADIV5_DP_CTRLSTAT);
-
-	const uint32_t dhcsr_ctl = CORTEXM_DHCSR_DBGKEY | CORTEXM_DHCSR_C_DEBUGEN | CORTEXM_DHCSR_C_HALT;
-	const uint32_t dhcsr_valid = CORTEXM_DHCSR_S_HALT | CORTEXM_DHCSR_C_DEBUGEN;
-	const bool use_low_access = !ap->dp->mindp;
 
 	platform_timeout_s halt_timeout;
 	platform_timeout_set(&halt_timeout, cortexm_wait_timeout);
 
-	if (use_low_access) {
-		/* ap_mem_access_setup() sets ADIV5_AP_CSW_ADDRINC_SINGLE -> unusable!*/
-		adiv5_ap_write(ap, ADIV5_AP_CSW, ap->csw | ADIV5_AP_CSW_SIZE_WORD);
-		adiv5_dp_low_access(ap->dp, ADIV5_LOW_WRITE, ADIV5_AP_TAR, CORTEXM_DHCSR);
-	}
+	/* Setup to read/write DHCSR */
+	/* ap_mem_access_setup() uses ADIV5_AP_CSW_ADDRINC_SINGLE which is undesirable for our use here */
+	adiv5_ap_write(ap, ADIV5_AP_CSW, ap->csw | ADIV5_AP_CSW_SIZE_WORD);
+	adiv5_dp_low_access(ap->dp, ADIV5_LOW_WRITE, ADIV5_AP_TAR, CORTEXM_DHCSR);
+	/* Write (and do a dummy read of) DHCSR to ensure debug is enabled */
+	adiv5_dp_low_access(ap->dp, ADIV5_LOW_WRITE, ADIV5_AP_DRW, CORTEXM_DHCSR_DBGKEY | CORTEXM_DHCSR_C_DEBUGEN);
+	adiv5_dp_read(ap->dp, ADIV5_DP_RDBUFF);
 
-	/* Workaround for CMSIS-DAP Bulk orbtrace
-	 * High values of TRNCNT lead to NO_ACK answer from debugger.
-	 *
-	 * However CMSIS/HID even with highest value has few chances to catch
-	 * a STM32F767 mostly sleeping in WFI!
-	 */
-	uint32_t start_time = platform_time_ms();
-	uint32_t trncnt = 0x80U;
 	bool reset_seen = false;
 	while (!platform_timeout_is_expired(&halt_timeout)) {
 		uint32_t dhcsr;
 
-		if (use_low_access) {
+		/* If we're not on a minimal DP implementation, use TRNCNT to help */
+		if (!ap->dp->mindp) {
+			/* Ask the AP to repeatedly retry the write to DHCSR */
 			adiv5_dp_low_access(
-				ap->dp, ADIV5_LOW_WRITE, ADIV5_DP_CTRLSTAT, ctrlstat | (trncnt * ADIV5_DP_CTRLSTAT_TRNCNT));
-			adiv5_dp_low_access(ap->dp, ADIV5_LOW_WRITE, ADIV5_AP_DRW, dhcsr_ctl);
-			if (trncnt < 0xfffU) {
-				trncnt += (platform_time_ms() - start_time) * 8U;
-			} else {
-				trncnt = 0xfffU;
-			}
-			dhcsr = adiv5_dp_low_access(ap->dp, ADIV5_LOW_READ, ADIV5_AP_DRW, 0);
-		} else {
-			adiv5_mem_write(ap, CORTEXM_DHCSR, &dhcsr_ctl, sizeof(dhcsr_ctl));
-			dhcsr = adiv5_mem_read32(ap, CORTEXM_DHCSR);
+				ap->dp, ADIV5_LOW_WRITE, ADIV5_DP_CTRLSTAT, ctrlstat | ADIV5_DP_CTRLSTAT_TRNCNT(0xfffU));
 		}
+		/* Repeatedly try to halt the processor */
+		adiv5_dp_low_access(ap->dp, ADIV5_LOW_WRITE, ADIV5_AP_DRW,
+			CORTEXM_DHCSR_DBGKEY | CORTEXM_DHCSR_C_DEBUGEN | CORTEXM_DHCSR_C_HALT);
+		dhcsr = adiv5_dp_low_access(ap->dp, ADIV5_LOW_READ, ADIV5_AP_DRW, 0);
 
-		/* ADIV5_DP_CTRLSTAT_READOK is always set e.g. on STM32F7 even so
-		   CORTEXM_DHCS reads nonsense*/
-		/* On a sleeping STM32F7, invalid DHCSR reads with e.g. 0xffffffff and
-		 * 0x0xA05F0000  may happen.
-		 * M23/33 will have S_SDE set when debug is allowed
+		/*
+		 * If we are on a minimal DP implementation, then we have to do things a little differently
+		 * so the reads behave consistently. If we use raw accesses as above, then on some parts the
+		 * data we want to read will be returned in the first raw access, and on others the read
+		 * will do nothing (return 0) and instead need RDBUFF read to get the data.
 		 */
-		if (dhcsr != 0xffffffffU && (dhcsr & 0xf000fff0U) == 0) { /* (Check for invalid read) && (Check RAZ bits) */
-			if ((dhcsr & CORTEXM_DHCSR_S_RESET_ST) && !reset_seen) {
-				if (connect_assert_nrst)
-					return dhcsr;
-				reset_seen = true;
-				continue;
-			}
-			if ((dhcsr & dhcsr_valid) == dhcsr_valid) /* Halted */
+		if (ap->dp->mindp
+#if PC_HOSTED == 1
+			&& bmda_probe_info.type != PROBE_TYPE_CMSIS_DAP
+#endif
+		)
+			dhcsr = adiv5_dp_low_access(ap->dp, ADIV5_LOW_READ, ADIV5_DP_RDBUFF, 0);
+
+		/*
+		 * Check how we did, handling some errata along the way.
+		 * On STM32F7 parts, invalid DHCSR reads of 0xffffffff and 0xa05f0000 may happen,
+		 * so filter those out (we check for the latter by checking the reserved bits are 0)
+		 */
+		if (dhcsr == 0xffffffffU || (dhcsr & 0xf000fff0U) != 0)
+			continue;
+		/* Now we've got some confidence we've got a good read, check for resets */
+		if ((dhcsr & CORTEXM_DHCSR_S_RESET_ST) && !reset_seen) {
+			if (connect_assert_nrst)
 				return dhcsr;
+			reset_seen = true;
+			continue;
 		}
+		/* And finally check if halt succeeded */
+		if ((dhcsr & (CORTEXM_DHCSR_S_HALT | CORTEXM_DHCSR_C_DEBUGEN)) ==
+			(CORTEXM_DHCSR_S_HALT | CORTEXM_DHCSR_C_DEBUGEN))
+			return dhcsr;
 	}
 
-	return 0;
+	return 0U;
 }
 
-/* Prepare to read SYSROM and SYSROM PIDR
+/*
+ * Prepare the core to read the ROM tables, PIDR, etc
  *
- * Try hard to halt, if not connecting under reset
- * Request TRCENA and default vector catch
- * release from reset when connecting under reset.
+ * Because of various errata, failing to halt the core is considered
+ * a hard error. We also need to set the debug exception and monitor
+ * control register (DEMCR) up but save its value to restore later,
+ * and release the core from reset when connecting under reset.
  *
- * E.g. Stm32F7
+ * Example errata for STM32F7:
  * - fails reading romtable in WFI
  * - fails with some AP accesses when romtable is read under reset.
  * - fails reading some ROMTABLE entries w/o TRCENA
- * - fails reading outside SYSROM when halted from WFI and
- *   DBGMCU_CR not set.
+ * - fails reading outside SYSROM when halted from WFI and DBGMCU_CR not set.
  *
- * E.g. Stm32F0
+ * Example errata for STM32F0
  * - fails reading DBGMCU when under reset
- *
- * Keep a copy of DEMCR at startup to restore with exit, to
- * not interrupt tracing initiated by the CPU.
  */
 static bool cortexm_prepare(adiv5_access_port_s *ap)
 {
@@ -427,33 +481,42 @@ static bool cortexm_prepare(adiv5_access_port_s *ap)
 #endif
 	uint32_t dhcsr = cortexm_initial_halt(ap);
 	if (!dhcsr) {
-		DEBUG_WARN("Halt via DHCSR(%08" PRIx32 "): failure after %" PRId32 "ms\nTry again, evt. with longer "
-				   "timeout or connect under reset\n",
+		DEBUG_ERROR("Halt via DHCSR(%08" PRIx32 "): failure after %" PRIu32 "ms\nTry again with longer "
+					"timeout or connect under reset\n",
 			adiv5_mem_read32(ap, CORTEXM_DHCSR), platform_time_ms() - start_time);
 		return false;
 	}
-	DEBUG_INFO("Halt via DHCSR(%08" PRIx32 "): success after %" PRId32 "ms\n", dhcsr, platform_time_ms() - start_time);
+	/* Clear any residual WAIT fault code to keep things in good state for the next steps */
+	ap->dp->fault = 0;
+	DEBUG_INFO("Halt via DHCSR(%08" PRIx32 "): success after %" PRIu32 "ms\n", dhcsr, platform_time_ms() - start_time);
+	/* Save the old value of DEMCR and enable the DWT, and both vector table debug bits */
 	ap->ap_cortexm_demcr = adiv5_mem_read32(ap, CORTEXM_DEMCR);
 	const uint32_t demcr = CORTEXM_DEMCR_TRCENA | CORTEXM_DEMCR_VC_HARDERR | CORTEXM_DEMCR_VC_CORERESET;
 	adiv5_mem_write(ap, CORTEXM_DEMCR, &demcr, sizeof(demcr));
+	/* Having setup DEMCR, try to observe the core being released from reset */
 	platform_timeout_s reset_timeout;
 	platform_timeout_set(&reset_timeout, cortexm_wait_timeout);
+	/* Deassert the physical reset line */
 	platform_nrst_set_val(false);
 	while (true) {
+		/* Read back DHCSR and check if the reset status bit is still set */
 		dhcsr = adiv5_mem_read32(ap, CORTEXM_DHCSR);
-		if (!(dhcsr & CORTEXM_DHCSR_S_RESET_ST))
+		if ((dhcsr & CORTEXM_DHCSR_S_RESET_ST) == 0)
 			break;
+		/* If it is and we timeout, turn that into an error */
 		if (platform_timeout_is_expired(&reset_timeout)) {
-			DEBUG_WARN("Error releasing from reset\n");
+			DEBUG_ERROR("Error releasing from reset\n");
 			return false;
 		}
 	}
+	/* Core is now in a good state */
 	return true;
 }
 
 static cid_class_e adiv5_class_from_cid(const uint16_t part_number, const uint16_t arch_id, const cid_class_e cid_class)
 {
-	/* Cortex-M23 and 33 incorrectly list their SCS's as a debug component,
+	/*
+	 * Cortex-M23 and 33 incorrectly list their SCS's as a debug component,
 	 * but they're a generic IP component, so we adjust the cid_class.
 	 */
 	if ((part_number == 0xd20U || part_number == 0xd21U) && arch_id == 0x2a04U && cid_class == cidc_dc)
@@ -463,7 +526,8 @@ static cid_class_e adiv5_class_from_cid(const uint16_t part_number, const uint16
 
 /*
  * Return true if we find a debuggable device.
- * NOLINTNEXTLINE(misc-no-recursion) */
+ * NOLINTNEXTLINE(misc-no-recursion)
+ */
 static void adiv5_component_probe(
 	adiv5_access_port_s *ap, uint32_t addr, const size_t recursion, const uint32_t num_entry)
 {
@@ -475,11 +539,9 @@ static void adiv5_component_probe(
 
 	const volatile uint32_t cidr = adiv5_ap_read_id(ap, addr + CIDR0_OFFSET);
 	if (ap->dp->fault) {
-		DEBUG_WARN("CIDR read timeout on AP%d, aborting.\n", ap->apsel);
+		DEBUG_ERROR("Error reading CIDR on AP%u: %u\n", ap->apsel, ap->dp->fault);
 		return;
 	}
-	if ((cidr & ~CID_CLASS_MASK) != CID_PREAMBLE)
-		return;
 
 #if defined(ENABLE_DEBUG)
 	char indent[recursion + 1U];
@@ -490,14 +552,14 @@ static void adiv5_component_probe(
 #endif
 
 	if (adiv5_dp_error(ap->dp)) {
-		DEBUG_WARN("%sFault reading ID registers\n", indent);
+		DEBUG_ERROR("%sFault reading ID registers\n", indent);
 		return;
 	}
 
 	/* CIDR preamble sanity check */
 	if ((cidr & ~CID_CLASS_MASK) != CID_PREAMBLE) {
 		DEBUG_WARN("%s%" PRIu32 " 0x%08" PRIx32 ": 0x%08" PRIx32 " <- does not match preamble (0x%08" PRIx32 ")\n",
-			indent + 1, num_entry, addr, cidr, CID_PREAMBLE);
+			indent, num_entry, addr, cidr, CID_PREAMBLE);
 		return;
 	}
 
@@ -516,8 +578,7 @@ static void adiv5_component_probe(
 			 * see 'JEP-106 code list' for context, here we are aliasing codes that are non compliant with the
 			 * JEP-106 standard to their expected codes, this is later used to determine the correct probe function.
 			 */
-			DEBUG_WARN(
-				"Patching Designer code 0x%03" PRIx16 " -> 0x%03" PRIx16 "\n", designer_code, JEP106_MANUFACTURER_STM);
+			DEBUG_WARN("Patching Designer code 0x%03" PRIx16 " -> 0x%03u\n", designer_code, JEP106_MANUFACTURER_STM);
 			designer_code = JEP106_MANUFACTURER_STM;
 		}
 	} else {
@@ -551,19 +612,18 @@ static void adiv5_component_probe(
 		/* Check SYSMEM bit */
 		const uint32_t memtype = adiv5_mem_read32(ap, addr | ADIV5_ROM_MEMTYPE) & ADIV5_ROM_MEMTYPE_SYSMEM;
 
-		if (adiv5_dp_error(ap->dp)) {
-			DEBUG_WARN("Fault reading ROM table entry\n");
-		}
+		if (adiv5_dp_error(ap->dp))
+			DEBUG_ERROR("Fault reading ROM table entry\n");
 
-		DEBUG_INFO("ROM: Table BASE=0x%" PRIx32 " SYSMEM=0x%08" PRIx32 ", Manufacturer %3x Partno %3x\n", addr, memtype,
-			designer_code, part_number);
+		DEBUG_INFO("ROM: Table BASE=0x%" PRIx32 " SYSMEM=0x%08" PRIx32 ", Manufacturer %03x Partno %03x\n", addr,
+			memtype, designer_code, part_number);
 #endif
 		for (uint32_t i = 0; i < 960U; i++) {
 			adiv5_dp_error(ap->dp);
 
 			uint32_t entry = adiv5_mem_read32(ap, addr + i * 4U);
 			if (adiv5_dp_error(ap->dp)) {
-				DEBUG_WARN("%sFault reading ROM table entry %" PRIu32 "\n", indent, i);
+				DEBUG_ERROR("%sFault reading ROM table entry %" PRIu32 "\n", indent, i);
 				break;
 			}
 
@@ -588,7 +648,7 @@ static void adiv5_component_probe(
 			return;
 		}
 
-		/* ADIv6: For CoreSight components, read DEVTYPE and ARCHID */
+		/* ADIv5: For CoreSight components, read DEVTYPE and ARCHID */
 		uint16_t arch_id = 0;
 		uint8_t dev_type = 0;
 		if (cid_class == cidc_dc) {
@@ -596,9 +656,8 @@ static void adiv5_component_probe(
 
 			uint32_t devarch = adiv5_mem_read32(ap, addr + DEVARCH_OFFSET);
 
-			if (devarch & DEVARCH_PRESENT) {
+			if (devarch & DEVARCH_PRESENT)
 				arch_id = devarch & DEVARCH_ARCHID_MASK;
-			}
 		}
 
 		/* Find the part number in our part list and run the appropriate probe routine if applicable. */
@@ -608,16 +667,16 @@ static void adiv5_component_probe(
 				arm_component_lut[i].arch_id != arch_id)
 				continue;
 
-			DEBUG_INFO("%s%" PRIu32 " 0x%" PRIx32 ": %s - %s %s (PIDR = 0x%08" PRIx32 "%08" PRIx32 "  DEVTYPE = 0x%02x "
+			DEBUG_INFO("%s%" PRIu32 " 0x%" PRIx32 ": %s - %s %s (PIDR = 0x%08" PRIx32 "%08" PRIx32 " DEVTYPE = 0x%02x "
 					   "ARCHID = 0x%04x)\n",
-				indent + 1, num_entry, addr, cidc_debug_strings[cid_class], arm_component_lut[i].type,
+				indent + 1, num_entry, addr, adiv5_cid_class_string(cid_class), arm_component_lut[i].type,
 				arm_component_lut[i].full, (uint32_t)(pidr >> 32U), (uint32_t)pidr, dev_type, arch_id);
 
 			const cid_class_e adjusted_class = adiv5_class_from_cid(part_number, arch_id, cid_class);
 			/* Perform sanity check, if we know what to expect as * component ID class. */
 			if (arm_component_lut[i].cidc != cidc_unknown && adjusted_class != arm_component_lut[i].cidc)
-				DEBUG_WARN("%sWARNING: \"%s\" expected, got \"%s\"\n", indent + 1,
-					cidc_debug_strings[arm_component_lut[i].cidc], cidc_debug_strings[adjusted_class]);
+				DEBUG_WARN("%s\"%s\" expected, got \"%s\"\n", indent + 1,
+					adiv5_cid_class_string(arm_component_lut[i].cidc), adiv5_cid_class_string(adjusted_class));
 
 			switch (arm_component_lut[i].arch) {
 			case aa_cortexm:
@@ -635,9 +694,8 @@ static void adiv5_component_probe(
 		}
 		if (arm_component_lut[i].arch == aa_end) {
 			DEBUG_WARN("%s%" PRIu32 " 0x%" PRIx32 ": %s - Unknown (PIDR = 0x%08" PRIx32 "%08" PRIx32 " DEVTYPE = "
-					   "0x%02x ARCHID = "
-					   "0x%04x)\n",
-				indent, num_entry, addr, cidc_debug_strings[cid_class], (uint32_t)(pidr >> 32U), (uint32_t)pidr,
+					   "0x%02x ARCHID = 0x%04x)\n",
+				indent, num_entry, addr, adiv5_cid_class_string(cid_class), (uint32_t)(pidr >> 32U), (uint32_t)pidr,
 				dev_type, arch_id);
 		}
 	}
@@ -645,9 +703,8 @@ static void adiv5_component_probe(
 
 adiv5_access_port_s *adiv5_new_ap(adiv5_debug_port_s *dp, uint8_t apsel)
 {
-	adiv5_access_port_s tmpap;
+	adiv5_access_port_s tmpap = {0};
 	/* Assume valid and try to read IDR */
-	memset(&tmpap, 0, sizeof(tmpap));
 	tmpap.dp = dp;
 	tmpap.apsel = apsel;
 	tmpap.idr = adiv5_ap_read(&tmpap, ADIV5_AP_IDR);
@@ -667,27 +724,40 @@ adiv5_access_port_s *adiv5_new_ap(adiv5_debug_port_s *dp, uint8_t apsel)
 
 	if (!tmpap.idr) /* IDR Invalid */
 		return NULL;
-	tmpap.csw = adiv5_ap_read(&tmpap, ADIV5_AP_CSW) & ~(ADIV5_AP_CSW_SIZE_MASK | ADIV5_AP_CSW_ADDRINC_MASK);
+	tmpap.csw = adiv5_ap_read(&tmpap, ADIV5_AP_CSW);
+	// XXX: We might be able to use the type field in ap->idr to determine if the AP supports TrustZone
+	tmpap.csw &= ~(ADIV5_AP_CSW_SIZE_MASK | ADIV5_AP_CSW_ADDRINC_MASK | ADIV5_AP_CSW_MTE | ADIV5_AP_CSW_HNOSEC);
+	tmpap.csw |= ADIV5_AP_CSW_DBGSWENABLE;
 
 	if (tmpap.csw & ADIV5_AP_CSW_TRINPROG) {
-		DEBUG_WARN("AP %d: Transaction in progress. AP is not usable!\n", apsel);
+		DEBUG_ERROR("AP %3u: Transaction in progress. AP is not usable!\n", apsel);
 		return NULL;
 	}
 
 	/* It's valid to so create a heap copy */
 	adiv5_access_port_s *ap = malloc(sizeof(*ap));
 	if (!ap) { /* malloc failed: heap exhaustion */
-		DEBUG_WARN("malloc: failed in %s\n", __func__);
+		DEBUG_ERROR("malloc: failed in %s\n", __func__);
 		return NULL;
 	}
 
 	memcpy(ap, &tmpap, sizeof(*ap));
 
 #if defined(ENABLE_DEBUG)
+	/* Grab the config register to get a complete set */
 	uint32_t cfg = adiv5_ap_read(ap, ADIV5_AP_CFG);
-	DEBUG_INFO("AP %3d: IDR=%08" PRIx32 " CFG=%08" PRIx32 " BASE=%08" PRIx32 " CSW=%08" PRIx32, apsel, ap->idr, cfg,
+	DEBUG_INFO("AP %3u: IDR=%08" PRIx32 " CFG=%08" PRIx32 " BASE=%08" PRIx32 " CSW=%08" PRIx32, apsel, ap->idr, cfg,
 		ap->base, ap->csw);
-	DEBUG_INFO(" (AHB-AP var%" PRIx32 " rev%" PRIx32 ")\n", (ap->idr >> 4U) & 0xfU, ap->idr >> 28U);
+	/* Decode the AP designer code */
+	uint16_t designer = ADIV5_AP_IDR_DESIGNER(ap->idr);
+	designer = (designer & ADIV5_DP_DESIGNER_JEP106_CONT_MASK) << 1U | (designer & ADIV5_DP_DESIGNER_JEP106_CODE_MASK);
+	/* If this is an ARM-designed AP, map the AP type. Otherwise display "Unknown" */
+	const char *const ap_type = designer == JEP106_MANUFACTURER_ARM ?
+		adiv5_arm_ap_type_string(ADIV5_AP_IDR_TYPE(ap->idr), ADIV5_AP_IDR_CLASS(ap->idr)) :
+		"Unknown";
+	/* Display the AP's type, variant and revision information */
+	DEBUG_INFO(" (%s var%" PRIx32 " rev%" PRIx32 ")\n", ap_type, ADIV5_AP_IDR_VARIANT(ap->idr),
+		ADIV5_AP_IDR_REVISION(ap->idr));
 #endif
 	adiv5_ap_ref(ap);
 	return ap;
@@ -698,7 +768,7 @@ static void rp_rescue_setup(adiv5_debug_port_s *dp)
 {
 	adiv5_access_port_s *ap = calloc(1, sizeof(*ap));
 	if (!ap) { /* calloc failed: heap exhaustion */
-		DEBUG_WARN("calloc: failed in %s\n", __func__);
+		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return;
 	}
 	ap->dp = dp;
@@ -720,53 +790,79 @@ static void adiv5_dp_clear_sticky_errors(adiv5_debug_port_s *dp)
 		adiv5_dp_error(dp);
 }
 
-void adiv5_dp_init(adiv5_debug_port_s *dp, const uint32_t idcode)
+/* Keep the TRY_CATCH funkiness contained to avoid clobbering and reduce the need for volatiles */
+uint32_t adiv5_dp_read_dpidr(adiv5_debug_port_s *const dp)
 {
-	/*
-	 * Start by assuming DP v1 or later.
-	 * this may not be true for JTAG-DP (we attempt to detect this with the part ID code)
-	 * in such cases (DPv0) DPIDR is not implemented
-	 * and reads are UNPREDICTABLE.
-	 *
-	 * for SWD-DP, we are guaranteed to be DP v1 or later.
-	 */
 	volatile uint32_t dpidr = 0;
 	volatile exception_s e;
 	TRY_CATCH (e, EXCEPTION_ALL) {
-		if (idcode != JTAG_IDCODE_ARM_DPv0)
-			dpidr = adiv5_dp_read(dp, ADIV5_DP_DPIDR);
+		dpidr = adiv5_dp_low_access(dp, ADIV5_LOW_READ, ADIV5_DP_DPIDR, 0U);
 	}
-	if (e.type) {
-		DEBUG_WARN("DP not responding!...\n");
-		free(dp);
-		return;
-	}
+	if (e.type)
+		return 0;
+	return dpidr;
+}
 
-	dp->version = (dpidr & ADIV5_DP_DPIDR_VERSION_MASK) >> ADIV5_DP_DPIDR_VERSION_OFFSET;
-	if (dp->version > 0 && (dpidr & 1U)) {
+void adiv5_dp_init(adiv5_debug_port_s *const dp)
+{
+	/*
+	 * We have to initialse the DP routines up front before any adiv5_* functions are called or
+	 * bad things happen under BMDA (particularly CMSIS-DAP)
+	 */
+	dp->ap_write = firmware_ap_write;
+	dp->ap_read = firmware_ap_read;
+	dp->mem_read = advi5_mem_read_bytes;
+	dp->mem_write = adiv5_mem_write_bytes;
+#if PC_HOSTED == 1
+	bmda_adiv5_dp_init(dp);
+#endif
+
+	/*
+	 * Start by assuming DP v1 or later.
+	 * this may not be true for JTAG-DP (we attempt to detect this with the part ID code)
+	 * in such cases (DPv0) DPIDR is not implemented and reads are UNPREDICTABLE.
+	 *
+	 * for SWD-DP, we are guaranteed to be DP v1 or later.
+	 */
+	if (dp->designer_code != JEP106_MANUFACTURER_ARM || dp->partno != JTAG_IDCODE_PARTNO_DPv0) {
+		const uint32_t dpidr = adiv5_dp_read_dpidr(dp);
+		if (!dpidr) {
+			DEBUG_ERROR("Failed to read DPIDR\n");
+			free(dp);
+			return;
+		}
+
+		dp->version = (dpidr & ADIV5_DP_DPIDR_VERSION_MASK) >> ADIV5_DP_DPIDR_VERSION_OFFSET;
+
 		/*
-		* the code in the DPIDR is in the form
-		* Bits 10:7 - JEP-106 Continuation code
-		* Bits 6:0 - JEP-106 Identity code
-		* here we convert it to our internal representation, See JEP-106 code list
-		*
-		* note: this is the code of the designer not the implementer, we expect it to be ARM
-		*/
+		 * The code in the DPIDR is in the form
+		 * Bits 10:7 - JEP-106 Continuation code
+		 * Bits 6:0 - JEP-106 Identity code
+		 * here we convert it to our internal representation, See JEP-106 code list
+		 *
+		 * note: this is the code of the designer not the implementer, we expect it to be ARM
+		 */
 		const uint16_t designer = (dpidr & ADIV5_DP_DPIDR_DESIGNER_MASK) >> ADIV5_DP_DPIDR_DESIGNER_OFFSET;
 		dp->designer_code =
 			(designer & ADIV5_DP_DESIGNER_JEP106_CONT_MASK) << 1U | (designer & ADIV5_DP_DESIGNER_JEP106_CODE_MASK);
 		dp->partno = (dpidr & ADIV5_DP_DPIDR_PARTNO_MASK) >> ADIV5_DP_DPIDR_PARTNO_OFFSET;
 
+		/* Minimal Debug Port (MINDP) functions implemented */
 		dp->mindp = !!(dpidr & ADIV5_DP_DPIDR_MINDP);
 
-		/* Check for a valid DPIDR / designer */
-		if (dp->designer_code != 0) {
-			DEBUG_INFO("DP DPIDR 0x%08" PRIx32 " (v%x %srev%" PRId32 ") designer 0x%x partno 0x%x\n", dpidr,
+		/*
+		 * Check DPIDR validity
+		 * Designer code 0 is not a valid JEP-106 code
+		 * Version 0 is reserved for DPv0 which does not implement DPIDR
+		 * Bit 0 of DPIDR is read as 1
+		 */
+		if (dp->designer_code != 0 && dp->version > 0 && (dpidr & 1U)) {
+			DEBUG_INFO("DP DPIDR 0x%08" PRIx32 " (v%x %srev%" PRIu32 ") designer 0x%x partno 0x%x\n", dpidr,
 				dp->version, dp->mindp ? "MINDP " : "",
 				(dpidr & ADIV5_DP_DPIDR_REVISION_MASK) >> ADIV5_DP_DPIDR_REVISION_OFFSET, dp->designer_code,
 				dp->partno);
 		} else {
-			DEBUG_WARN("Invalid DPIDR %08" PRIx32 " assuming DP version 0\n", dpidr);
+			DEBUG_WARN("Invalid DPIDR %08" PRIx32 " assuming DPv0\n", dpidr);
 			dp->version = 0;
 			dp->designer_code = 0;
 			dp->partno = 0;
@@ -809,84 +905,56 @@ void adiv5_dp_init(adiv5_debug_port_s *dp, const uint32_t idcode)
 		return;
 	}
 
-	dp->ap_write = firmware_ap_write;
-	dp->ap_read = firmware_ap_read;
-	dp->mem_read = advi5_mem_read_bytes;
-	dp->mem_write = adiv5_mem_write_bytes;
-#if PC_HOSTED == 1
-	platform_adiv5_dp_defaults(dp);
-#endif
-
-	volatile uint32_t ctrlstat = 0;
-	TRY_CATCH (e, EXCEPTION_TIMEOUT) {
-		ctrlstat = adiv5_dp_read(dp, ADIV5_DP_CTRLSTAT);
-	}
-	if (e.type) {
-		DEBUG_WARN("DP not responding!  Trying abort sequence...\n");
-		adiv5_dp_abort(dp, ADIV5_DP_ABORT_DAPABORT);
-		ctrlstat = adiv5_dp_read(dp, ADIV5_DP_CTRLSTAT);
-	}
-
 	platform_timeout_s timeout;
+	platform_timeout_set(&timeout, 250);
+
+	/* Start by resetting the DP contol state so the debug domain powers down */
+	adiv5_dp_write(dp, ADIV5_DP_CTRLSTAT, 0U);
+	uint32_t status = ADIV5_DP_CTRLSTAT_CSYSPWRUPACK | ADIV5_DP_CTRLSTAT_CDBGPWRUPACK;
+	/* Wait for the acknowledgements to go low */
+	while (status & (ADIV5_DP_CTRLSTAT_CSYSPWRUPACK | ADIV5_DP_CTRLSTAT_CDBGPWRUPACK)) {
+		status = adiv5_dp_read(dp, ADIV5_DP_CTRLSTAT);
+		if (platform_timeout_is_expired(&timeout)) {
+			DEBUG_WARN("adiv5: power-down failed\n");
+			break;
+		}
+	}
+
 	platform_timeout_set(&timeout, 201);
 	/* Write request for system and debug power up */
-	adiv5_dp_write(dp, ADIV5_DP_CTRLSTAT, ctrlstat | ADIV5_DP_CTRLSTAT_CSYSPWRUPREQ | ADIV5_DP_CTRLSTAT_CDBGPWRUPREQ);
+	adiv5_dp_write(dp, ADIV5_DP_CTRLSTAT, ADIV5_DP_CTRLSTAT_CSYSPWRUPREQ | ADIV5_DP_CTRLSTAT_CDBGPWRUPREQ);
 	/* Wait for acknowledge */
-	while (true) {
-		ctrlstat = adiv5_dp_read(dp, ADIV5_DP_CTRLSTAT);
-		uint32_t check = ctrlstat & (ADIV5_DP_CTRLSTAT_CSYSPWRUPACK | ADIV5_DP_CTRLSTAT_CDBGPWRUPACK);
-		if (check == (ADIV5_DP_CTRLSTAT_CSYSPWRUPACK | ADIV5_DP_CTRLSTAT_CDBGPWRUPACK))
+	status = 0U;
+	while (status != (ADIV5_DP_CTRLSTAT_CSYSPWRUPACK | ADIV5_DP_CTRLSTAT_CDBGPWRUPACK)) {
+		platform_delay(10);
+		status =
+			adiv5_dp_read(dp, ADIV5_DP_CTRLSTAT) & (ADIV5_DP_CTRLSTAT_CSYSPWRUPACK | ADIV5_DP_CTRLSTAT_CDBGPWRUPACK);
+		if (status == (ADIV5_DP_CTRLSTAT_CSYSPWRUPACK | ADIV5_DP_CTRLSTAT_CDBGPWRUPACK))
 			break;
 		if (platform_timeout_is_expired(&timeout)) {
-			DEBUG_INFO("DEBUG Power-Up failed\n");
+			DEBUG_WARN("adiv5: power-up failed\n");
 			free(dp); /* No AP that referenced this DP so long*/
 			return;
 		}
 	}
-	/* This AP reset logic is described in ADIv5, but fails to work
-	 * correctly on STM32.	CDBGRSTACK is never asserted, and we
-	 * just wait forever.  This scenario is described in B2.4.1
-	 * so we have a timeout mechanism in addition to the sensing one. */
-	platform_timeout_set(&timeout, 200);
-	/* Write request for debug reset */
-	adiv5_dp_write(dp, ADIV5_DP_CTRLSTAT, ctrlstat | ADIV5_DP_CTRLSTAT_CDBGRSTREQ);
-	/* Wait for acknowledge */
-	while (true) {
-		ctrlstat = adiv5_dp_read(dp, ADIV5_DP_CTRLSTAT);
-		if (ctrlstat & ADIV5_DP_CTRLSTAT_CDBGRSTACK) {
-			DEBUG_INFO("RESET_SEQ succeeded.\n");
-			break;
-		}
-		if (platform_timeout_is_expired(&timeout)) {
-			DEBUG_INFO("RESET_SEQ failed\n");
-			break;
-		}
-	}
-	/* Write request for debug reset release */
-	adiv5_dp_write(dp, ADIV5_DP_CTRLSTAT, ctrlstat & ~ADIV5_DP_CTRLSTAT_CDBGRSTREQ);
+	/* At this point due to the guaranteed power domain restart, the APs are all up and in their reset state. */
+
+	if (dp->target_designer_code == JEP106_MANUFACTURER_NXP)
+		lpc55_dp_prepare(dp);
 
 	/* Probe for APs on this DP */
 	size_t invalid_aps = 0;
 	dp->refcnt++;
 	for (size_t i = 0; i < 256U && invalid_aps < 8U; ++i) {
-		adiv5_access_port_s *ap = NULL;
-#if PC_HOSTED == 1
-		if ((!dp->ap_setup) || dp->ap_setup(i))
-			ap = adiv5_new_ap(dp, i);
-#else
-		ap = adiv5_new_ap(dp, i);
-#endif
+		adiv5_access_port_s *ap = adiv5_new_ap(dp, i);
 		if (ap == NULL) {
 			/* Clear sticky errors in case scanning for this AP triggered any */
 			adiv5_dp_clear_sticky_errors(dp);
-#if PC_HOSTED == 1
-			if (dp->ap_cleanup)
-				dp->ap_cleanup(i);
-#endif
-			/* We have probably found all APs on this DP so no need to keep looking.
+			/*
+			 * We have probably found all APs on this DP so no need to keep looking.
 			 * Continue with rest of init function down below.
 			 */
-			if (++invalid_aps == 8)
+			if (++invalid_aps == 8U)
 				break;
 
 			continue;
@@ -895,32 +963,41 @@ void adiv5_dp_init(adiv5_debug_port_s *dp, const uint32_t idcode)
 		kinetis_mdm_probe(ap);
 		nrf51_mdm_probe(ap);
 		efm32_aap_probe(ap);
+		lpc55_dmap_probe(ap);
 
-		/* Halt the device and release from reset if reset is active! */
-		if (!ap->apsel && (ap->idr & 0xfU) == ARM_AP_TYPE_AHB)
-			cortexm_prepare(ap);
-		/* Should probe further here to make sure it's a valid target.
-		 * AP should be unref'd if not valid.
-		 */
+		/* Try to prepare the AP if it seems to be a AHB (memory) AP */
+		if (!ap->apsel && ADIV5_AP_IDR_CLASS(ap->idr) == 8U && ADIV5_AP_IDR_TYPE(ap->idr) == ARM_AP_TYPE_AHB3) {
+			if (!cortexm_prepare(ap))
+				DEBUG_WARN("adiv5: Failed to prepare AP, results may be unpredictable\n");
+		}
 
 		/* The rest should only be added after checking ROM table */
 		adiv5_component_probe(ap, ap->base, 0, 0);
-		adiv5_ap_unref(ap);
-	}
-	/* We halted at least CortexM for Romtable scan.
-	 * With connect under reset, keep the devices halted.
-	 * Otherwise, release the devices now.
-	 * Attach() will halt them again.
-	 */
-	for (target_s *t = target_list; t; t = t->next) {
-		if (!connect_assert_nrst) {
-			target_halt_resume(t, false);
+		/*
+		 * Having completed discovery on this AP, if we're not in connect-under-reset mode,
+		 * and now that we're done with this AP's ROM tables, look for the target and resume the core.
+		 */
+		for (target_s *target = target_list; target; target = target->next) {
+			if (!connect_assert_nrst && target->priv_free == cortex_priv_free) {
+				adiv5_access_port_s *target_ap = cortex_ap(target);
+				if (target_ap == ap)
+					target_halt_resume(target, false);
+			}
+
+			/*
+			 * Due to the Tiva TM4C1294KCDT repeating the single AP ad-nauseum, this check is needed
+			 * so that we bail rather than repeating the same AP ~256 times.
+			 */
+			if (target->priv_free == cortex_priv_free && cortex_ap(target) == ap &&
+				strstr(target->driver, "Tiva") != NULL) {
+				adiv5_dp_unref(dp);
+				return;
+			}
 		}
+		adiv5_ap_unref(ap);
 	}
 	adiv5_dp_unref(dp);
 }
-
-#define ALIGNOF(x) (((x)&3U) == 0 ? ALIGN_WORD : (((x)&1U) == 0 ? ALIGN_HALFWORD : ALIGN_BYTE))
 
 /* Program the CSW and TAR for sequential access at a given width */
 void ap_mem_access_setup(adiv5_access_port_s *ap, uint32_t addr, align_e align)
@@ -928,14 +1005,14 @@ void ap_mem_access_setup(adiv5_access_port_s *ap, uint32_t addr, align_e align)
 	uint32_t csw = ap->csw | ADIV5_AP_CSW_ADDRINC_SINGLE;
 
 	switch (align) {
-	case ALIGN_BYTE:
+	case ALIGN_8BIT:
 		csw |= ADIV5_AP_CSW_SIZE_BYTE;
 		break;
-	case ALIGN_HALFWORD:
+	case ALIGN_16BIT:
 		csw |= ADIV5_AP_CSW_SIZE_HALFWORD;
 		break;
-	case ALIGN_DWORD:
-	case ALIGN_WORD:
+	case ALIGN_64BIT:
+	case ALIGN_32BIT:
 		csw |= ADIV5_AP_CSW_SIZE_WORD;
 		break;
 	}
@@ -947,7 +1024,7 @@ void ap_mem_access_setup(adiv5_access_port_s *ap, uint32_t addr, align_e align)
 void *adiv5_unpack_data(void *const dest, const uint32_t src, const uint32_t data, const align_e align)
 {
 	switch (align) {
-	case ALIGN_BYTE: {
+	case ALIGN_8BIT: {
 		/*
 		 * Mask off the bottom 2 bits of the address to figure out which byte of data to use
 		 * then multiply that by 8 and shift the data down by the result to pick one of the 4 possible bytes
@@ -957,7 +1034,7 @@ void *adiv5_unpack_data(void *const dest, const uint32_t src, const uint32_t dat
 		memcpy(dest, &value, sizeof(value));
 		break;
 	}
-	case ALIGN_HALFWORD: {
+	case ALIGN_16BIT: {
 		/*
 		 * Mask off the 2nd bit of the address to figure out which 16 bits of data to use
 		 * then multiply that by 8 and shift the data down by the result to pick one of the 2 possible 16-bit blocks
@@ -967,10 +1044,10 @@ void *adiv5_unpack_data(void *const dest, const uint32_t src, const uint32_t dat
 		memcpy(dest, &value, sizeof(value));
 		break;
 	}
-	case ALIGN_DWORD:
-	case ALIGN_WORD:
+	case ALIGN_64BIT:
+	case ALIGN_32BIT:
 		/*
-		 * when using 32- or 64-bit alignment, we don't have to do anything special, just memcpy() the data to the
+		 * When using 32- or 64-bit alignment, we don't have to do anything special, just memcpy() the data to the
 		 * destination buffer (this avoids issues with unaligned writes and UB casts)
 		 */
 		memcpy(dest, &data, sizeof(data));
@@ -983,7 +1060,7 @@ void *adiv5_unpack_data(void *const dest, const uint32_t src, const uint32_t dat
 const void *adiv5_pack_data(const uint32_t dest, const void *const src, uint32_t *const data, const align_e align)
 {
 	switch (align) {
-	case ALIGN_BYTE: {
+	case ALIGN_8BIT: {
 		uint8_t value;
 		/* Copy the data to pack in from the source buffer */
 		memcpy(&value, src, sizeof(value));
@@ -991,7 +1068,7 @@ const void *adiv5_pack_data(const uint32_t dest, const void *const src, uint32_t
 		*data = (uint32_t)value << (8U * (dest & 3U));
 		break;
 	}
-	case ALIGN_HALFWORD: {
+	case ALIGN_16BIT: {
 		uint16_t value;
 		/* Copy the data to pack in from the source buffer (avoids unaligned read issues) */
 		memcpy(&value, src, sizeof(value));
@@ -1010,10 +1087,10 @@ const void *adiv5_pack_data(const uint32_t dest, const void *const src, uint32_t
 	return (const uint8_t *)src + (1 << align);
 }
 
-void advi5_mem_read_bytes(adiv5_access_port_s *ap, void *dest, uint32_t src, size_t len)
+void advi5_mem_read_bytes(adiv5_access_port_s *const ap, void *dest, uint32_t src, size_t len)
 {
 	uint32_t osrc = src;
-	const align_e align = MIN(ALIGNOF(src), ALIGNOF(len));
+	const align_e align = MIN_ALIGN(src, len);
 
 	if (len == 0)
 		return;
@@ -1075,8 +1152,8 @@ uint32_t firmware_ap_read(adiv5_access_port_s *ap, uint16_t addr)
 	return ret;
 }
 
-void adiv5_mem_write(adiv5_access_port_s *ap, uint32_t dest, const void *src, size_t len)
+void adiv5_mem_write(adiv5_access_port_s *const ap, const uint32_t dest, const void *const src, const size_t len)
 {
-	align_e align = MIN(ALIGNOF(dest), ALIGNOF(len));
+	const align_e align = MIN_ALIGN(dest, len);
 	adiv5_mem_write_sized(ap, dest, src, len, align);
 }

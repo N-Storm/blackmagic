@@ -27,6 +27,7 @@
 #include "general.h"
 #include "target.h"
 #include "target_internal.h"
+#include "cortexm.h"
 
 static bool sam_flash_erase(target_flash_s *f, target_addr_t addr, size_t len);
 static bool sam3_flash_erase(target_flash_s *f, target_addr_t addr, size_t len);
@@ -194,7 +195,7 @@ static void sam3_add_flash(target_s *t, uint32_t eefc_base, uint32_t addr, size_
 {
 	sam_flash_s *sf = calloc(1, sizeof(*sf));
 	if (!sf) { /* calloc failed: heap exhaustion */
-		DEBUG_WARN("calloc: failed in %s\n", __func__);
+		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return;
 	}
 
@@ -214,7 +215,7 @@ static void sam_add_flash(target_s *t, uint32_t eefc_base, uint32_t addr, size_t
 {
 	sam_flash_s *sf = calloc(1, sizeof(*sf));
 	if (!sf) { /* calloc failed: heap exhaustion */
-		DEBUG_WARN("calloc: failed in %s\n", __func__);
+		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return;
 	}
 
@@ -297,7 +298,7 @@ static size_t sam_sram_size(uint32_t cidr)
 
 samx7x_descr_s samx7x_parse_id(uint32_t cidr, uint32_t exid)
 {
-	samx7x_descr_s descr = {};
+	samx7x_descr_s descr = {0};
 
 	switch (cidr & CHIPID_CIDR_ARCH_MASK) {
 	case CHIPID_CIDR_ARCH_SAME70:
@@ -390,7 +391,7 @@ bool samx7x_probe(target_s *t)
 
 	sam_priv_s *priv_storage = calloc(1, sizeof(*priv_storage));
 	if (!priv_storage) { /* calloc failed: heap exhaustion */
-		DEBUG_WARN("calloc: failed in %s\n", __func__);
+		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return false;
 	}
 	t->target_storage = priv_storage;
@@ -423,6 +424,7 @@ bool sam3x_probe(target_s *t)
 	case CHIPID_CIDR_ARCH_SAM3XxE | CHIPID_CIDR_EPROC_CM3:
 	case CHIPID_CIDR_ARCH_SAM3XxG | CHIPID_CIDR_EPROC_CM3:
 		t->driver = "Atmel SAM3X";
+		t->target_options |= CORTEXM_TOPT_INHIBIT_NRST;
 		target_add_ram(t, 0x20000000, 0x200000);
 		/* 2 Flash memories back-to-back starting at 0x80000 */
 		sam3_add_flash(t, SAM3X_EEFC_BASE(0), 0x80000, size / 2U);
@@ -481,7 +483,7 @@ bool sam3x_probe(target_s *t)
 
 static bool sam_flash_cmd(target_s *t, uint32_t base, uint8_t cmd, uint16_t arg)
 {
-	DEBUG_INFO("%s: base = 0x%08" PRIx32 " cmd = 0x%02X, arg = 0x%06X\n", __func__, base, cmd, arg);
+	DEBUG_INFO("%s: base = 0x%08" PRIx32 " cmd = 0x%02X, arg = 0x%04X\n", __func__, base, cmd, arg);
 
 	if (base == 0)
 		return false;

@@ -25,6 +25,7 @@
  */
 
 #include "general.h"
+#include "platform.h"
 #include "ctype.h"
 #include "hex_utils.h"
 #include "gdb_if.h"
@@ -40,7 +41,21 @@
 #include "rtt.h"
 #endif
 
-#if defined(_WIN32) || defined(__CYGWIN__)
+#if ADVERTISE_NOACKMODE == 1
+/*
+ * This lets GDB know that the probe supports ‘QStartNoAckMode’
+ * and prefers to operate in no-acknowledgment mode
+ *
+ * When not present, GDB will assume that the probe does not support it
+ * but can still be manually enabled by the user with:
+ * set remote noack-packet on
+ */
+#define GDB_QSUPPORTED_NOACKMODE ";QStartNoAckMode+"
+#else
+#define GDB_QSUPPORTED_NOACKMODE
+#endif
+
+#if defined(_WIN32)
 #include <malloc.h>
 #else
 #include <alloca.h>
@@ -182,7 +197,8 @@ int gdb_main_loop(target_controller_s *tc, char *pbuf, size_t pbuf_size, size_t 
 			gdb_putpacketz("OK");
 		break;
 	}
-	/* '[m|M|g|G|c][thread-id]' : Set the thread ID for the given subsequent operation
+	/*
+	 * '[m|M|g|G|c][thread-id]' : Set the thread ID for the given subsequent operation
 	 * (we don't actually care which as we only care about the TID for whether to send OK or an error)
 	 */
 	case 'H': {
@@ -253,7 +269,7 @@ int gdb_main_loop(target_controller_s *tc, char *pbuf, size_t pbuf_size, size_t 
 			int n;
 			sscanf(pbuf, "P%" SCNx32 "=%n", &reg, &n);
 			// TODO: FIXME, VLAs considered harmful.
-			uint8_t val[strlen(&pbuf[n]) / 2U];
+			uint8_t val[strlen(pbuf + n) / 2U];
 			unhexify(val, pbuf + n, sizeof(val));
 			if (target_reg_write(cur_target, reg, val, sizeof(val)) > 0)
 				gdb_putpacketz("OK");
@@ -275,10 +291,11 @@ int gdb_main_loop(target_controller_s *tc, char *pbuf, size_t pbuf_size, size_t 
 		break;
 
 	case '!': /* Enable Extended GDB Protocol. */
-		/* This doesn't do anything, we support the extended
-			 * protocol anyway, but GDB will never send us a 'R'
-			 * packet unless we answer 'OK' here.
-			 */
+		/*
+		 * This doesn't do anything, we support the extended
+		 * protocol anyway, but GDB will never send us a 'R'
+		 * packet unless we answer 'OK' here.
+		 */
 		gdb_putpacketz("OK");
 		break;
 
@@ -296,6 +313,7 @@ int gdb_main_loop(target_controller_s *tc, char *pbuf, size_t pbuf_size, size_t 
 		}
 		if (pbuf[0] == 'D')
 			gdb_putpacketz("OK");
+		gdb_set_noackmode(false);
 		break;
 
 	case 'k': /* Kill the target */
@@ -331,6 +349,7 @@ int gdb_main_loop(target_controller_s *tc, char *pbuf, size_t pbuf_size, size_t 
 		break;
 	}
 
+	case 'Q': /* General set packet */
 	case 'q': /* General query packet */
 		handle_q_packet(pbuf, size);
 		break;
@@ -384,9 +403,9 @@ static void exec_q_rcmd(const char *packet, const size_t length)
 		gdb_putpacketz("OK");
 	else {
 		const char *const response = "Failed\n";
-		const size_t length = strlen(response);
-		char pbuf[length * 2 + 1];
-		gdb_putpacket(hexify(pbuf, response, length), 2 * length);
+		const size_t response_length = strlen(response);
+		char pbuf[response_length * 2 + 1];
+		gdb_putpacket(hexify(pbuf, response, response_length), 2 * response_length);
 	}
 }
 
@@ -418,7 +437,15 @@ static void exec_q_supported(const char *packet, const size_t length)
 {
 	(void)packet;
 	(void)length;
-	gdb_putpacket_f("PacketSize=%X;qXfer:memory-map:read+;qXfer:features:read+", GDB_MAX_PACKET_SIZE);
+
+	/* 
+	 * This is the first packet sent by GDB, so we can reset the NoAckMode flag here in case
+	 * the previous session was terminated abruptly with NoAckMode enabled
+	 */
+	gdb_set_noackmode(false);
+
+	gdb_putpacket_f(
+		"PacketSize=%X;qXfer:memory-map:read+;qXfer:features:read+" GDB_QSUPPORTED_NOACKMODE, GDB_MAX_PACKET_SIZE);
 }
 
 static void exec_q_memory_map(const char *packet, const size_t length)
@@ -494,10 +521,24 @@ static void exec_q_c(const char *packet, const size_t length)
 static void exec_q_thread_info(const char *packet, const size_t length)
 {
 	(void)length;
-	if (packet[-11] == 'f')
+	if (packet[-11] == 'f' && cur_target)
 		gdb_putpacketz("m1");
 	else
 		gdb_putpacketz("l");
+}
+
+/* 
+ * GDB will send the packet 'QStartNoAckMode' to enable NoAckMode
+ * 
+ * To tell GDB to not use NoAckMode do the following before connnecting to the probe:
+ * set remote noack-packet off
+ */
+static void exec_q_noackmode(const char *packet, const size_t length)
+{
+	(void)packet;
+	(void)length;
+	gdb_set_noackmode(true);
+	gdb_putpacketz("OK");
 }
 
 static const cmd_executer_s q_commands[] = {
@@ -509,6 +550,7 @@ static const cmd_executer_s q_commands[] = {
 	{"qC", exec_q_c},
 	{"qfThreadInfo", exec_q_thread_info},
 	{"qsThreadInfo", exec_q_thread_info},
+	{"QStartNoAckMode", exec_q_noackmode},
 	{NULL, NULL},
 };
 
@@ -554,16 +596,16 @@ static void handle_v_packet(char *packet, const size_t plen)
 		} else
 			gdb_putpacketz("E01");
 
-	} else if (!strncmp(packet, "vKill;", 6)) {
+	} else if (!strncmp(packet, "vKill;", 6U)) {
 		/* Kill the target - we don't actually care about the PID that follows "vKill;" */
 		handle_kill_target();
 		gdb_putpacketz("OK");
 
-	} else if (!strncmp(packet, "vRun", 4)) {
+	} else if (!strncmp(packet, "vRun", 4U)) {
 		/* Parse command line for get_cmdline semihosting call */
 		char cmdline[83];
 		char *pcmdline = cmdline;
-		char *tok = packet + 4;
+		char *tok = packet + 4U;
 		if (*tok == ';')
 			++tok;
 		cmdline[0] = '\0';
@@ -576,14 +618,15 @@ static void handle_v_packet(char *packet, const size_t plen)
 				tok++;
 				continue;
 			}
-			if (isxdigit(tok[0]) && isxdigit(tok[1])) {
-				unhexify(pcmdline, tok, 2);
+			/* isxdigit expects int, to handle EOF */
+			if (isxdigit((int8_t)tok[0U]) && isxdigit((int8_t)tok[1U])) {
+				unhexify(pcmdline, tok, 2U);
 				if ((*pcmdline == ' ') || (*pcmdline == '\\')) {
-					pcmdline[1] = *pcmdline;
+					pcmdline[1U] = *pcmdline;
 					*pcmdline++ = '\\';
 				}
 				pcmdline++;
-				tok += 2;
+				tok += 2U;
 				pcmdline[0] = '\0';
 				continue;
 			}
@@ -654,8 +697,10 @@ static void handle_v_packet(char *packet, const size_t plen)
 			gdb_putpacketz("OK");
 
 	} else {
-		/* The vMustReplyEmpty is used as a feature test to check how gdbserver handles unknown packets */
-		/* print only actually unknown packets */
+		/*
+		 * The vMustReplyEmpty is used as a feature test to check how gdbserver handles
+		 * unknown packets, don't print an error message for it.
+		 */
 		if (strcmp(packet, "vMustReplyEmpty") != 0)
 			DEBUG_GDB("*** Unsupported packet: %s\n", packet);
 		gdb_putpacket("", 0);

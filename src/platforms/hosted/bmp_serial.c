@@ -34,30 +34,30 @@
 #include "utils.h"
 #include "version.h"
 
-void bmp_ident(bmp_info_s *info)
+void bmp_ident(bmda_probe_s *info)
 {
-	PRINT_INFO("Black Magic Debug App (for BMP only) %s\n", FIRMWARE_VERSION);
+	DEBUG_INFO("Black Magic Debug App (for BMP only) %s\n", FIRMWARE_VERSION);
 	if (!info)
 		return;
-	PRINT_INFO("Using:\n %s %s %s\n", info->manufacturer, info->version, info->serial);
+	DEBUG_INFO("Using:\n %s %s %s\n", info->manufacturer, info->version, info->serial);
 }
 
-void libusb_exit_function(bmp_info_s *info)
+void libusb_exit_function(bmda_probe_s *info)
 {
 	(void)info;
 };
 
 #ifdef __APPLE__
-int find_debuggers(bmda_cli_options_s *cl_opts, bmp_info_s *info)
+int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
 {
-	DEBUG_WARN("Please implement find_debuggers for MACOS!\n");
+	DEBUG_ERROR("Please implement find_debuggers for MACOS!\n");
 	(void)cl_opts;
 	(void)info;
 	return -1;
 }
 #elif defined(__WIN32__) || defined(__CYGWIN__)
 
-	/* This source has been used as an example:
+/* This source has been used as an example:
  * https://stackoverflow.com/questions/3438366/setupdigetdeviceproperty-usage-example */
 
 #include <windows.h>
@@ -79,7 +79,7 @@ DEFINE_DEVPROPKEY(DEVPKEY_Device_BusReportedDeviceDesc, 0x540b947e, 0x8b40, 0x45
 
 /* List all USB devices with some additional information.
  * Unfortunately, this code is quite ugly. */
-int find_debuggers(bmda_cli_options_s *cl_opts, bmp_info_s *info)
+int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
 {
 	unsigned i;
 	DWORD dwSize;
@@ -92,7 +92,7 @@ int find_debuggers(bmda_cli_options_s *cl_opts, bmp_info_s *info)
 	size_t probes_found = 0;
 	bool is_printing_probes_info = cl_opts->opt_list_only != 0;
 
-	info->bmp_type = BMP_TYPE_BMP;
+	info->type = PROBE_TYPE_BMP;
 
 	hDevInfo = SetupDiGetClassDevs(0, "USB", NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
 	if (hDevInfo == INVALID_HANDLE_VALUE)
@@ -115,7 +115,7 @@ print_probes_info:
 				(BYTE *)busReportedDeviceSesc, sizeof busReportedDeviceSesc, &dwSize, 0)) {
 			probes_found++;
 			if (is_printing_probes_info) {
-				DEBUG_WARN("%2d: %s, %ls\n", probes_found, serial_number, busReportedDeviceSesc);
+				DEBUG_WARN("%2zu: %s, %ls\n", probes_found, serial_number, busReportedDeviceSesc);
 			} else {
 				bool probe_identified = true;
 				if ((cl_opts->opt_serial && strstr(serial_number, cl_opts->opt_serial)) ||
@@ -145,14 +145,14 @@ print_probes_info:
 		 * in the detection loop, so use this probe. */
 		return 0;
 	if (probes_found < 1U) {
-		DEBUG_WARN("No BMP probe found\n");
+		DEBUG_ERROR("No BMP probe found\n");
 		return -1;
 	}
 	/* Otherwise, if this line is reached, then more than one probe has been found,
 	 * and no probe was identified as selected by the user.
 	 * Restart the identification loop, this time printing the probe information,
 	 * and then return. */
-	DEBUG_WARN("%d debuggers found!\nSelect with -P <pos>, or "
+	DEBUG_WARN("%zu debuggers found!\nSelect with -P <pos>, or "
 			   "-s <(partial)serial no.>\n",
 		probes_found);
 	probes_found = 0;
@@ -217,7 +217,7 @@ static probe_info_s *parse_device_node(const char *name, probe_info_s *probe_lis
 	while (name[prefix_length] == '_' && prefix_length < name_len)
 		++prefix_length;
 	if (prefix_length == name_len) {
-		DEBUG_WARN("Unexpected end\n");
+		DEBUG_ERROR("Unexpected end\n");
 		return probe_list;
 	}
 
@@ -283,7 +283,7 @@ static probe_info_s *parse_device_node(const char *name, probe_info_s *probe_lis
 	}
 
 	if (!version || !type) {
-		DEBUG_WARN("Failed to construct version of type string");
+		DEBUG_ERROR("Failed to construct version of type string");
 		free(serial);
 		free(version);
 		free(type);
@@ -291,7 +291,7 @@ static probe_info_s *parse_device_node(const char *name, probe_info_s *probe_lis
 		return probe_list;
 	}
 
-	return probe_info_add_by_serial(probe_list, BMP_TYPE_BMP, type, product, serial, version);
+	return probe_info_add_by_serial(probe_list, PROBE_TYPE_BMP, type, product, serial, version);
 }
 
 static const probe_info_s *scan_for_devices(void)
@@ -314,7 +314,7 @@ static const probe_info_s *scan_for_devices(void)
 			}
 			/* If the operation returned the probe_list unchanged, it failed to parse the node */
 			if (probe_info == probe_list)
-				DEBUG_WARN("Error parsing device name \"%s\"\n", entry->d_name);
+				DEBUG_ERROR("Error parsing device name \"%s\"\n", entry->d_name);
 			probe_list = probe_info;
 		}
 	}
@@ -322,14 +322,14 @@ static const probe_info_s *scan_for_devices(void)
 	return probe_info_correct_order(probe_list);
 }
 
-int find_debuggers(bmda_cli_options_s *cl_opts, bmp_info_s *info)
+int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
 {
 	if (cl_opts->opt_device)
 		return 1;
 	/* Scan for all possible probes on the system */
 	const probe_info_s *const probe_list = scan_for_devices();
 	if (!probe_list) {
-		DEBUG_WARN("No BMP probe found\n");
+		DEBUG_ERROR("No BMP probe found\n");
 		return -1;
 	}
 	/* Count up how many were found and filter the list for a match to the program options request */
@@ -352,8 +352,8 @@ int find_debuggers(bmda_cli_options_s *cl_opts, bmp_info_s *info)
 		return 1; // false;
 	}
 
-	/* We found a matching probe, populate bmp_info_s and signal success */
-	probe_info_to_bmp_info(probe, info);
+	/* We found a matching probe, populate bmda_probe_s and signal success */
+	probe_info_to_bmda_probe(probe, info);
 	probe_info_list_free(probe_list);
 	return 0; // true;
 }

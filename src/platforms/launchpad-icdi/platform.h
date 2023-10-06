@@ -26,7 +26,6 @@
 #define PLATFORM_IDENT "(Launchpad ICDI) "
 
 extern uint8_t running_status;
-extern uint32_t swd_delay_cnt;
 
 #define TMS_PORT GPIOA_BASE
 #define TMS_PIN  GPIO3
@@ -122,32 +121,5 @@ inline static uint8_t gpio_get(uint32_t port, uint8_t pin)
 		usbd_disconnect(usbdev, 1); \
 		nvic_disable_irq(USB_IRQ);  \
 	} while (0)
-
-static inline int platform_hwversion(void)
-{
-	return 0;
-}
-
-/* Use newlib provided integer-only stdio functions */
-
-#ifdef sscanf
-#undef sscanf
-#endif
-#define sscanf siscanf
-
-#ifdef sprintf
-#undef sprintf
-#endif
-#define sprintf siprintf
-
-#ifdef vasprintf
-#undef vasprintf
-#endif
-#define vasprintf vasiprintf
-
-#ifdef snprintf
-#undef snprintf
-#endif
-#define snprintf sniprintf
 
 #endif /* PLATFORMS_LAUNCHPAD_ICDI_PLATFORM_H */

@@ -38,7 +38,7 @@
 
 #include "target.h"
 #include "target_internal.h"
-#include "cortexm.h"
+#include "cortex.h"
 
 static bool samx5x_flash_erase(target_flash_s *f, target_addr_t addr, size_t len);
 static bool samx5x_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len);
@@ -224,7 +224,7 @@ typedef struct samx5x_descr {
 
 samx5x_descr_s samx5x_parse_device_id(uint32_t did)
 {
-	samx5x_descr_s samd = {};
+	samx5x_descr_s samd = {0};
 
 	/* Series */
 	const uint8_t series = (did >> SAMX5X_DID_SERIES_POS) & SAMX5X_DID_SERIES_MASK;
@@ -318,7 +318,7 @@ typedef struct samx5x_priv {
 
 bool samx5x_probe(target_s *t)
 {
-	adiv5_access_port_s *ap = cortexm_ap(t);
+	adiv5_access_port_s *ap = cortex_ap(t);
 	const uint32_t cid = adiv5_ap_read_pidr(ap, SAMX5X_DSU_CID);
 	const uint32_t pid = adiv5_ap_read_pidr(ap, SAMX5X_DSU_PID);
 
@@ -474,11 +474,16 @@ static bool samx5x_flash_erase(target_flash_s *f, target_addr_t addr, size_t len
 		return false;
 	}
 
+	bool is_first_section = true;
+
 	for (size_t offset = 0; offset < len; offset += f->blocksize) {
 		target_mem_write32(t, SAMX5X_NVMC_ADDRESS, addr + offset);
 
-		/* Unlock */
-		samx5x_unlock_current_address(t);
+		/* If we're about to touch a new flash region, unlock it. */
+		if (is_first_section || (offset % lock_region_size) == 0) {
+			samx5x_unlock_current_address(t);
+			is_first_section = false;
+		}
 
 		/* Issue the erase command */
 		target_mem_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_ERASEBLOCK);
@@ -492,12 +497,14 @@ static bool samx5x_flash_erase(target_flash_s *f, target_addr_t addr, size_t len
 		}
 
 		if (target_check_error(t) || samx5x_check_nvm_error(t)) {
-			DEBUG_WARN("Error\n");
+			DEBUG_ERROR("Error\n");
 			return false;
 		}
 
-		/* Lock */
-		samx5x_lock_current_address(t);
+		/* If we've just finished writing to a flash region, lock it. */
+		const size_t next_offset = offset + f->blocksize;
+		if ((next_offset % lock_region_size) == 0)
+			samx5x_lock_current_address(t);
 	}
 
 	return true;
@@ -534,7 +541,7 @@ static bool samx5x_flash_write(target_flash_s *f, target_addr_t dest, const void
 	}
 
 	if (error || target_check_error(t) || samx5x_check_nvm_error(t)) {
-		DEBUG_WARN("Error writing flash page at 0x%08" PRIx32 " (len 0x%08" PRIx32 ")\n", dest, (uint32_t)len);
+		DEBUG_ERROR("Error writing flash page at 0x%08" PRIx32 " (len 0x%08" PRIx32 ")\n", dest, (uint32_t)len);
 		return false;
 	}
 
@@ -648,7 +655,7 @@ static bool samx5x_cmd_lock_flash(target_s *t, int argc, const char **argv)
 		tc_printf(t, "Error writing NVM page\n");
 		return false;
 	}
-	tc_printf(t, "Flash locked. The target must be reset for this to take effect.\n");
+	tc_printf(t, "%s. The target must be reset for this to take effect.\n", "Flash locked");
 	return true;
 }
 
@@ -660,7 +667,7 @@ static bool samx5x_cmd_unlock_flash(target_s *t, int argc, const char **argv)
 		tc_printf(t, "Error writing NVM page\n");
 		return false;
 	}
-	tc_printf(t, "Flash unlocked. The target must be reset for this to take effect.\n");
+	tc_printf(t, "%s. The target must be reset for this to take effect.\n", "Flash unlocked");
 	return true;
 }
 
@@ -696,7 +703,7 @@ static bool samx5x_cmd_lock_bootprot(target_s *t, int argc, const char **argv)
 		tc_printf(t, "Error writing NVM page\n");
 		return false;
 	}
-	tc_printf(t, "Bootprot locked. The target must be reset for this to take effect.\n");
+	tc_printf(t, "%s. The target must be reset for this to take effect.\n", "Bootprot locked");
 	return true;
 }
 
@@ -708,7 +715,7 @@ static bool samx5x_cmd_unlock_bootprot(target_s *t, int argc, const char **argv)
 		tc_printf(t, "Error writing NVM page\n");
 		return false;
 	}
-	tc_printf(t, "Bootprot unlocked. The target must be reset for this to take effect.\n");
+	tc_printf(t, "%s. The target must be reset for this to take effect.\n", "Bootprot unlocked");
 	return true;
 }
 

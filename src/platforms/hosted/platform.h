@@ -37,7 +37,7 @@
 
 #include "timing.h"
 
-char *platform_ident(void);
+char *bmda_adaptor_ident(void);
 void platform_buffer_flush(void);
 
 #define PLATFORM_IDENT "(Black Magic Debug App) "
@@ -49,7 +49,7 @@ void platform_buffer_flush(void);
 	} while (0)
 #define PLATFORM_HAS_POWER_SWITCH
 
-#define SYSTICKHZ 1000U
+#define PRODUCT_ID_ANY 0xffffU
 
 #define VENDOR_ID_BMP     0x1d50U
 #define PRODUCT_ID_BMP_BL 0x6017U
@@ -69,14 +69,22 @@ void platform_buffer_flush(void);
 
 #define VENDOR_ID_SEGGER 0x1366U
 
-typedef enum bmp_type_e {
-	BMP_TYPE_NONE = 0,
-	BMP_TYPE_BMP,
-	BMP_TYPE_STLINKV2,
-	BMP_TYPE_LIBFTDI,
-	BMP_TYPE_CMSIS_DAP,
-	BMP_TYPE_JLINK
-} bmp_type_t;
+#define VENDOR_ID_FTDI         0x0403U
+#define PRODUCT_ID_FTDI_FT2232 0x6010U
+#define PRODUCT_ID_FTDI_FT4232 0x6011U
+#define PRODUCT_ID_FTDI_FT232  0x6014U
+
+#define VENDOR_ID_ORBCODE   0x1209U
+#define PRODUCT_ID_ORBTRACE 0x3443U
+
+typedef enum probe_type {
+	PROBE_TYPE_NONE = 0,
+	PROBE_TYPE_BMP,
+	PROBE_TYPE_STLINK_V2,
+	PROBE_TYPE_FTDI,
+	PROBE_TYPE_CMSIS_DAP,
+	PROBE_TYPE_JLINK
+} probe_type_e;
 
 void gdb_ident(char *p, int count);
 

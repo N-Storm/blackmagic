@@ -3,6 +3,8 @@
  *
  * Copyright (C) 2019  Black Sphere Technologies Ltd.
  * Written by Dave Marples <dave@marples.net>
+ * Copyright (C) 2022-2023 1BitSquared <info@1bitsquared.com>
+ * Modified by Rachel Mant <git@dragonmux.network>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,7 +26,7 @@
 #include <inttypes.h>
 #include "general.h"
 
-#define REMOTE_HL_VERSION 2
+#define REMOTE_HL_VERSION 3
 
 /*
  * Commands to remote end, and responses
@@ -55,13 +57,29 @@
 /* Protocol error messages */
 #define REMOTE_ERROR_UNRECOGNISED 1
 #define REMOTE_ERROR_WRONGLEN     2
+#define REMOTE_ERROR_FAULT        3
+#define REMOTE_ERROR_EXCEPTION    4
 
 /* Start and end of message identifiers */
 #define REMOTE_SOM  '!'
 #define REMOTE_EOM  '#'
 #define REMOTE_RESP '&'
 
+/* Protocol response options */
+#define REMOTE_RESP_OK     'K'
+#define REMOTE_RESP_PARERR 'P'
+#define REMOTE_RESP_ERR    'E'
+#define REMOTE_RESP_NOTSUP 'N'
+
+/* Protocol data elements */
+#define REMOTE_UINT8  '%', '0', '2', 'x'
+#define REMOTE_UINT16 '%', '0', '4', 'x'
+#define REMOTE_UINT24 '%', '0', '6', 'x'
+#define REMOTE_UINT32 '%', '0', '8', 'x'
+
 /* Generic protocol elements */
+#define REMOTE_GEN_PACKET 'G'
+
 #define REMOTE_START         'A'
 #define REMOTE_TDITDO_TMS    'D'
 #define REMOTE_TDITDO_NOTMS  'd'
@@ -84,26 +102,6 @@
 #define REMOTE_NRST_GET      'z'
 #define REMOTE_ADD_JTAG_DEV  'J'
 
-/* Protocol response options */
-#define REMOTE_RESP_OK     'K'
-#define REMOTE_RESP_PARERR 'P'
-#define REMOTE_RESP_ERR    'E'
-#define REMOTE_RESP_NOTSUP 'N'
-
-/* High level protocol elements */
-#define REMOTE_HL_CHECK           'C'
-#define REMOTE_HL_PACKET          'H'
-#define REMOTE_DP_READ            'd'
-#define REMOTE_LOW_ACCESS         'L'
-#define REMOTE_AP_READ            'a'
-#define REMOTE_AP_WRITE           'A'
-#define REMOTE_AP_MEM_READ        'M'
-#define REMOTE_MEM_READ           'h'
-#define REMOTE_MEM_WRITE_SIZED    'H'
-#define REMOTE_AP_MEM_WRITE_SIZED 'm'
-
-/* Generic protocol elements */
-#define REMOTE_GEN_PACKET 'G'
 #define REMOTE_START_STR                                                            \
 	(char[])                                                                        \
 	{                                                                               \
@@ -220,72 +218,149 @@
 		REMOTE_SOM, REMOTE_JTAG_PACKET, REMOTE_NEXT, '%', 'u', '%', 'u', REMOTE_EOM, 0 \
 	}
 
-/* HL protocol elements */
-#define HEX        '%', '0', '2', 'x'
-#define HEX_U32(x) '%', '0', '8', 'x'
-#define CHR(x)     '%', 'c'
-
-#define REMOTE_JTAG_ADD_DEV_STR                                                                    \
-	(char[])                                                                                       \
-	{                                                                                              \
-		REMOTE_SOM, REMOTE_JTAG_PACKET, REMOTE_ADD_JTAG_DEV, '%', '0', '2', 'x', /* index */       \
-			'%', '0', '2', 'x',                                                  /* dr_prescan */  \
-			'%', '0', '2', 'x',                                                  /*	dr_postscan	*/ \
-			'%', '0', '2', 'x',                                                  /* ir_len */      \
-			'%', '0', '2', 'x',                                                  /* ir_prescan */  \
-			'%', '0', '2', 'x',                                                  /* ir_postscan */ \
-			HEX_U32(current_ir),                                                 /* current_ir */  \
-			REMOTE_EOM, 0                                                                          \
-	}
+/* High-level protocol elements */
+#define REMOTE_HL_PACKET 'H'
+#define REMOTE_HL_CHECK  'C'
 
 #define REMOTE_HL_CHECK_STR                                          \
 	(char[])                                                         \
 	{                                                                \
 		REMOTE_SOM, REMOTE_HL_PACKET, REMOTE_HL_CHECK, REMOTE_EOM, 0 \
 	}
-#define REMOTE_DP_READ_STR                                                                                            \
-	(char[])                                                                                                          \
-	{                                                                                                                 \
-		REMOTE_SOM, REMOTE_HL_PACKET, REMOTE_DP_READ, '%', '0', '2', 'x', 'f', 'f', '%', '0', '4', 'x', REMOTE_EOM, 0 \
-	}
-#define REMOTE_LOW_ACCESS_STR                                                                                        \
-	(char[])                                                                                                         \
-	{                                                                                                                \
-		REMOTE_SOM, REMOTE_HL_PACKET, REMOTE_LOW_ACCESS, '%', '0', '2', 'x', '%', '0', '2', 'x', '%', '0', '4', 'x', \
-			HEX_U32(csw), REMOTE_EOM, 0                                                                              \
-	}
-#define REMOTE_AP_READ_STR                                                                                        \
-	(char[])                                                                                                      \
-	{                                                                                                             \
-		REMOTE_SOM, REMOTE_HL_PACKET, REMOTE_AP_READ, '%', '0', '2', 'x', '%', '0', '2', 'x', '%', '0', '4', 'x', \
-			REMOTE_EOM, 0                                                                                         \
-	}
-#define REMOTE_AP_WRITE_STR                                                                                        \
-	(char[])                                                                                                       \
-	{                                                                                                              \
-		REMOTE_SOM, REMOTE_HL_PACKET, REMOTE_AP_WRITE, '%', '0', '2', 'x', '%', '0', '2', 'x', '%', '0', '4', 'x', \
-			HEX_U32(csw), REMOTE_EOM, 0                                                                            \
-	}
-#define REMOTE_AP_MEM_READ_STR                                                                                  \
-	(char[])                                                                                                    \
-	{                                                                                                           \
-		REMOTE_SOM, REMOTE_HL_PACKET, REMOTE_AP_MEM_READ, '%', '0', '2', 'x', '%', '0', '2', 'x', HEX_U32(csw), \
-			HEX_U32(address), HEX_U32(count), REMOTE_EOM, 0                                                     \
-	}
-#define REMOTE_AP_MEM_WRITE_SIZED_STR                                                                                  \
-	(char[])                                                                                                           \
-	{                                                                                                                  \
-		REMOTE_SOM, REMOTE_HL_PACKET, REMOTE_AP_MEM_WRITE_SIZED, '%', '0', '2', 'x', '%', '0', '2', 'x', HEX_U32(csw), \
-			'%', '0', '2', 'x', HEX_U32(address), HEX_U32(count), 0                                                    \
-	}
-#define REMOTE_MEM_WRITE_SIZED_STR                                                                       \
-	(char[])                                                                                             \
-	{                                                                                                    \
-		REMOTE_SOM, REMOTE_HL_PACKET, REMOTE_AP_MEM_WRITE_SIZED, '%', '0', '2', 'x', '%', '0', '2', 'x', \
-			HEX_U32(address), HEX_U32(count), 0                                                          \
+#define REMOTE_JTAG_ADD_DEV_STR                                                            \
+	(char[])                                                                               \
+	{                                                                                      \
+		REMOTE_SOM, REMOTE_HL_PACKET, REMOTE_ADD_JTAG_DEV, REMOTE_UINT8, /* index */       \
+			REMOTE_UINT8,                                                /* dr_prescan */  \
+			REMOTE_UINT8,                                                /* dr_postscan */ \
+			REMOTE_UINT8,                                                /* ir_len */      \
+			REMOTE_UINT8,                                                /* ir_prescan */  \
+			REMOTE_UINT8,                                                /* ir_postscan */ \
+			REMOTE_UINT32,                                               /* current_ir */  \
+			REMOTE_EOM, 0                                                                  \
 	}
 
-uint64_t remotehston(uint32_t limit, const char *s);
+/* ADIv5 protocol elements */
+#define REMOTE_ADIv5_PACKET     'A'
+#define REMOTE_DP_READ          'd'
+#define REMOTE_AP_READ          'a'
+#define REMOTE_AP_WRITE         'A'
+#define REMOTE_ADIv5_RAW_ACCESS 'R'
+#define REMOTE_MEM_READ         'm'
+#define REMOTE_MEM_WRITE        'M'
+
+#define REMOTE_ADIv5_DEV_INDEX REMOTE_UINT8
+#define REMOTE_ADIv5_AP_SEL    REMOTE_UINT8
+#define REMOTE_ADIv5_ADDR16    REMOTE_UINT16
+#define REMOTE_ADIv5_ADDR32    REMOTE_UINT32
+#define REMOTE_ADIv5_DATA      REMOTE_UINT32
+#define REMOTE_ADIv5_CSW       REMOTE_UINT32
+#define REMOTE_ADIv5_ALIGNMENT REMOTE_UINT8
+#define REMOTE_ADIv5_COUNT     REMOTE_UINT32
+
+#define REMOTE_DP_READ_STR                                                                                      \
+	(char[])                                                                                                    \
+	{                                                                                                           \
+		REMOTE_SOM, REMOTE_ADIv5_PACKET, REMOTE_DP_READ, REMOTE_ADIv5_DEV_INDEX, 'f', 'f', REMOTE_ADIv5_ADDR16, \
+			REMOTE_EOM, 0                                                                                       \
+	}
+#define REMOTE_AP_READ_STR                                                                            \
+	(char[])                                                                                          \
+	{                                                                                                 \
+		REMOTE_SOM, REMOTE_ADIv5_PACKET, REMOTE_AP_READ, REMOTE_ADIv5_DEV_INDEX, REMOTE_ADIv5_AP_SEL, \
+			REMOTE_ADIv5_ADDR16, REMOTE_EOM, 0                                                        \
+	}
+#define REMOTE_AP_WRITE_STR                                                                            \
+	(char[])                                                                                           \
+	{                                                                                                  \
+		REMOTE_SOM, REMOTE_ADIv5_PACKET, REMOTE_AP_WRITE, REMOTE_ADIv5_DEV_INDEX, REMOTE_ADIv5_AP_SEL, \
+			REMOTE_ADIv5_ADDR16, REMOTE_ADIv5_DATA, REMOTE_EOM, 0                                      \
+	}
+#define REMOTE_ADIv5_RAW_ACCESS_STR                                                                            \
+	(char[])                                                                                                   \
+	{                                                                                                          \
+		REMOTE_SOM, REMOTE_ADIv5_PACKET, REMOTE_ADIv5_RAW_ACCESS, REMOTE_ADIv5_DEV_INDEX, REMOTE_ADIv5_AP_SEL, \
+			REMOTE_ADIv5_ADDR16, REMOTE_ADIv5_DATA, REMOTE_EOM, 0                                              \
+	}
+#define REMOTE_ADIv5_MEM_READ_STR                                                                      \
+	(char[])                                                                                           \
+	{                                                                                                  \
+		REMOTE_SOM, REMOTE_ADIv5_PACKET, REMOTE_MEM_READ, REMOTE_ADIv5_DEV_INDEX, REMOTE_ADIv5_AP_SEL, \
+			REMOTE_ADIv5_CSW, REMOTE_ADIv5_ADDR32, REMOTE_ADIv5_COUNT, REMOTE_EOM, 0                   \
+	}
+/*
+ * 3 leader bytes + 2 bytes for dev index + 2 bytes for AP select + 8 for CSW + 8 for the address
+ * and 8 for the count and one trailer gives 32U
+ */
+#define REMOTE_ADIv5_MEM_READ_LENGTH 32U
+#define REMOTE_ADIv5_MEM_WRITE_STR                                                                      \
+	(char[])                                                                                            \
+	{                                                                                                   \
+		REMOTE_SOM, REMOTE_ADIv5_PACKET, REMOTE_MEM_WRITE, REMOTE_ADIv5_DEV_INDEX, REMOTE_ADIv5_AP_SEL, \
+			REMOTE_ADIv5_CSW, REMOTE_ADIv5_ALIGNMENT, REMOTE_ADIv5_ADDR32, REMOTE_ADIv5_COUNT, 0        \
+	}
+/*
+ * 3 leader bytes + 2 bytes for dev index + 2 bytes for AP select + 8 for CSW + 2 for the alignment +
+ * 8 for the address and 8 for the count and one trailer gives 34U
+ */
+#define REMOTE_ADIv5_MEM_WRITE_LENGTH 34U
+
+/* SPI protocol elements */
+#define REMOTE_SPI_PACKET      's'
+#define REMOTE_SPI_BEGIN       'B'
+#define REMOTE_SPI_END         'E'
+#define REMOTE_SPI_CHIP_SELECT 'C'
+#define REMOTE_SPI_TRANSFER    'X'
+#define REMOTE_SPI_READ        'r'
+#define REMOTE_SPI_WRTIE       'w'
+#define REMOTE_SPI_CHIP_ID     'I'
+#define REMOTE_SPI_RUN_COMMAND 'c'
+
+#define REMOTE_SPI_BEGIN_STR                                                                          \
+	(char[])                                                                                          \
+	{                                                                                                 \
+		'+', REMOTE_EOM, REMOTE_SOM, REMOTE_SPI_PACKET, REMOTE_SPI_BEGIN, REMOTE_UINT8, REMOTE_EOM, 0 \
+	}
+#define REMOTE_SPI_END_STR                                                         \
+	(char[])                                                                       \
+	{                                                                              \
+		REMOTE_SOM, REMOTE_SPI_PACKET, REMOTE_SPI_END, REMOTE_UINT8, REMOTE_EOM, 0 \
+	}
+#define REMOTE_SPI_CHIP_SELECT_STR                                                         \
+	(char[])                                                                               \
+	{                                                                                      \
+		REMOTE_SOM, REMOTE_SPI_PACKET, REMOTE_SPI_CHIP_SELECT, REMOTE_UINT8, REMOTE_EOM, 0 \
+	}
+#define REMOTE_SPI_TRANSFER_STR                                                                        \
+	(char[])                                                                                           \
+	{                                                                                                  \
+		REMOTE_SOM, REMOTE_SPI_PACKET, REMOTE_SPI_TRANSFER, REMOTE_UINT8, REMOTE_UINT8, REMOTE_EOM, 0, \
+	}
+#define REMOTE_SPI_READ_STR                                                                                       \
+	(char[])                                                                                                      \
+	{                                                                                                             \
+		REMOTE_SOM, REMOTE_SPI_PACKET, REMOTE_SPI_READ, REMOTE_UINT8, REMOTE_UINT8, REMOTE_UINT16, REMOTE_UINT24, \
+			REMOTE_UINT16, REMOTE_EOM, 0,                                                                         \
+	}
+#define REMOTE_SPI_WRITE_STR                                                                                       \
+	(char[])                                                                                                       \
+	{                                                                                                              \
+		REMOTE_SOM, REMOTE_SPI_PACKET, REMOTE_SPI_WRITE, REMOTE_UINT8, REMOTE_UINT8, REMOTE_UINT16, REMOTE_UINT24, \
+			REMOTE_UINT16, 0,                                                                                      \
+	}
+#define REMOTE_SPI_CHIP_ID_STR                                                                       \
+	(char[])                                                                                         \
+	{                                                                                                \
+		REMOTE_SOM, REMOTE_SPI_PACKET, REMOTE_SPI_CHIP_ID, REMOTE_UINT8, REMOTE_UINT8, REMOTE_EOM, 0 \
+	}
+#define REMOTE_SPI_RUN_COMMAND_STR                                                                        \
+	(char[])                                                                                              \
+	{                                                                                                     \
+		REMOTE_SOM, REMOTE_SPI_PACKET, REMOTE_SPI_RUN_COMMAND, REMOTE_UINT8, REMOTE_UINT8, REMOTE_UINT16, \
+			REMOTE_UINT24, REMOTE_EOM, 0                                                                  \
+	}
+
+uint64_t remote_hex_string_to_num(uint32_t limit, const char *str);
 void remote_packet_process(unsigned int i, char *packet);
 
 #endif /* REMOTE_H */

@@ -19,6 +19,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <string.h>
 #include "general.h"
 #include "target.h"
 #include "target_internal.h"
@@ -77,78 +78,79 @@ const command_s lpc546xx_cmd_list[] = {
 	{NULL, NULL, NULL},
 };
 
-static void lpc546xx_add_flash(
-	target_s *t, uint32_t iap_entry, uint8_t base_sector, uint32_t addr, size_t len, size_t erasesize)
+typedef struct lpc546xx_device {
+	uint32_t chipid;
+	const char *designator;
+	uint16_t flash_kbytes;
+	uint16_t sram123_kbytes;
+} lpc546xx_device_s;
+
+/*
+ * Reference: "LPC546XX Product data sheet" revision 2.6, 2018
+ * Part type number encoding: LPC546xxJyyy, where yyy is flash size, KiB
+ */
+static const lpc546xx_device_s lpc546xx_devices_lut[] = {
+	{0x7f954605U, "LPC546xxJ256", 256, 32},
+	{0x7f954606U, "LPC546xxJ256", 256, 32},
+	{0x7f954607U, "LPC546xxJ256", 256, 32},
+	{0x7f954616U, "LPC546xxJ256", 256, 32},
+	{0xfff54605U, "LPC546xxJ512", 512, 96},
+	{0xfff54606U, "LPC546xxJ512", 512, 96},
+	{0xfff54607U, "LPC546xxJ512", 512, 96},
+	{0xfff54608U, "LPC546xxJ512", 512, 96},
+	{0xfff54616U, "LPC546xxJ512", 512, 96},
+	{0xfff54618U, "LPC546xxJ512", 512, 96},
+	{0xfff54628U, "LPC546xxJ512", 512, 96},
+};
+
+/* Look up device parameters */
+static const lpc546xx_device_s *lpc546xx_get_device(const uint32_t chipid)
 {
-	struct lpc_flash *lf = lpc_add_flash(t, addr, len);
-	lf->f.erase = lpc546xx_flash_erase;
+	/* Linear search through chips */
+	for (size_t i = 0; i < ARRAY_LENGTH(lpc546xx_devices_lut); i++) {
+		if (lpc546xx_devices_lut[i].chipid == chipid)
+			return lpc546xx_devices_lut + i;
+	}
 
+	/* Unknown chip */
+	return NULL;
+}
+
+static void lpc546xx_add_flash(
+	target_s *target, uint32_t iap_entry, uint8_t base_sector, uint32_t addr, size_t len, size_t erasesize)
+{
+	lpc_flash_s *flash = lpc_add_flash(target, addr, len, IAP_PGM_CHUNKSIZE);
+	flash->f.blocksize = erasesize;
+	flash->f.erase = lpc546xx_flash_erase;
 	/* LPC546xx devices require the checksum value written into the vector table in sector 0 */
-	lf->f.write = lpc_flash_write_magic_vect;
-
-	lf->f.blocksize = erasesize;
-	lf->f.writesize = IAP_PGM_CHUNKSIZE;
-	lf->bank = 0;
-	lf->base_sector = base_sector;
-	lf->iap_entry = iap_entry;
-	lf->iap_ram = IAP_RAM_BASE;
-	lf->iap_msp = IAP_RAM_BASE + IAP_RAM_SIZE;
-	lf->wdt_kick = lpc546xx_wdt_kick;
+	flash->f.write = lpc_flash_write_magic_vect;
+	flash->bank = 0;
+	flash->base_sector = base_sector;
+	flash->iap_entry = iap_entry;
+	flash->iap_ram = IAP_RAM_BASE;
+	flash->iap_msp = IAP_RAM_BASE + IAP_RAM_SIZE;
+	flash->wdt_kick = lpc546xx_wdt_kick;
 }
 
 bool lpc546xx_probe(target_s *t)
 {
 	const uint32_t chipid = target_mem_read32(t, LPC546XX_CHIPID);
 	uint32_t flash_size = 0;
+	uint32_t sram123_size = 0;
 
-	switch (chipid) {
-	case 0x7f954605U:
-		t->driver = "LPC54605J256";
-		flash_size = 0x40000;
-		break;
-	case 0x7f954606U:
-		t->driver = "LPC54606J256";
-		flash_size = 0x40000;
-		break;
-	case 0x7f954607U:
-		t->driver = "LPC54607J256";
-		flash_size = 0x40000;
-		break;
-	case 0x7f954616U:
-		t->driver = "LPC54616J256";
-		flash_size = 0x40000;
-		break;
-	case 0xfff54605U:
-		t->driver = "LPC54605J512";
-		flash_size = 0x80000;
-		break;
-	case 0xfff54606U:
-		t->driver = "LPC54606J512";
-		flash_size = 0x80000;
-		break;
-	case 0xfff54607U:
-		t->driver = "LPC54607J512";
-		flash_size = 0x80000;
-		break;
-	case 0xfff54608U:
-		t->driver = "LPC54608J512";
-		flash_size = 0x80000;
-		break;
-	case 0xfff54616U:
-		t->driver = "LPC54616J512";
-		flash_size = 0x80000;
-		break;
-	case 0xfff54618U:
-		t->driver = "LPC54618J512";
-		flash_size = 0x80000;
-		break;
-	case 0xfff54628U:
-		t->driver = "LPC54628J512";
-		flash_size = 0x80000;
-		break;
-	default:
+	DEBUG_INFO("LPC546xx: Part ID 0x%08" PRIu32 "\n", chipid);
+	const lpc546xx_device_s *device = lpc546xx_get_device(chipid);
+	if (!device)
 		return false;
-	}
+
+	flash_size = device->flash_kbytes * 1024U;
+	t->driver = device->designator;
+	/*
+	 * All parts have 64kB SRAM0 (and 32kB SRAMX)
+	 * J256 parts only have 32kB SRAM1
+	 * J512 parts also have 32kB SRAM2 & 32kB SRAM3 (total 96kB "upper" SRAM123)
+	 */
+	sram123_size = device->sram123_kbytes * 1024U;
 
 	t->mass_erase = lpc546xx_mass_erase;
 	lpc546xx_add_flash(t, IAP_ENTRYPOINT_LOCATION, 0, 0x0, flash_size, 0x8000);
@@ -157,8 +159,11 @@ bool lpc546xx_probe(target_s *t)
 	 * Note: upper 96kiB is only usable after enabling the appropriate control
 	 * register bits, see LPC546xx User Manual: §7.5.19 AHB Clock Control register 0
 	 */
-	target_add_ram(t, 0x20000000, 0x28000);
-	target_add_commands(t, lpc546xx_cmd_list, "Lpc546xx");
+	const uint32_t sram0_size = 64U * 1024U;
+	target_add_ram(t, 0x20000000, sram0_size);
+	target_add_ram(t, 0x20010000, sram123_size);
+	target_add_ram(t, 0x04000000, 0x8000U); /* SRAMX */
+	target_add_commands(t, lpc546xx_cmd_list, "LPC546xx");
 	t->target_options |= CORTEXM_TOPT_INHIBIT_NRST;
 	return true;
 }
@@ -195,30 +200,32 @@ static bool lpc546xx_cmd_erase_sector(target_s *t, int argc, const char **argv)
 	return true;
 }
 
-static bool lpc546xx_cmd_read_partid(target_s *t, int argc, const char **argv)
+static bool lpc546xx_cmd_read_partid(target_s *target, int argc, const char **argv)
 {
 	(void)argc;
 	(void)argv;
-	struct lpc_flash *f = (struct lpc_flash *)t->flash;
-	uint32_t partid[4];
-	if (lpc_iap_call(f, partid, IAP_CMD_PARTID))
+	lpc_flash_s *flash = (lpc_flash_s *)target->flash;
+	iap_result_s result;
+	if (lpc_iap_call(flash, &result, IAP_CMD_PARTID))
 		return false;
-	tc_printf(t, "PART ID: 0x%08x\n", partid[0]);
+	tc_printf(target, "PART ID: 0x%08x\n", result.values[0]);
 	return true;
 }
 
-static bool lpc546xx_cmd_read_uid(target_s *t, int argc, const char **argv)
+static bool lpc546xx_cmd_read_uid(target_s *target, int argc, const char **argv)
 {
 	(void)argc;
 	(void)argv;
-	struct lpc_flash *f = (struct lpc_flash *)t->flash;
-	uint8_t uid[16];
-	if (lpc_iap_call(f, uid, IAP_CMD_READUID))
+	lpc_flash_s *flash = (lpc_flash_s *)target->flash;
+	iap_result_s result = {0};
+	if (lpc_iap_call(flash, &result, IAP_CMD_READUID))
 		return false;
-	tc_printf(t, "UID: 0x");
+	uint8_t uid[16U] = {0};
+	memcpy(&uid, result.values, sizeof(uid));
+	tc_printf(target, "UID: 0x");
 	for (uint32_t i = 0; i < sizeof(uid); ++i)
-		tc_printf(t, "%02x", uid[i]);
-	tc_printf(t, "\n");
+		tc_printf(target, "%02x", uid[i]);
+	tc_printf(target, "\n");
 	return true;
 }
 
@@ -260,6 +267,10 @@ static bool lpc546xx_cmd_write_sector(target_s *t, int argc, const char **argv)
 			return false;
 
 		uint8_t *buf = calloc(1, sector_size);
+		if (!buf) { /* calloc failed: heap exhaustion */
+			DEBUG_ERROR("calloc: failed in %s\n", __func__);
+			return false;
+		}
 		for (uint32_t i = 0; i < sector_size; i++)
 			buf[i] = i & 0xffU;
 

@@ -353,7 +353,7 @@ typedef struct samd_descr {
 
 samd_descr_s samd_parse_device_id(uint32_t did)
 {
-	samd_descr_s samd = {};
+	samd_descr_s samd = {0};
 	const samd_part_s *parts = samd_d21_parts;
 	samd.ram_size = 0x8000;
 	samd.flash_size = 0x40000;
@@ -474,7 +474,7 @@ static void samd_add_flash(target_s *t, uint32_t addr, size_t length)
 {
 	target_flash_s *f = calloc(1, sizeof(*f));
 	if (!f) { /* calloc failed: heap exhaustion */
-		DEBUG_WARN("calloc: failed in %s\n", __func__);
+		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return;
 	}
 
@@ -495,7 +495,7 @@ typedef struct samd_priv {
 
 bool samd_probe(target_s *t)
 {
-	adiv5_access_port_s *ap = cortexm_ap(t);
+	adiv5_access_port_s *ap = cortex_ap(t);
 	const uint32_t cid = adiv5_ap_read_pidr(ap, SAMD_DSU_CID);
 	const uint32_t pid = adiv5_ap_read_pidr(ap, SAMD_DSU_PID);
 

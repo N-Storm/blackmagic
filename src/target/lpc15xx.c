@@ -19,6 +19,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <string.h>
 #include "general.h"
 #include "target.h"
 #include "target_internal.h"
@@ -35,18 +36,20 @@
 
 #define LPC15XX_DEVICE_ID 0x400743f8U
 
-static bool lpc15xx_read_uid(target_s *t, int argc, const char *argv[])
+static bool lpc15xx_read_uid(target_s *target, int argc, const char *argv[])
 {
 	(void)argc;
 	(void)argv;
-	struct lpc_flash *f = (struct lpc_flash *)t->flash;
-	uint8_t uid[16];
-	if (lpc_iap_call(f, uid, IAP_CMD_READUID))
+	struct lpc_flash *flash = (struct lpc_flash *)target->flash;
+	iap_result_s result = {0};
+	if (lpc_iap_call(flash, &result, IAP_CMD_READUID))
 		return false;
-	tc_printf(t, "UID: 0x");
+	uint8_t uid[16U] = {0};
+	memcpy(&uid, result.values, sizeof(uid));
+	tc_printf(target, "UID: 0x");
 	for (uint32_t i = 0; i < sizeof(uid); ++i)
-		tc_printf(t, "%02x", uid[i]);
-	tc_printf(t, "\n");
+		tc_printf(target, "%02x", uid[i]);
+	tc_printf(target, "\n");
 	return true;
 }
 
@@ -55,15 +58,14 @@ const command_s lpc15xx_cmd_list[] = {
 	{NULL, NULL, NULL},
 };
 
-static void lpc15xx_add_flash(target_s *t, uint32_t addr, size_t len, size_t erasesize)
+static void lpc15xx_add_flash(target_s *target, uint32_t addr, size_t len, size_t erasesize)
 {
-	struct lpc_flash *lf = lpc_add_flash(t, addr, len);
-	lf->f.blocksize = erasesize;
-	lf->f.writesize = IAP_PGM_CHUNKSIZE;
-	lf->f.write = lpc_flash_write_magic_vect;
-	lf->iap_entry = IAP_ENTRYPOINT;
-	lf->iap_ram = IAP_RAM_BASE;
-	lf->iap_msp = IAP_RAM_BASE + MIN_RAM_SIZE - RAM_USAGE_FOR_IAP_ROUTINES;
+	struct lpc_flash *flash = lpc_add_flash(target, addr, len, IAP_PGM_CHUNKSIZE);
+	flash->f.blocksize = erasesize;
+	flash->f.write = lpc_flash_write_magic_vect;
+	flash->iap_entry = IAP_ENTRYPOINT;
+	flash->iap_ram = IAP_RAM_BASE;
+	flash->iap_msp = IAP_RAM_BASE + MIN_RAM_SIZE - RAM_USAGE_FOR_IAP_ROUTINES;
 }
 
 bool lpc15xx_probe(target_s *t)

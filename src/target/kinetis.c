@@ -126,7 +126,7 @@ static void kinetis_add_flash(
 {
 	kinetis_flash_s *kf = calloc(1, sizeof(*kf));
 	if (!kf) { /* calloc failed: heap exhaustion */
-		DEBUG_WARN("calloc: failed in %s\n", __func__);
+		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return;
 	}
 
@@ -552,7 +552,7 @@ bool kinetis_mdm_probe(adiv5_access_port_s *ap)
 	t->priv_free = (void *)adiv5_ap_unref;
 
 	t->driver = "Kinetis Recovery (MDM-AP)";
-	t->regs_size = 4;
+	t->regs_size = 0;
 	target_add_commands(t, kinetis_mdm_cmd_list, t->driver);
 
 	return true;

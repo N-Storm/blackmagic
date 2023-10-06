@@ -40,7 +40,14 @@
  *
  */
 
+#ifndef ENABLE_DEBUG
+#include <sys/stat.h>
+#include <string.h>
+
+typedef struct stat stat_s;
+#endif
 #include "general.h"
+#include "platform.h"
 #include "gdb_if.h"
 #include "usb_serial.h"
 #ifdef PLATFORM_HAS_TRACESWO
@@ -103,6 +110,17 @@ static usbd_request_return_codes_e gdb_serial_control_request(usbd_device *dev, 
 		if (*len < sizeof(usb_cdc_line_coding_s))
 			return USBD_REQ_NOTSUPP;
 		return USBD_REQ_HANDLED; /* Ignore on GDB Port */
+	case USB_CDC_REQ_GET_LINE_CODING: {
+		if (*len < sizeof(usb_cdc_line_coding_s))
+			return USBD_REQ_NOTSUPP;
+		usb_cdc_line_coding_s *line_coding = (usb_cdc_line_coding_s *)*buf;
+		/* This tells the host that we talk 1MBaud, 8-bit no parity w/ 1 stop bit */
+		line_coding->dwDTERate = 1 * 1000 * 1000;
+		line_coding->bCharFormat = USB_CDC_1_STOP_BITS;
+		line_coding->bParityType = USB_CDC_NO_PARITY;
+		line_coding->bDataBits = 8;
+		return USBD_REQ_HANDLED;
+	}
 	}
 	return USBD_REQ_NOTSUPP;
 }
@@ -135,6 +153,11 @@ static usbd_request_return_codes_e debug_serial_control_request(usbd_device *dev
 		if (*len < sizeof(usb_cdc_line_coding_s))
 			return USBD_REQ_NOTSUPP;
 		aux_serial_set_encoding((usb_cdc_line_coding_s *)*buf);
+		return USBD_REQ_HANDLED;
+	case USB_CDC_REQ_GET_LINE_CODING:
+		if (*len < sizeof(usb_cdc_line_coding_s))
+			return USBD_REQ_NOTSUPP;
+		aux_serial_get_encoding((usb_cdc_line_coding_s *)*buf);
 		return USBD_REQ_HANDLED;
 	}
 	return USBD_REQ_NOTSUPP;
@@ -422,5 +445,68 @@ void debug_monitor_handler(void)
 		frame->r0 = UINT32_MAX;
 	}
 	__asm__("bx lr");
+}
+#else
+/* This defines stubs for the newlib fake file IO layer for compatability with GCC 12 `-spec=nosys.spec` */
+
+/* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+int _write(const int file, const void *const buffer, const size_t length)
+{
+	(void)file;
+	(void)buffer;
+	return length;
+}
+
+/* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+int _read(const int file, void *const buffer, const size_t length)
+{
+	(void)file;
+	(void)buffer;
+	return length;
+}
+
+/* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+off_t _lseek(const int file, const off_t offset, const int direction)
+{
+	(void)file;
+	(void)offset;
+	(void)direction;
+	return 0;
+}
+
+/* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+int _fstat(const int file, stat_s *stats)
+{
+	(void)file;
+	memset(stats, 0, sizeof(*stats));
+	return 0;
+}
+
+/* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+int _isatty(const int file)
+{
+	(void)file;
+	return true;
+}
+
+/* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+int _close(const int file)
+{
+	(void)file;
+	return 0;
+}
+
+/* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+pid_t _getpid(void)
+{
+	return 1;
+}
+
+/* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
+int _kill(const int pid, const int signal)
+{
+	(void)pid;
+	(void)signal;
+	return 0;
 }
 #endif

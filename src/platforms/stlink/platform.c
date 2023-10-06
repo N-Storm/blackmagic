@@ -21,6 +21,7 @@
 /* This file implements the platform specific functions for the ST-Link implementation. */
 
 #include "general.h"
+#include "platform.h"
 #include "usb.h"
 #include "aux_serial.h"
 
@@ -51,12 +52,19 @@ void platform_init(void)
 	led_idle_run = GPIO13;
 	nrst_pin = NRST_PIN_V1;
 #else
-	if (rev == 0) {
+	switch (rev) {
+	case 0:
 		led_idle_run = GPIO8;
 		nrst_pin = NRST_PIN_V1;
-	} else {
+		break;
+	case 0x101:
+		led_idle_run = GPIO9;
+		nrst_pin = NRST_PIN_CLONE;
+		break;
+	default:
 		led_idle_run = GPIO9;
 		nrst_pin = NRST_PIN_V2;
+		break;
 	}
 #endif
 	/* Setup GPIO ports */
@@ -73,7 +81,7 @@ void platform_init(void)
 	SCB_VTOR = (uintptr_t)&vector_table;
 
 	platform_timing_init();
-	if (rev > 1U) /* Reconnect USB */
+	if ((rev & 0xff) > 1U) /* Reconnect USB */
 		gpio_set(GPIOA, GPIO15);
 	blackmagic_usb_init();
 
@@ -154,7 +162,31 @@ const char *platform_target_voltage(void)
 	return ret;
 }
 
-void platform_target_clk_output_enable(bool enable)
+void platform_target_clk_output_enable(const bool enable)
 {
 	(void)enable;
+}
+
+bool platform_spi_init(const spi_bus_e bus)
+{
+	(void)bus;
+	return false;
+}
+
+bool platform_spi_deinit(const spi_bus_e bus)
+{
+	(void)bus;
+	return false;
+}
+
+bool platform_spi_chip_select(const uint8_t device_select)
+{
+	(void)device_select;
+	return false;
+}
+
+uint8_t platform_spi_xfer(const spi_bus_e bus, const uint8_t value)
+{
+	(void)bus;
+	return value;
 }

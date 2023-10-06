@@ -3,6 +3,8 @@
  *
  * Copyright (C) 2011  Black Sphere Technologies Ltd.
  * Written by Gareth McMullin <gareth@blacksphere.co.nz>
+ * Copyright (C) 2022-2023 1BitSquared <info@1bitsquared.com>
+ * Modified by Rachel Mant <git@dragonmux.network>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,15 +30,11 @@
 #define JTAG_MAX_IR_LEN 16U
 
 typedef struct jtag_dev {
-	const char *jd_descr;
 	uint32_t jd_idcode;
 	uint32_t current_ir;
 
-	union {
-		uint8_t jd_dev;
-		uint8_t dr_prescan;
-	};
-
+	/* The DR prescan doubles as the device index */
+	uint8_t dr_prescan;
 	uint8_t dr_postscan;
 
 	uint8_t ir_len;
@@ -44,7 +42,7 @@ typedef struct jtag_dev {
 	uint8_t ir_postscan;
 } jtag_dev_s;
 
-extern jtag_dev_s jtag_devs[JTAG_MAX_DEVS + 1U];
+extern jtag_dev_s jtag_devs[JTAG_MAX_DEVS];
 extern uint32_t jtag_dev_count;
 extern const uint8_t ones[8];
 

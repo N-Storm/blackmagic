@@ -38,9 +38,10 @@ typedef enum dap_info {
 	DAP_INFO_VENDOR = 0x01U,
 	DAP_INFO_PRODUCT = 0x02U,
 	DAP_INFO_SER_NUM = 0x03U,
-	DAP_INFO_FW_VER = 0x04U,
+	DAP_INFO_CMSIS_DAP_VERSION = 0x04U,
 	DAP_INFO_DEVICE_VENDOR = 0x05U,
 	DAP_INFO_DEVICE_NAME = 0x06U,
+	DAP_INFO_ADAPTOR_VERSION = 0x09U,
 	DAP_INFO_CAPABILITIES = 0xf0U,
 	DAP_INFO_TDT = 0xf1U,
 	DAP_INFO_SWO_BUF_SIZE = 0xfdU,
@@ -51,45 +52,48 @@ typedef enum dap_info {
 typedef enum dap_cap {
 	DAP_CAP_SWD = (1U << 0U),
 	DAP_CAP_JTAG = (1U << 1U),
-	DAP_CAP_SWO_UART = (1U << 2U),
+	DAP_CAP_SWO_ASYNC = (1U << 2U),
 	DAP_CAP_SWO_MANCHESTER = (1U << 3U),
-	DAP_CAP_ATOMIC_CMD = (1U << 4U),
+	DAP_CAP_ATOMIC_CMDS = (1U << 4U),
 	DAP_CAP_TDT = (1U << 5U),
 	DAP_CAP_SWO_STREAMING = (1U << 6U),
 } dap_cap_e;
 
-void dap_led(int index, int state);
-void dap_connect(bool jtag);
-void dap_disconnect(void);
-void dap_transfer_configure(uint8_t idle, uint16_t count, uint16_t retry);
-void dap_swd_configure(uint8_t cfg);
-size_t dap_info(dap_info_e info, uint8_t *data, size_t size);
+typedef enum dap_led_type {
+	DAP_LED_CONNECT = 0U,
+	DAP_LED_RUNNING = 1U,
+} dap_led_type_e;
+
+#define DAP_QUIRK_NO_JTAG_MUTLI_TAP (1U << 0U)
+
+extern uint8_t dap_caps;
+extern dap_cap_e dap_mode;
+extern uint8_t dap_quirks;
+extern bool dap_has_swd_sequence;
+
+bool dap_connect(void);
+bool dap_disconnect(void);
+bool dap_led(dap_led_type_e type, bool state);
+size_t dap_info(dap_info_e requested_info, void *buffer, size_t buffer_length);
 void dap_reset_target(void);
 void dap_nrst_set_val(bool assert);
-void dap_trst_reset(void);
 void dap_reset_target_hw(int state);
-void dap_reset_pin(int state);
-void dap_line_reset(void);
-uint32_t dap_read_reg(adiv5_debug_port_s *dp, uint8_t reg);
-void dap_write_reg(adiv5_debug_port_s *dp, uint8_t reg, uint32_t data);
-void dap_reset_link(bool jtag);
-uint32_t dap_read_idcode(adiv5_debug_port_s *dp);
-bool dap_read_block(adiv5_access_port_s *ap, void *dest, uint32_t src, size_t len, align_e align);
-bool dap_write_block(adiv5_access_port_s *ap, uint32_t dest, const void *src, size_t len, align_e align);
-void dap_ap_mem_access_setup(adiv5_access_port_s *ap, uint32_t addr, align_e align);
-uint32_t dap_ap_read(adiv5_access_port_s *ap, uint16_t addr);
-void dap_ap_write(adiv5_access_port_s *ap, uint16_t addr, uint32_t value);
-void dap_read_single(adiv5_access_port_s *ap, void *dest, uint32_t src, align_e align);
-void dap_write_single(adiv5_access_port_s *ap, uint32_t dest, const void *src, align_e align);
-ssize_t dbg_dap_cmd(uint8_t *data, size_t response_length, size_t request_length);
+bool dap_set_reset_state(bool nrst_state);
+uint32_t dap_read_reg(adiv5_debug_port_s *target_dp, uint8_t reg);
+void dap_write_reg(adiv5_debug_port_s *target_dp, uint8_t reg, uint32_t data);
+void dap_reset_link(adiv5_debug_port_s *target_dp);
+bool dap_read_block(adiv5_access_port_s *target_ap, void *dest, uint32_t src, size_t len, align_e align);
+bool dap_write_block(adiv5_access_port_s *target_ap, uint32_t dest, const void *src, size_t len, align_e align);
+void dap_ap_mem_access_setup(adiv5_access_port_s *target_ap, uint32_t addr, align_e align);
+uint32_t dap_ap_read(adiv5_access_port_s *target_ap, uint16_t addr);
+void dap_ap_write(adiv5_access_port_s *target_ap, uint16_t addr, uint32_t value);
+void dap_read_single(adiv5_access_port_s *target_ap, void *dest, uint32_t src, align_e align);
+void dap_write_single(adiv5_access_port_s *target_ap, uint32_t dest, const void *src, align_e align);
 bool dap_run_cmd(const void *request_data, size_t request_length, void *response_data, size_t response_length);
-void dap_jtagtap_tdi_tdo_seq(
-	uint8_t *data_out, bool final_tms, const uint8_t *tms, const uint8_t *data_in, size_t clock_cycles);
-int dap_jtag_configure(void);
+bool dap_jtag_configure(void);
 
-uint32_t dap_swdptap_seq_in(size_t clock_cycles);
-bool dap_swdptap_seq_in_parity(uint32_t *result, size_t clock_cycles);
-void dap_swdptap_seq_out(uint32_t tms_states, size_t clock_cycles);
-void dap_swdptap_seq_out_parity(uint32_t tms_states, size_t clock_cycles);
+void dap_dp_abort(adiv5_debug_port_s *target_dp, uint32_t abort);
+uint32_t dap_dp_low_access(adiv5_debug_port_s *target_dp, uint8_t rnw, uint16_t addr, uint32_t value);
+uint32_t dap_dp_read_reg(adiv5_debug_port_s *target_dp, uint16_t addr);
 
 #endif /* PLATFORMS_HOSTED_DAP_H */

@@ -38,10 +38,17 @@
 #include "platform.h"
 #include "bmp_hosted.h"
 
+#if HOSTED_BMP_ONLY == 1
+typedef struct usb_device libusb_device;
+#endif
+
 typedef struct probe_info {
-	bmp_type_t type;
+	probe_type_e type;
 	uint16_t vid;
 	uint16_t pid;
+#if HOSTED_BMP_ONLY == 0
+	libusb_device *device;
+#endif
 	const char *manufacturer;
 	const char *product;
 	const char *serial;
@@ -50,15 +57,15 @@ typedef struct probe_info {
 	struct probe_info *next;
 } probe_info_s;
 
-probe_info_s *probe_info_add_by_serial(
-	probe_info_s *list, bmp_type_t type, const char *mfr, const char *product, const char *serial, const char *version);
-probe_info_s *probe_info_add_by_id(probe_info_s *const list, const bmp_type_t type, uint16_t vid, uint16_t pid,
-	const char *const mfr, const char *const product, const char *const serial, const char *const version);
+probe_info_s *probe_info_add_by_serial(probe_info_s *list, probe_type_e type, const char *mfr, const char *product,
+	const char *serial, const char *version);
+probe_info_s *probe_info_add_by_id(probe_info_s *list, probe_type_e type, libusb_device *device, uint16_t vid,
+	uint16_t pid, const char *mfr, const char *product, const char *serial, const char *version);
 size_t probe_info_count(const probe_info_s *list);
 void probe_info_list_free(const probe_info_s *list);
 
 const probe_info_s *probe_info_correct_order(probe_info_s *list);
 const probe_info_s *probe_info_filter(const probe_info_s *list, const char *serial, size_t position);
-void probe_info_to_bmp_info(const probe_info_s *probe, bmp_info_s *info);
+void probe_info_to_bmda_probe(const probe_info_s *probe, bmda_probe_s *info);
 
 #endif /* PLATFORMS_HOSTED_PROBE_INFO_H */
