@@ -21,7 +21,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* 
+/*
  * This file implements a basic command interpreter for GDB 'monitor' commands.
  */
 
@@ -34,22 +34,20 @@
 #include "target_internal.h"
 #include "morse.h"
 #include "version.h"
-#include "serialno.h"
 #include "jtagtap.h"
+
+#if PC_HOSTED == 0
 #include "jtag_scan.h"
+#endif
 
 #ifdef ENABLE_RTT
 #include "rtt.h"
+#include "hex_utils.h"
 #endif
 
 #ifdef PLATFORM_HAS_TRACESWO
+#include "serialno.h"
 #include "traceswo.h"
-#endif
-
-#if defined(_WIN32)
-#include <malloc.h>
-#else
-#include <alloca.h>
 #endif
 
 static bool cmd_version(target_s *t, int argc, const char **argv);
@@ -82,6 +80,10 @@ static bool cmd_debug_bmp(target_s *t, int argc, const char **argv);
 static bool cmd_shutdown_bmda(target_s *t, int argc, const char **argv);
 #endif
 
+#ifdef _MSC_VER
+#define strtok_r strtok_s
+#endif
+
 const command_s cmd_list[] = {
 	{"version", cmd_version, "Display firmware version info"},
 	{"help", cmd_help, "Display help for monitor commands"},
@@ -112,7 +114,7 @@ const command_s cmd_list[] = {
 	{"traceswo", cmd_traceswo, "Start trace capture, Manchester mode: [decode [CHANNEL_NR ...]]"},
 #endif
 #endif
-	{"heapinfo", cmd_heapinfo, "Set semihosting heapinfo: HEAPINFO HEAP_BASE HEAP_LIMIT STACK_BASE STACK_LIMIT"},
+	{"heapinfo", cmd_heapinfo, "Set semihosting heapinfo: HEAP_BASE HEAP_LIMIT STACK_BASE STACK_LIMIT"},
 #if defined(PLATFORM_HAS_DEBUG) && PC_HOSTED == 0
 	{"debug_bmp", cmd_debug_bmp, "Output BMP \"debug\" strings to the second vcom: [enable|disable]"},
 #endif
@@ -366,9 +368,9 @@ bool cmd_frequency(target_s *t, int argc, const char **argv)
 	}
 	const uint32_t freq = platform_max_frequency_get();
 	if (freq == FREQ_FIXED)
-		gdb_outf("SWJ freq fixed\n");
+		gdb_outf("Debug iface frequency is fixed.\n");
 	else
-		gdb_outf("Current SWJ freq %" PRIu32 "Hz\n", freq);
+		gdb_outf("Debug iface frequency set to %" PRIu32 "Hz\n", freq);
 	return true;
 }
 
@@ -449,7 +451,7 @@ static bool cmd_halt_timeout(target_s *t, int argc, const char **argv)
 	(void)t;
 	if (argc > 1)
 		cortexm_wait_timeout = strtoul(argv[1], NULL, 0);
-	gdb_outf("Cortex-M timeout to wait for device halts: %d\n", cortexm_wait_timeout);
+	gdb_outf("Cortex-M timeout to wait for device halts: %u\n", cortexm_wait_timeout);
 	return true;
 }
 
@@ -534,8 +536,8 @@ static bool cmd_rtt(target_s *t, int argc, const char **argv)
 		}
 		if (rtt_flag_ram)
 			gdb_outf("ram: 0x%08" PRIx32 " 0x%08" PRIx32, rtt_ram_start, rtt_ram_end);
-		gdb_outf(
-			"\nmax poll ms: %u min poll ms: %u max errs: %u\n", rtt_max_poll_ms, rtt_min_poll_ms, rtt_max_poll_errs);
+		gdb_outf("\nmax poll ms: %" PRIu32 " min poll ms: %" PRIu32 " max errs: %" PRIu32 "\n", rtt_max_poll_ms,
+			rtt_min_poll_ms, rtt_max_poll_errs);
 	} else if (argc >= 2 && strncmp(argv[1], "channel", command_len) == 0) {
 		/* mon rtt channel switches to auto rtt channel selection
 		   mon rtt channel number... selects channels given */
@@ -554,9 +556,9 @@ static bool cmd_rtt(target_s *t, int argc, const char **argv)
 	} else if (argc == 2 && strncmp(argv[1], "ident", command_len) == 0)
 		rtt_ident[0] = '\0';
 	else if (argc == 2 && strncmp(argv[1], "poll", command_len) == 0)
-		gdb_outf("%u %u %u\n", rtt_max_poll_ms, rtt_min_poll_ms, rtt_max_poll_errs);
+		gdb_outf("%" PRIu32 " %" PRIu32 " %" PRIu32 "\n", rtt_max_poll_ms, rtt_min_poll_ms, rtt_max_poll_errs);
 	else if (argc == 2 && strncmp(argv[1], "cblock", command_len) == 0) {
-		gdb_outf("cbaddr: 0x%x\n", rtt_cbaddr);
+		gdb_outf("cbaddr: 0x%08" PRIx32 "\n", rtt_cbaddr);
 		gdb_out("ch ena i/o buffer@      size   head   tail flag\n");
 		for (uint32_t i = 0; i < rtt_num_up_chan + rtt_num_down_chan; ++i) {
 			gdb_outf("%2" PRIu32 "   %c %s 0x%08" PRIx32 " %6" PRIu32 " %6" PRIu32 " %6" PRIu32 " %4" PRIu32 "\n", i,
@@ -573,11 +575,12 @@ static bool cmd_rtt(target_s *t, int argc, const char **argv)
 	} else if (argc == 2 && strncmp(argv[1], "ram", command_len) == 0)
 		rtt_flag_ram = false;
 	else if (argc == 4 && strncmp(argv[1], "ram", command_len) == 0) {
-		const int cnt1 = sscanf(argv[2], "%" SCNx32, &rtt_ram_start);
-		const int cnt2 = sscanf(argv[3], "%" SCNx32, &rtt_ram_end);
-		rtt_flag_ram = cnt1 == 1 && cnt2 == 1 && rtt_ram_end > rtt_ram_start;
-		if (!rtt_flag_ram)
-			gdb_out("address?\n");
+		if (read_hex32(argv[2], NULL, &rtt_ram_start, READ_HEX_NO_FOLLOW) &&
+			read_hex32(argv[3], NULL, &rtt_ram_end, READ_HEX_NO_FOLLOW)) {
+			rtt_flag_ram = rtt_ram_end > rtt_ram_start;
+			if (!rtt_flag_ram)
+				gdb_out("address?\n");
+		}
 	} else if (argc == 5 && strncmp(argv[1], "poll", command_len) == 0) {
 		/* set polling params */
 		rtt_max_poll_ms = strtoul(argv[2], NULL, 0);
@@ -670,6 +673,14 @@ static bool cmd_shutdown_bmda(target_s *t, int argc, const char **argv)
 }
 #endif
 
+/*
+ * Heapinfo allows passing up to four uint32_t from host to target.
+ * Heapinfo can be used to quickly test a system with different heap and stack values, to see how much heap and stack is needed.
+ * - User sets up values for heap and stack using "mon heapinfo"
+ * - When the target boots, crt0.S does a heapinfo semihosting call to get these values for heap and stack.
+ * - If the target system crashes, increase heap or stack
+ * See newlib/libc/sys/arm/crt0.S "Issue Angel SWI to read stack info"
+ */
 static bool cmd_heapinfo(target_s *t, int argc, const char **argv)
 {
 	if (t == NULL)
@@ -679,10 +690,11 @@ static bool cmd_heapinfo(target_s *t, int argc, const char **argv)
 		target_addr_t heap_limit = strtoul(argv[2], NULL, 16);
 		target_addr_t stack_base = strtoul(argv[3], NULL, 16);
 		target_addr_t stack_limit = strtoul(argv[4], NULL, 16);
-		gdb_outf("heapinfo heap_base: %p heap_limit: %p stack_base: %p stack_limit: %p\n", heap_base, heap_limit,
-			stack_base, stack_limit);
+		gdb_outf("heap_base: %08" PRIx32 " heap_limit: %08" PRIx32 " stack_base: %08" PRIx32 " stack_limit: %08" PRIx32
+				 "\n",
+			heap_base, heap_limit, stack_base, stack_limit);
 		target_set_heapinfo(t, heap_base, heap_limit, stack_base, stack_limit);
 	} else
-		gdb_outf("heapinfo heap_base heap_limit stack_base stack_limit\n");
+		gdb_outf("%s\n", "Set semihosting heapinfo: HEAP_BASE HEAP_LIMIT STACK_BASE STACK_LIMIT");
 	return true;
 }

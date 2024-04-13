@@ -24,8 +24,14 @@
  * the device, providing the XML memory map and Flash memory programming.
  *
  * References:
+ * RM0399 - STM32H745/755 and STM32H747/757 advanced Arm®-based 32-bit MCUs, Rev. 4
+ *   https://www.st.com/resource/en/reference_manual/rm0399-stm32h745755-and-stm32h747757-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
  * RM0433 - STM32H742, STM32H743/753 and STM32H750 Value line advanced Arm®-based 32-bit MCUs, Rev. 8
  *   https://www.st.com/resource/en/reference_manual/dm00314099-stm32h742-stm32h743-753-and-stm32h750-value-line-advanced-arm-based-32-bit-mcus-stmicroelectronics.pdf
+ * RM0455 - STM32H7A3/7B3 and STM32H7B0 Value line advanced Arm®-based 32-bit MCUs, Rev. 10
+ *   https://www.st.com/resource/en/reference_manual/rm0455-stm32h7a37b3-and-stm32h7b0-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
+ * RM0468 - STM32H723/733, STM32H725/735 and STM32H730 Value line advanced Arm®-based 32-bit MCUs, Rev. 3
+ *   https://www.st.com/resource/en/reference_manual/rm0468-stm32h723733-stm32h725735-and-stm32h730-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
  */
 
 /*
@@ -119,6 +125,9 @@
 #define D1DBGCKEN   (1U << 21U)
 #define D3DBGCKEN   (1U << 22U)
 
+#define STM32H7_DBGMCU_IDCODE_DEV_MASK  0x00000fffU
+#define STM32H7_DBGMCU_IDCODE_REV_SHIFT 16U
+
 #define STM32H7_FLASH_BANK1_BASE    0x08000000U
 #define STM32H7_FLASH_BANK2_BASE    0x08100000U
 #define STM32H7_FLASH_BANK_SIZE     0x00100000U
@@ -127,9 +136,9 @@
 #define NUM_SECTOR_PER_BANK         8U
 #define FLASH_SECTOR_SIZE           0x20000U
 
-#define ID_STM32H74x 0x4500U /* RM0433, RM0399 */
-#define ID_STM32H7Bx 0x4800U /* RM0455 */
-#define ID_STM32H72x 0x4830U /* RM0468 */
+#define ID_STM32H74x 0x450U /* RM0433, RM0399 */
+#define ID_STM32H7Bx 0x480U /* RM0455 */
+#define ID_STM32H72x 0x483U /* RM0468 */
 
 typedef struct stm32h7_flash {
 	target_flash_s target_flash;
@@ -188,8 +197,11 @@ static void stm32h7_add_flash(target_s *target, uint32_t addr, size_t length, si
 
 bool stm32h7_probe(target_s *target)
 {
-	if (target->part_id != ID_STM32H74x && target->part_id != ID_STM32H7Bx && target->part_id != ID_STM32H72x)
+	const uint16_t part_id = target->part_id >> 4U;
+	if (part_id != ID_STM32H74x && part_id != ID_STM32H7Bx && part_id != ID_STM32H72x)
 		return false;
+	/* Update part_id on match */
+	target->part_id = part_id;
 
 	target->driver = "STM32H7";
 	target->attach = stm32h7_attach;
@@ -207,19 +219,44 @@ bool stm32h7_probe(target_s *target)
 	target->target_storage = priv_storage;
 
 	/* Build the RAM map */
-	/* Table 7. Memory map and default device memory area attributes RM0433, pg130 */
-	target_add_ram(target, 0x00000000, 0x10000); /* ITCM RAM,   64kiB */
-	target_add_ram(target, 0x20000000, 0x20000); /* DTCM RAM,  128kiB */
-	target_add_ram(target, 0x24000000, 0x80000); /* AXI RAM,   512kiB */
-	target_add_ram(target, 0x30000000, 0x20000); /* AHB SRAM1, 128kiB */
-	target_add_ram(target, 0x30020000, 0x20000); /* AHB SRAM2, 128kiB */
-	target_add_ram(target, 0x30040000, 0x08000); /* AHB SRAM3,  32kiB */
-	target_add_ram(target, 0x38000000, 0x10000); /* AHB SRAM4,  64kiB */
+	target_add_ram(target, 0x00000000, 0x10000); /* ITCM RAM,   64 KiB */
+	target_add_ram(target, 0x20000000, 0x20000); /* DTCM RAM,  128 KiB */
+	switch (target->part_id) {
+	case ID_STM32H72x: {
+		/* Table 6. Memory map and default device memory area attributes RM0468, pg133 */
+		target_add_ram(target, 0x24000000, 0x20000); /* AXI RAM,    128 KiB */
+		target_add_ram(target, 0x24020000, 0x30000); /* AXI RAM,    192 KiB (TCM_AXI_SHARED) */
+		target_add_ram(target, 0x30000000, 0x8000);  /* AHB SRAM1+2, 32 KiB [16+16] contiguous */
+		target_add_ram(target, 0x38000000, 0x4000);  /* AHB SRAM4,   16 KiB, D3 domain */
+		break;
+	}
+	case ID_STM32H74x: {
+		/* Table 7. Memory map and default device memory area attributes RM0433, pg130 */
+		target_add_ram(target, 0x24000000, 0x80000); /* AXI RAM,       512 KiB */
+		target_add_ram(target, 0x30000000, 0x48000); /* AHB SRAM1+2+3, 288 KiB [128+128+32] contiguous */
+		target_add_ram(target, 0x38000000, 0x10000); /* AHB SRAM4,      64 KiB, D3 domain */
+		break;
+	}
+	case ID_STM32H7Bx: {
+		/* Table 6. Memory map and default device memory area attributes RM0455, pg131 */
+		target_add_ram(target, 0x24000000, 0x100000); /* AXI RAM1+2+3, 1024 KiB [256+384+384] contiguous, */
+		target_add_ram(target, 0x30000000, 0x10000);  /* AHB SRAM1+2,   128 KiB [64+64] contiguous, */
+		target_add_ram(target, 0x38000000, 0x8000);   /* SRD SRAM4,      32 KiB, Smart run domain */
+		break;
+	}
+	default:
+		break;
+	}
+
+	/*
+	 * Note on SRD from AN5293, 3. System architecture differences between STM32F7 and STM32H7 Series
+	 * > The D3 domain evolved into a domain called SRD domain (or smart-run domain).
+	 */
 
 	/* Build the Flash map */
 	switch (target->part_id) {
 	case ID_STM32H74x: {
-		/* Read the Flash size from the device (expressed in kiB) and multiply it by 1024 */
+		/* Read the Flash size from the device (expressed in KiB) and multiply it by 1024 */
 		const uint32_t flash_size = target_mem_read32(target, STM32H7_FLASH_SIZE) << 10U;
 		/* STM32H750nB */
 		if (flash_size == FLASH_SECTOR_SIZE)
@@ -465,7 +502,7 @@ static bool stm32h7_crc_bank(target_s *target, uint32_t addr)
 	target_mem_write32(target, reg_base + FLASH_CRCCR, crc_ctrl);
 	target_mem_write32(target, reg_base + FLASH_CRCCR, crc_ctrl | FLASH_CRCCR_START_CRC);
 	uint32_t status = FLASH_SR_CRC_BUSY;
-#ifdef ENABLE_DEBUG
+#if ENABLE_DEBUG == 1
 	const uint8_t bank = reg_base == FPEC1_BASE ? 1 : 2;
 #endif
 	while (status & FLASH_SR_CRC_BUSY) {
@@ -535,6 +572,7 @@ static const struct {
 	{0x1000U, 'A'},
 	{0x1001U, 'Z'},
 	{0x1003U, 'Y'},
+	{0x1007U, 'X'}, /* RM0455 */
 	{0x2001U, 'X'},
 	{0x2003U, 'V'},
 };
@@ -545,24 +583,14 @@ static bool stm32h7_cmd_rev(target_s *target, int argc, const char **argv)
 	(void)argv;
 	/* DBGMCU identity code register */
 	const uint32_t dbgmcu_idc = target_mem_read32(target, DBGMCU_IDC);
-	const uint16_t rev_id = (dbgmcu_idc >> 16U) & 0xffffU;
-	const uint16_t dev_id = (dbgmcu_idc & 0xfffU) << 4U;
+	const uint16_t rev_id = dbgmcu_idc >> STM32H7_DBGMCU_IDCODE_REV_SHIFT;
+	const uint16_t dev_id = dbgmcu_idc & STM32H7_DBGMCU_IDCODE_DEV_MASK;
 
 	/* Print device */
 	switch (dev_id) {
 	case ID_STM32H74x:
 		tc_printf(target, "STM32H74x/75x\n");
-
-		/* Print revision */
-		char rev = '?';
-		for (size_t i = 0; i < ARRAY_LENGTH(stm32h7xx_revisions); i++) {
-			/* Check for matching revision */
-			if (stm32h7xx_revisions[i].rev_id == rev_id)
-				rev = stm32h7xx_revisions[i].revision;
-		}
-		tc_printf(target, "Revision %c\n", rev);
 		break;
-
 	case ID_STM32H7Bx:
 		tc_printf(target, "STM32H7B3/7A3/7B0\n");
 		break;
@@ -571,7 +599,16 @@ static bool stm32h7_cmd_rev(target_s *target, int argc, const char **argv)
 		break;
 	default:
 		tc_printf(target, "Unknown %s. BMP may not correctly support it!\n", target->driver);
+		return false;
 	}
+	/* Print revision */
+	char rev = '?';
+	for (size_t i = 0; i < ARRAY_LENGTH(stm32h7xx_revisions); i++) {
+		/* Check for matching revision */
+		if (stm32h7xx_revisions[i].rev_id == rev_id)
+			rev = stm32h7xx_revisions[i].revision;
+	}
+	tc_printf(target, "Revision %c\n", rev);
 
 	return true;
 }

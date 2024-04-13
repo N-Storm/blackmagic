@@ -28,7 +28,7 @@
 #include "timing.h"
 #include "timing_stm32.h"
 
-#ifdef ENABLE_DEBUG
+#if ENABLE_DEBUG == 1
 #define PLATFORM_HAS_DEBUG
 extern bool debug_bmp;
 #endif
@@ -152,7 +152,5 @@ extern bool debug_bmp;
 #define SET_ERROR_STATE(state)
 extern void set_idle_state(int state);
 #define SET_IDLE_STATE(state) set_idle_state(state)
-
-extern uint8_t detect_rev(void);
 
 #endif /* PLATFORMS_SWLINK_PLATFORM_H */

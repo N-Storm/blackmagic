@@ -27,8 +27,10 @@
 #include "platform_support.h"
 #include "target_probe.h"
 
+#define TOPT_INHIBIT_NRST           (1U << 0U)
+#define TOPT_IN_SEMIHOSTING_SYSCALL (1U << 31U)
+
 extern target_s *target_list;
-target_s *target_new(void);
 
 typedef enum flash_operation {
 	FLASH_OPERATION_NONE,
@@ -64,7 +66,7 @@ struct target_flash {
 	flash_erase_func erase;      /* Erase a range of flash */
 	flash_write_func write;      /* Write to flash */
 	flash_done_func done;        /* Finish flash operations */
-	void *buf;                   /* Buffer for flash operations */
+	uint8_t *buf;                /* Buffer for flash operations */
 	target_addr_t buf_addr_base; /* Address of block this buffer is for */
 	target_addr_t buf_addr_low;  /* Address of lowest byte written */
 	target_addr_t buf_addr_high; /* Address of highest byte written */
@@ -116,8 +118,8 @@ struct target {
 	const char *(*regs_description)(target_s *target);
 	void (*regs_read)(target_s *target, void *data);
 	void (*regs_write)(target_s *target, const void *data);
-	ssize_t (*reg_read)(target_s *target, uint32_t reg, void *data, size_t max);
-	ssize_t (*reg_write)(target_s *target, uint32_t reg, const void *data, size_t size);
+	size_t (*reg_read)(target_s *target, uint32_t reg, void *data, size_t max);
+	size_t (*reg_write)(target_s *target, uint32_t reg, const void *data, size_t size);
 
 	/* Halt/resume functions */
 	void (*reset)(target_s *target);
@@ -159,9 +161,7 @@ struct target {
 	char cmdline[MAX_CMDLINE];
 	target_addr_t heapinfo[4];
 	target_command_s *commands;
-#if PC_HOSTED == 0
 	bool stdout_redirected;
-#endif
 
 	target_s *next;
 
@@ -200,19 +200,5 @@ bool target_check_error(target_s *target);
 
 /* Access to host controller interface */
 void tc_printf(target_s *target, const char *fmt, ...);
-
-/* Interface to host system calls */
-int tc_open(target_s *, target_addr_t path, size_t plen, target_open_flags_e flags, mode_t mode);
-int tc_close(target_s *target, int fd);
-int tc_read(target_s *target, int fd, target_addr_t buf, unsigned int count);
-int tc_write(target_s *target, int fd, target_addr_t buf, unsigned int count);
-long tc_lseek(target_s *target, int fd, long offset, target_seek_flag_e flag);
-int tc_rename(target_s *target, target_addr_t oldpath, size_t oldlen, target_addr_t newpath, size_t newlen);
-int tc_unlink(target_s *target, target_addr_t path, size_t plen);
-int tc_stat(target_s *target, target_addr_t path, size_t plen, target_addr_t buf);
-int tc_fstat(target_s *target, int fd, target_addr_t buf);
-int tc_gettimeofday(target_s *target, target_addr_t tv, target_addr_t tz);
-int tc_isatty(target_s *target, int fd);
-int tc_system(target_s *target, target_addr_t cmd, size_t cmdlen);
 
 #endif /* TARGET_TARGET_INTERNAL_H */

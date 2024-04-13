@@ -26,6 +26,7 @@
 #include "aux_serial.h"
 #include "morse.h"
 
+#include <libopencm3/cm3/vector.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/cm3/scs.h>
@@ -38,12 +39,10 @@
 #include <libopencm3/stm32/spi.h>
 #include <libopencm3/stm32/flash.h>
 #include <libopencm3/stm32/timer.h>
+#include <libopencm3/cm3/systick.h>
 
 static void adc_init(void);
 static void setup_vbus_irq(void);
-
-/* This is defined by the linker script */
-extern char vector_table;
 
 #define TPWR_SOFT_START_STEPS 64U
 
@@ -221,7 +220,7 @@ void platform_init(void)
 		 * Configure Timer 1 to run the the power control pin PWM and switch the timer on
 		 * NB: We don't configure the pin mode here but rather we configure it to the alt-mode and back in
 		 * platform_target_set_power() below due to GD32 errata involving PB2 (AUX serial LED).
-		 * See §3.7.6 of the GD32F103 Compatability Summary for details.
+		 * See §3.7.6 of the GD32F103 Compatibility Summary for details.
 		 */
 		timer_set_mode(TIM1, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
 		/* Use PWM mode 1 so that the signal generated is low till it exceeds the set value */
@@ -414,7 +413,16 @@ const char *platform_target_voltage(void)
 void platform_request_boot(void)
 {
 	/* Disconnect USB cable */
-	gpio_set_mode(USB_PU_PORT, GPIO_MODE_INPUT, 0, USB_PU_PIN);
+	gpio_set_mode(USB_PU_PORT, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, USB_PU_PIN);
+	gpio_set_mode(USB_PORT, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, USB_DP_PIN | USB_DM_PIN);
+	gpio_clear(USB_PORT, USB_DP_PIN | USB_DM_PIN);
+	/* Make sure we drive the USB reset condition for at least 10ms */
+	while (!(STK_CSR & STK_CSR_COUNTFLAG))
+		continue;
+	for (size_t count = 0U; count < 10U * SYSTICKMS; ++count) {
+		while (!(STK_CSR & STK_CSR_COUNTFLAG))
+			continue;
+	}
 
 	/* Drive boot request pin */
 	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO12);

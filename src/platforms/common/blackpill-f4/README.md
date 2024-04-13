@@ -33,17 +33,25 @@ In the following commands replace `blackpill-f4x1cx` with the platform you are u
 To build the code using the default pinout, run:
 
 ```sh
-cd blackmagic
-make clean
-make PROBE_HOST=blackpill-f4x1cx
+meson setup build --cross-file=cross-file/blackpill-f4x1cx.ini
+meson compile -C build
 ```
 
 or, to use alternative pinout 1, run:
 
 ```sh
+meson setup build --cross-file=cross-file/blackpill-f4x1cx.ini -Dalternative_pinout=1
+meson compile -C build
+```
+
+TODO: No easy way ATM of configuring this on the meson buildsystem.
+
+or, if you are using a PCB (printed circuit board) as a shield for your Black Pill F4, run:
+
+```sh
 cd blackmagic
 make clean
-make PROBE_HOST=blackpill-f4x1cx ALTERNATIVE_PINOUT=1
+make PROBE_HOST=blackpill-f4x1cx SHIELD=1
 ```
 
 ## Firmware upgrade with dfu-util
@@ -66,7 +74,7 @@ For other firmware upgrade instructions see the [Firmware Upgrade](https://black
 
 ## SWD/JTAG frequency setting
 
-In special cases the SWD/JTAG frequency needs to be adapted. The fequency can be set to `900k`, as this value was found to be helpful in practice, using:
+In special cases the SWD/JTAG frequency needs to be adapted. The frequency can be set to `900k`, as this value was found to be helpful in practice, using:
 
 ```
 mon freq 900k

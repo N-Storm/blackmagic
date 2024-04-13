@@ -30,7 +30,7 @@
 #define PLATFORM_HAS_TRACESWO
 #define PLATFORM_HAS_POWER_SWITCH
 
-#ifdef ENABLE_DEBUG
+#if ENABLE_DEBUG == 1
 #define PLATFORM_HAS_DEBUG
 extern bool debug_bmp;
 #endif
@@ -142,8 +142,12 @@ extern bool debug_bmp;
 #define TPWR_PORT   GPIOB
 #define TPWR_PIN    GPIO0
 
+/* USB pin definitions */
 #define USB_PU_PORT GPIOA
+#define USB_PORT    GPIOA
 #define USB_PU_PIN  GPIO8
+#define USB_DP_PIN  GPIO12
+#define USB_DM_PIN  GPIO11
 
 /* For HW Rev 4 and older */
 #define USB_VBUS_PORT GPIOB

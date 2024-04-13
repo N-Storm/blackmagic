@@ -33,7 +33,7 @@ typedef struct iap_config {
 	uint32_t params[4];
 } iap_config_s;
 
-typedef struct __attribute__((aligned(4))) iap_frame {
+typedef struct BMD_ALIGN_DECL(4) iap_frame {
 	/* The start of an IAP stack frame is the opcode we set as the return point. */
 	uint16_t opcode;
 	/* There's then a hidden alignment field here, followed by the IAP call setup */
@@ -41,7 +41,7 @@ typedef struct __attribute__((aligned(4))) iap_frame {
 	iap_result_s result;
 } iap_frame_s;
 
-#if defined(ENABLE_DEBUG)
+#if ENABLE_DEBUG == 1
 static const char *const iap_error[] = {
 	"CMD_SUCCESS",
 	"Invalid command",
@@ -154,7 +154,7 @@ iap_status_e lpc_iap_call(lpc_flash_s *const flash, iap_result_s *const result, 
 	if (flash->wdt_kick)
 		flash->wdt_kick(target);
 
-	/* Save IAP RAM and target regsiters to restore after IAP call */
+	/* Save IAP RAM and target registers to restore after IAP call */
 	iap_frame_s saved_frame;
 	/*
 	 * Note, we allocate space for the float regs even if the CPU doesn't implement them.
@@ -226,7 +226,7 @@ iap_status_e lpc_iap_call(lpc_flash_s *const flash, iap_result_s *const result, 
 		}
 	}
 
-	/* Check if a fault occured while executing the call */
+	/* Check if a fault occurred while executing the call */
 	uint32_t status = 0;
 	target_reg_read(target, CORTEX_REG_XPSR, &status, sizeof(status));
 	if (status & CORTEXM_XPSR_EXCEPTION_MASK) {
@@ -261,7 +261,7 @@ iap_status_e lpc_iap_call(lpc_flash_s *const flash, iap_result_s *const result, 
 		*result = results;
 
 /* This guard block deals with the fact iap_error is only defined when ENABLE_DEBUG is */
-#if defined(ENABLE_DEBUG)
+#if ENABLE_DEBUG == 1
 	if (results.return_code < ARRAY_LENGTH(iap_error))
 		DEBUG_INFO("%s: result %s, ", __func__, iap_error[results.return_code]);
 	else

@@ -89,9 +89,9 @@ static uint32_t fast_search(target_s *const cur_target, const uint32_t ram_start
 	static const uint64_t r = 0x73b07d01;
 	static const uint32_t stride = 128;
 	uint64_t t = 0;
-	uint8_t srch_buf[m + stride];
+	uint8_t *srch_buf = alloca(m + stride);
 
-	memset(srch_buf, 0, sizeof(srch_buf));
+	memset(srch_buf, 0, m + stride);
 
 	for (uint32_t addr = ram_start; addr < ram_end; addr += stride) {
 		uint32_t buf_siz = MIN(stride, ram_end - addr);
@@ -275,7 +275,7 @@ uint32_t rtt_aligned_mem_read(target_s *t, void *dest, target_addr_t src, size_t
 		return target_mem_read(t, dest, src, len);
 
 	const uint32_t retval = target_mem_read(t, dest, src0, len0);
-	memmove(dest, dest + offset, len);
+	memmove(dest, (uint8_t *)dest + offset, len);
 	return retval;
 }
 

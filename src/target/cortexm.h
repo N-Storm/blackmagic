@@ -69,7 +69,7 @@ extern unsigned cortexm_wait_timeout;
 /* Application Interrupt and Reset Control Register (AIRCR) */
 #define CORTEXM_AIRCR_VECTKEY (0x05faU << 16U)
 /* Bits 31:16 - Read as VECTKETSTAT, 0xfa05 */
-#define CORTEXM_AIRCR_ENDIANESS (1U << 15U)
+#define CORTEXM_AIRCR_ENDIANNESS (1U << 15U)
 /* Bits 15:11 - Unused, reserved */
 #define CORTEXM_AIRCR_PRIGROUP (7U << 8U)
 /* Bits 7:3 - Unused, reserved */
@@ -164,13 +164,12 @@ extern unsigned cortexm_wait_timeout;
 #define CORTEXM_XPSR_THUMB          (1U << 24U)
 #define CORTEXM_XPSR_EXCEPTION_MASK 0x0000001fU
 
-#define CORTEXM_TOPT_INHIBIT_NRST (1U << 2U)
-#define CORTEXM_TOPT_FLAVOUR_V7MF (1U << 1U)
+#define CORTEXM_TOPT_FLAVOUR_V7MF (1U << 2U)
 
-bool cortexm_attach(target_s *t);
-void cortexm_detach(target_s *t);
-void cortexm_halt_resume(target_s *t, bool step);
-bool cortexm_run_stub(target_s *t, uint32_t loadaddr, uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3);
-int cortexm_mem_write_sized(target_s *t, target_addr_t dest, const void *src, size_t len, align_e align);
+bool cortexm_attach(target_s *target);
+void cortexm_detach(target_s *target);
+void cortexm_halt_resume(target_s *target, bool step);
+bool cortexm_run_stub(target_s *target, uint32_t loadaddr, uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3);
+int cortexm_mem_write_sized(target_s *target, target_addr_t dest, const void *src, size_t len, align_e align);
 
 #endif /* TARGET_CORTEXM_H */

@@ -28,6 +28,7 @@
  * * SAMD20J18A (rev B)
  * * SAMD21J18A (rev B)
  * * SAML21J17B (rev B)
+ * * SAMC21N18A (rev E)
  */
 
 /*
@@ -110,12 +111,10 @@ const command_s samd_cmd_list[] = {
 
 #define SAMD_DSU            0x41002000U
 #define SAMD_DSU_EXT_ACCESS (SAMD_DSU + 0x100U)
-#define SAMD_DSU_CTRLSTAT   (SAMD_DSU_EXT_ACCESS + 0x0U)
-#define SAMD_DSU_ADDRESS    (SAMD_DSU_EXT_ACCESS + 0x4U)
-#define SAMD_DSU_LENGTH     (SAMD_DSU_EXT_ACCESS + 0x8U)
+#define SAMD_DSU_CTRLSTAT   (SAMD_DSU_EXT_ACCESS + 0x000U)
+#define SAMD_DSU_ADDRESS    (SAMD_DSU_EXT_ACCESS + 0x004U)
+#define SAMD_DSU_LENGTH     (SAMD_DSU_EXT_ACCESS + 0x008U)
 #define SAMD_DSU_DID        (SAMD_DSU_EXT_ACCESS + 0x018U)
-#define SAMD_DSU_PID        (SAMD_DSU + 0x1000U)
-#define SAMD_DSU_CID        (SAMD_DSU + 0x1010U)
 
 /* Control and Status Register (CTRLSTAT) */
 #define SAMD_CTRL_CHIP_ERASE (1U << 4U)
@@ -129,23 +128,18 @@ const command_s samd_cmd_list[] = {
 #define SAMD_STATUSB_PROT    (1U << 16U)
 
 /* Device Identification Register (DID) */
-#define SAMD_DID_MASK          0xff380000U
+#define SAMD_DID_MASK          0xfe380000U
 #define SAMD_DID_CONST_VALUE   0x10000000U
 #define SAMD_DID_DEVSEL_MASK   0xffU
 #define SAMD_DID_DEVSEL_POS    0U
 #define SAMD_DID_REVISION_MASK 0x0fU
 #define SAMD_DID_REVISION_POS  8U
-#define SAMD_DID_SERIES_MASK   0x1fU
+#define SAMD_DID_SERIES_MASK   0x3fU
 #define SAMD_DID_SERIES_POS    16U
-#define SAMD_DID_FAMILY_MASK   0x3fU
+#define SAMD_DID_FAMILY_MASK   0x1fU
 #define SAMD_DID_FAMILY_POS    23U
 
-/* Peripheral ID */
-#define SAMD_PID_MASK        0x00f7ffffU
-#define SAMD_PID_CONST_VALUE 0x0001fcd0U
-
-/* Component ID */
-#define SAMD_CID_VALUE 0xb105100dU
+#define ID_SAMD 0xcd0U
 
 /* Family parts */
 typedef struct samd_part {
@@ -180,6 +174,24 @@ static const samd_part_s samd_d21_parts[] = {
 	{0x56, 'E', 15, 'B'}, /* SAMD21E15B (WLCSP) */
 	{0x62, 'E', 16, 'C'}, /* SAMD21E16C (WLCSP) */
 	{0x63, 'E', 15, 'C'}, /* SAMD21E15C (WLCSP) */
+	{0xff, 0, 0, 0},      /* Sentinel entry */
+};
+
+static const samd_part_s samd_c21_parts[] = {
+	{0x00, 'J', 18, 'A'}, /* SAMC21J18A */
+	{0x01, 'J', 17, 'A'}, /* SAMC21J17A */
+	{0x02, 'J', 16, 'A'}, /* SAMC21J16A */
+	{0x03, 'J', 15, 'A'}, /* SAMC21J15A */
+	{0x05, 'G', 18, 'A'}, /* SAMC21G18A */
+	{0x06, 'G', 17, 'A'}, /* SAMC21G17A */
+	{0x07, 'G', 16, 'A'}, /* SAMC21G16A */
+	{0x08, 'G', 15, 'A'}, /* SAMC21G15A */
+	{0x0a, 'E', 18, 'A'}, /* SAMC21E18A */
+	{0x0b, 'E', 17, 'A'}, /* SAMC21E17A */
+	{0x0c, 'E', 16, 'A'}, /* SAMC21E16A */
+	{0x0d, 'E', 15, 'A'}, /* SAMC21E15A */
+	{0x20, 'N', 18, 'A'}, /* SAMC21N18A */
+	{0x21, 'N', 17, 'A'}, /* SAMC21N17A */
 	{0xff, 0, 0, 0},      /* Sentinel entry */
 };
 
@@ -379,6 +391,8 @@ samd_descr_s samd_parse_device_id(uint32_t did)
 		samd.series = 20;
 		break;
 	case 1:
+		if (family == 2)
+			parts = samd_c21_parts;
 		samd.series = 21;
 		break;
 	case 2:
@@ -495,12 +509,8 @@ typedef struct samd_priv {
 
 bool samd_probe(target_s *t)
 {
-	adiv5_access_port_s *ap = cortex_ap(t);
-	const uint32_t cid = adiv5_ap_read_pidr(ap, SAMD_DSU_CID);
-	const uint32_t pid = adiv5_ap_read_pidr(ap, SAMD_DSU_PID);
-
-	/* Check the ARM Coresight Component and Peripheral IDs */
-	if (cid != SAMD_CID_VALUE || (pid & SAMD_PID_MASK) != SAMD_PID_CONST_VALUE)
+	/* Check the part number is the SAMD part number */
+	if (t->part_id != ID_SAMD)
 		return false;
 
 	/* Read the Device ID */
@@ -720,17 +730,11 @@ static bool samd_set_flashlock(target_s *t, uint16_t value, const char **argv)
 
 static bool parse_unsigned(const char *str, uint32_t *val)
 {
-	int result;
+	char *end = NULL;
 	unsigned long num;
 
-	size_t len = strlen(str);
-	// TODO: port to use substrate::toInt_t<> style parser for robustness and smaller code size
-	if (len > 2U && str[0] == '0' && (str[1] == 'x' || str[1] == 'X'))
-		result = sscanf(str + 2, "%lx", &num);
-	else
-		result = sscanf(str, "%lu", &num);
-
-	if (result < 1)
+	num = strtoul(str, &end, 0);
+	if (end == NULL || end == str)
 		return false;
 
 	*val = (uint32_t)num;

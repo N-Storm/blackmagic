@@ -4,12 +4,12 @@ CC = $(CROSS_COMPILE)gcc
 OBJCOPY = $(CROSS_COMPILE)objcopy
 
 OPT_FLAGS = -Os
-CFLAGS += -mcpu=cortex-m3 -mthumb -DSTM32F1 -I../libopencm3/include \
+CFLAGS += -mcpu=cortex-m3 -mthumb -DSTM32F1 -I../deps/libopencm3/include \
 	-I platforms/common/stm32
 LDFLAGS_BOOT := $(LDFLAGS) --specs=nano.specs -lopencm3_stm32f1 \
 	-Wl,-T,platforms/stlink/stlink.ld -nostartfiles -lc \
 	-Wl,-Map=mapfile -mthumb -mcpu=cortex-m3 -Wl,-gc-sections \
-	-L../libopencm3/lib
+	-L../deps/libopencm3/lib
 ifeq ($(ST_BOOTLOADER), 1)
 $(info  Load address 0x08004000 for original ST-LinkV2 Bootloader)
 CFLAGS += -DST_BOOTLOADER -DDFU_SERIAL_LENGTH=25
@@ -33,6 +33,14 @@ endif
 
 ifeq ($(BLUEPILL), 1)
 CFLAGS += -DBLUEPILL=1
+endif
+
+ifeq ($(STLINK_FORCE_CLONE), 1)
+CFLAGS += -DSTLINK_FORCE_CLONE=1
+endif
+
+ifeq ($(STLINK_V2_ISOL), 1)
+CFLAGS += -DSTLINK_V2_ISOL=1
 endif
 
 VPATH += platforms/common/stm32

@@ -40,7 +40,7 @@
  *
  */
 
-#ifndef ENABLE_DEBUG
+#if ENABLE_DEBUG != 1
 #include <sys/stat.h>
 #include <string.h>
 
@@ -77,7 +77,7 @@ static void debug_serial_receive_callback(usbd_device *dev, uint8_t ep);
 static bool debug_serial_send_complete = true;
 #endif
 
-#if defined(ENABLE_DEBUG) && defined(PLATFORM_HAS_DEBUG)
+#if ENABLE_DEBUG == 1 && defined(PLATFORM_HAS_DEBUG)
 /*
  * This call initialises "SemiHosting", only we then do our own SVC interrupt things to
  * route all output through to the debug USB serial interface if debug_bmp is true.
@@ -211,10 +211,10 @@ void usb_serial_set_config(usbd_device *dev, uint16_t value)
 	/* Notify the host that DCD is asserted.
 	 * Allows the use of /dev/tty* devices on *BSD/MacOS
 	 */
-	usb_serial_set_state(dev, GDB_IF_NO, CDCACM_GDB_ENDPOINT);
-	usb_serial_set_state(dev, UART_IF_NO, CDCACM_UART_ENDPOINT);
+	usb_serial_set_state(dev, GDB_IF_NO, CDCACM_GDB_ENDPOINT + 1U);
+	usb_serial_set_state(dev, UART_IF_NO, CDCACM_UART_ENDPOINT + 1U);
 
-#if defined(ENABLE_DEBUG) && defined(PLATFORM_HAS_DEBUG)
+#if ENABLE_DEBUG == 1 && defined(PLATFORM_HAS_DEBUG)
 	initialise_monitor_handles();
 #endif
 }
@@ -249,7 +249,7 @@ uint32_t debug_serial_fifo_send(const char *const fifo, const uint32_t fifo_begi
 	return fifo_begin;
 }
 
-#if defined(ENABLE_DEBUG) && defined(PLATFORM_HAS_DEBUG)
+#if ENABLE_DEBUG == 1 && defined(PLATFORM_HAS_DEBUG)
 static bool debug_serial_fifo_buffer_empty(void)
 {
 	return debug_serial_debug_write_index == debug_serial_debug_read_index;
@@ -270,17 +270,17 @@ static void debug_serial_send_data(void)
 	 * If fifo empty, nothing further to do. */
 	if (usb_get_config() != 1 ||
 		(aux_serial_receive_buffer_empty()
-#if defined(ENABLE_DEBUG) && defined(PLATFORM_HAS_DEBUG)
+#if ENABLE_DEBUG == 1 && defined(PLATFORM_HAS_DEBUG)
 			&& debug_serial_fifo_buffer_empty()
 #endif
 				)) {
-#if defined(ENABLE_DEBUG) && defined(PLATFORM_HAS_DEBUG)
+#if ENABLE_DEBUG == 1 && defined(PLATFORM_HAS_DEBUG)
 		debug_serial_debug_read_index = debug_serial_debug_write_index;
 #endif
 		aux_serial_drain_receive_buffer();
 		debug_serial_send_complete = true;
 	} else {
-#if defined(ENABLE_DEBUG) && defined(PLATFORM_HAS_DEBUG)
+#if ENABLE_DEBUG == 1 && defined(PLATFORM_HAS_DEBUG)
 		debug_serial_debug_read_index = debug_serial_fifo_send(
 			debug_serial_debug_buffer, debug_serial_debug_read_index, debug_serial_debug_write_index);
 #endif
@@ -339,7 +339,7 @@ static void debug_serial_receive_callback(usbd_device *dev, uint8_t ep)
 #endif
 }
 
-#ifdef ENABLE_DEBUG
+#if ENABLE_DEBUG == 1
 #ifdef PLATFORM_HAS_DEBUG
 static void debug_serial_append_char(const char c)
 {
@@ -382,7 +382,7 @@ static size_t debug_serial_debug_write(const char *buf, const size_t len)
  * The result of this function is the number of bytes written.
  */
 /* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
-int _write(const int file, const void *const ptr, const size_t len)
+__attribute__((used)) int _write(const int file, const void *const ptr, const size_t len)
 {
 	(void)file;
 #ifdef PLATFORM_HAS_DEBUG
@@ -399,7 +399,7 @@ int _write(const int file, const void *const ptr, const size_t len)
  *
  * The result of this function is always 'true'.
  */
-int isatty(const int file)
+__attribute__((used)) int isatty(const int file)
 {
 	(void)file;
 	return true;
@@ -447,10 +447,10 @@ void debug_monitor_handler(void)
 	__asm__("bx lr");
 }
 #else
-/* This defines stubs for the newlib fake file IO layer for compatability with GCC 12 `-spec=nosys.spec` */
+/* This defines stubs for the newlib fake file IO layer for compatibility with GCC 12 `-specs=nosys.specs` */
 
 /* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
-int _write(const int file, const void *const buffer, const size_t length)
+__attribute__((used)) int _write(const int file, const void *const buffer, const size_t length)
 {
 	(void)file;
 	(void)buffer;
@@ -458,7 +458,7 @@ int _write(const int file, const void *const buffer, const size_t length)
 }
 
 /* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
-int _read(const int file, void *const buffer, const size_t length)
+__attribute__((used)) int _read(const int file, void *const buffer, const size_t length)
 {
 	(void)file;
 	(void)buffer;
@@ -466,7 +466,7 @@ int _read(const int file, void *const buffer, const size_t length)
 }
 
 /* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
-off_t _lseek(const int file, const off_t offset, const int direction)
+__attribute__((used)) off_t _lseek(const int file, const off_t offset, const int direction)
 {
 	(void)file;
 	(void)offset;
@@ -475,7 +475,7 @@ off_t _lseek(const int file, const off_t offset, const int direction)
 }
 
 /* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
-int _fstat(const int file, stat_s *stats)
+__attribute__((used)) int _fstat(const int file, stat_s *stats)
 {
 	(void)file;
 	memset(stats, 0, sizeof(*stats));
@@ -483,27 +483,27 @@ int _fstat(const int file, stat_s *stats)
 }
 
 /* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
-int _isatty(const int file)
+__attribute__((used)) int _isatty(const int file)
 {
 	(void)file;
 	return true;
 }
 
 /* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
-int _close(const int file)
+__attribute__((used)) int _close(const int file)
 {
 	(void)file;
 	return 0;
 }
 
 /* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
-pid_t _getpid(void)
+__attribute__((used)) pid_t _getpid(void)
 {
 	return 1;
 }
 
 /* NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp) */
-int _kill(const int pid, const int signal)
+__attribute__((used)) int _kill(const int pid, const int signal)
 {
 	(void)pid;
 	(void)signal;

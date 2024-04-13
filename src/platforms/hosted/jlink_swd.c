@@ -22,8 +22,7 @@
  */
 
 /*
- * This file implements the SW-DP specific functions of the
- * ARM Debug Interface v5 Architecture Specification, ARM doc IHI0031A.
+ * This file implements SWD specific functions for the J-Link probe.
  */
 
 #include <assert.h>
@@ -35,6 +34,7 @@
 #include "jlink.h"
 #include "jlink_protocol.h"
 #include "buffer_utils.h"
+#include "maths_utils.h"
 #include "cli.h"
 
 /*
@@ -68,11 +68,6 @@ static const uint8_t jlink_adiv5_read_request[5] = {
 	/* clang-format on */
 };
 
-/* 60 cycles of SWDIO held high + 4 cycles of it low (idle) */
-static const uint8_t jlink_line_reset_data[8] = {0xffU, 0xffU, 0xffU, 0xffU, 0xffU, 0xffU, 0xffU, 0xf0U};
-/* Define the direction as output for the entire lot */
-static const uint8_t jlink_line_reset_dir[8] = {0xffU, 0xffU, 0xffU, 0xffU, 0xffU, 0xffU, 0xffU, 0xffU};
-
 static uint32_t jlink_swd_seq_in(size_t clock_cycles);
 static bool jlink_swd_seq_in_parity(uint32_t *result, size_t clock_cycles);
 static void jlink_swd_seq_out(uint32_t tms_states, size_t clock_cycles);
@@ -80,7 +75,6 @@ static void jlink_swd_seq_out_parity(uint32_t tms_states, size_t clock_cycles);
 
 static bool jlink_adiv5_raw_write_no_check(uint16_t addr, uint32_t data);
 static uint32_t jlink_adiv5_raw_read_no_check(uint16_t addr);
-static uint32_t jlink_adiv5_clear_error(adiv5_debug_port_s *dp, bool protocol_recovery);
 static uint32_t jlink_adiv5_raw_access(adiv5_debug_port_s *dp, uint8_t rnw, uint16_t addr, uint32_t request_value);
 
 bool jlink_swd_init(adiv5_debug_port_s *dp)
@@ -100,9 +94,8 @@ bool jlink_swd_init(adiv5_debug_port_s *dp)
 	swd_proc.seq_out_parity = jlink_swd_seq_out_parity;
 
 	/* Set up the accelerated SWD functions for basic target operations */
-	dp->dp_low_write = jlink_adiv5_raw_write_no_check;
-	dp->dp_read = firmware_swdp_read;
-	dp->error = jlink_adiv5_clear_error;
+	dp->write_no_check = jlink_adiv5_raw_write_no_check;
+	dp->read_no_check = jlink_adiv5_raw_read_no_check;
 	dp->low_access = jlink_adiv5_raw_access;
 	return true;
 }
@@ -129,7 +122,7 @@ static void jlink_swd_seq_out_parity(const uint32_t tms_states, const size_t clo
 	/* Construct the parity bit */
 	const size_t byte = clock_cycles >> 3U;
 	const uint8_t bit = clock_cycles & 7U;
-	data[byte] |= (__builtin_parity(tms_states) & 1U) << bit;
+	data[byte] |= calculate_odd_parity(tms_states) << bit;
 	/* Attempt the transfer */
 	if (!jlink_transfer_swd(clock_cycles + 1U, JLINK_SWD_OUT, data, NULL)) {
 		/* If things go wrong, report it */
@@ -167,9 +160,9 @@ static bool jlink_swd_seq_in_parity(uint32_t *const result, const size_t clock_c
 	/* Compute the parity and validate it */
 	const size_t byte = clock_cycles >> 3U;
 	const uint8_t bit = clock_cycles & 7U;
-	uint8_t parity = __builtin_parity(data) & 1U;
+	uint8_t parity = calculate_odd_parity(data);
 	parity ^= (data_out[byte] >> bit) & 1U;
-	/* Retrn the result of the calculation */
+	/* Return the result of the calculation */
 	DEBUG_PROBE("%s %zu clock_cycles: %08" PRIx32 " %s\n", __func__, clock_cycles, data, parity ? "ERR" : "OK");
 	*result = data;
 	return !parity;
@@ -191,7 +184,7 @@ static bool jlink_adiv5_raw_write_no_check(const uint16_t addr, const uint32_t d
 	/* Build the response payload buffer */
 	uint8_t response[6] = {0};
 	write_le4(response, 0, data);
-	response[4] = __builtin_popcount(data) & 1U;
+	response[4] = calculate_odd_parity(data);
 	/* Try sending the data to the device */
 	if (!jlink_transfer(33U + 8U, jlink_adiv5_write_request, response, NULL)) {
 		DEBUG_ERROR("jlink_adiv5_raw_write_no_check failed\n");
@@ -218,61 +211,11 @@ static uint32_t jlink_adiv5_raw_read_no_check(const uint16_t addr)
 		DEBUG_ERROR("jlink_adiv5_raw_read_no_check failed\n");
 		return 0U;
 	}
-	/* Extract the data phase and return it if the transaction suceeded */
+	/* Extract the data phase and return it if the transaction succeeded */
 	const uint32_t data = read_le4(response, 0);
 	DEBUG_PROBE("jlink_adiv5_raw_read_no_check %04x -> %08" PRIx32 " %s\n", addr, data,
-		__builtin_parity(data) ^ response[4] ? "ERR" : "OK");
+		calculate_odd_parity(data) != response[4] ? "ERR" : "OK");
 	return ack == SWDP_ACK_OK ? data : 0U;
-}
-
-static bool jlink_swd_line_reset(void)
-{
-	/*
-	 * We have to send at least 50 cycles (actually at least 51 because of non-conformance
-	 * in STM32 devices) of SWDIO held high to perform the line reset, then 4 cycles of it low
-	 * to complete the reset and put the device back in idle
-	 */
-	const bool result = jlink_transfer(64U, jlink_line_reset_dir, jlink_line_reset_data, NULL);
-	if (!result)
-		DEBUG_ERROR("%s failed\n", __func__);
-	return result;
-}
-
-static uint32_t jlink_adiv5_clear_error(adiv5_debug_port_s *const dp, const bool protocol_recovery)
-{
-	DEBUG_PROBE("jlink_adiv5_clear_error (protocol recovery? %s)\n", protocol_recovery ? "true" : "false");
-	/* Only do the comms reset dance on DPv2+ w/ fault or to perform protocol recovery. */
-	if ((dp->version >= 2 && dp->fault) || protocol_recovery) {
-		/*
-		 * Note that on DPv2+ devices, during a protocol error condition
-		 * the target becomes deselected during line reset. Once reset,
-		 * we must then re-select the target to bring the device back
-		 * into the expected state.
-		 */
-		jlink_swd_line_reset();
-		if (dp->version >= 2)
-			jlink_adiv5_raw_write_no_check(ADIV5_DP_TARGETSEL, dp->targetsel);
-		jlink_adiv5_raw_read_no_check(ADIV5_DP_DPIDR);
-		/* Exception here is unexpected, so do not catch */
-	}
-	const uint32_t err = jlink_adiv5_raw_read_no_check(ADIV5_DP_CTRLSTAT) &
-		(ADIV5_DP_CTRLSTAT_STICKYORUN | ADIV5_DP_CTRLSTAT_STICKYCMP | ADIV5_DP_CTRLSTAT_STICKYERR |
-			ADIV5_DP_CTRLSTAT_WDATAERR);
-	uint32_t clr = 0;
-
-	if (err & ADIV5_DP_CTRLSTAT_STICKYORUN)
-		clr |= ADIV5_DP_ABORT_ORUNERRCLR;
-	if (err & ADIV5_DP_CTRLSTAT_STICKYCMP)
-		clr |= ADIV5_DP_ABORT_STKCMPCLR;
-	if (err & ADIV5_DP_CTRLSTAT_STICKYERR)
-		clr |= ADIV5_DP_ABORT_STKERRCLR;
-	if (err & ADIV5_DP_CTRLSTAT_WDATAERR)
-		clr |= ADIV5_DP_ABORT_WDERRCLR;
-
-	if (clr)
-		jlink_adiv5_raw_write_no_check(ADIV5_DP_ABORT, clr);
-	dp->fault = 0;
-	return err;
 }
 
 static uint32_t jlink_adiv5_raw_read(adiv5_debug_port_s *const dp)
@@ -286,7 +229,7 @@ static uint32_t jlink_adiv5_raw_read(adiv5_debug_port_s *const dp)
 	/* Extract the data phase */
 	const uint32_t response = read_le4(result, 0);
 	/* Calculate and do a parity check */
-	uint8_t parity = __builtin_parity(response) & 1U;
+	uint8_t parity = calculate_odd_parity(response);
 	parity ^= result[4] & 1U;
 	/* If that fails, turn it into an error */
 	if (parity) {
@@ -302,7 +245,7 @@ static uint32_t jlink_adiv5_raw_write(const uint32_t request_value)
 	/* Build the response payload buffer */
 	uint8_t request[6] = {0};
 	write_le4(request, 0, request_value);
-	request[4] = __builtin_popcount(request_value) & 1U;
+	request[4] = calculate_odd_parity(request_value);
 	/* Allocate storage for the result */
 	uint8_t result[6] = {0};
 	/* Try sending the data to the device */

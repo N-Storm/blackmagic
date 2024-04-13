@@ -47,7 +47,7 @@ void gdb_set_noackmode(bool enable)
 	/*
 	 * If we were asked to disable NoAckMode, and it was previously enabled,
 	 * it might mean we got a packet we determined to be the first of a new
-	 * GDB session, and as such it was not acknoledged (before GDB enabled NoAckMode),
+	 * GDB session, and as such it was not acknowledged (before GDB enabled NoAckMode),
 	 * better late than never.
 	 *
 	 * If we were asked after the connection was terminated, sending the ack will have no effect.
@@ -55,7 +55,10 @@ void gdb_set_noackmode(bool enable)
 	if (!enable && noackmode)
 		gdb_if_putchar(GDB_PACKET_ACK, 1U);
 
-	DEBUG_GDB("%s NoAckMode\n", enable ? "Enabling" : "Disabling");
+	/* Log only changes */
+	if (noackmode != enable)
+		DEBUG_GDB("%s NoAckMode\n", enable ? "Enabling" : "Disabling");
+
 	noackmode = enable;
 }
 

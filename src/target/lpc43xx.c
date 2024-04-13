@@ -470,7 +470,7 @@ bool lpc43xx_probe(target_s *const t)
 		return false;
 
 	const uint32_t chip_code = (chipid & LPC43xx_CHIPID_CHIP_MASK) >> LPC43xx_CHIPID_CHIP_SHIFT;
-	t->target_options |= CORTEXM_TOPT_INHIBIT_NRST;
+	t->target_options |= TOPT_INHIBIT_NRST;
 
 	/* If we're on the M4 core, poke the M0APP and M0SUB core resets to make them available */
 	if ((t->cpuid & CORTEX_CPUID_PARTNO_MASK) == CORTEX_M4) {
@@ -657,7 +657,7 @@ static bool lpc43x0_attach(target_s *const target)
 		 * If the boot source is anything other than SPI and the image contains no header,
 		 * the chip sets switches execution to that boot source.
 		 *
-		 * This process is laid out in Chaper 5 of UM10503. See Fig 16 on pg 59 for a more detailed view.
+		 * This process is laid out in Chapter 5 of UM10503. See Fig 16 on pg 59 for a more detailed view.
 		 */
 		lpc43x0_determine_flash_interface(target);
 	}

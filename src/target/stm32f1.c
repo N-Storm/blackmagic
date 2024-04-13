@@ -41,6 +41,7 @@
 #include "target.h"
 #include "target_internal.h"
 #include "cortexm.h"
+#include "jep106.h"
 
 static bool stm32f1_cmd_option(target_s *target, int argc, const char **argv);
 
@@ -104,11 +105,11 @@ static bool stm32f1_mass_erase(target_s *target);
 #define AT32F4x_IDCODE_PART_MASK   0x00000fffU
 #define AT32F41_SERIES             0x70030000U
 #define AT32F40_SERIES             0x70050000U
-#define AT32F43_SERIES_4K          0x70084000U
-#define AT32F43_SERIES_2K          0x70083000U
 
 #define DBGMCU_IDCODE_MM32L0 0x40013400U
 #define DBGMCU_IDCODE_MM32F3 0x40007080U
+
+#define STM32F1_TOPT_32BIT_WRITES (1U << 8U)
 
 static void stm32f1_add_flash(target_s *target, uint32_t addr, size_t length, size_t erasesize)
 {
@@ -147,24 +148,72 @@ bool gd32f1_probe(target_s *target)
 	size_t block_size = 0x400;
 
 	switch (device_id) {
-	case 0x414U: /* Gigadevice gd32f303 */
-	case 0x430U:
+	case 0x414U: /* GD32F30x_HD, High density */
+	case 0x430U: /* GD32F30x_XD, XL-density */
 		target->driver = "GD32F3";
+		block_size = 0x800;
 		break;
-	case 0x418U:
+	case 0x418U: /* Connectivity Line */
 		target->driver = "GD32F2";
+		block_size = 0x800;
 		break;
-	case 0x410U: /* Gigadevice gd32f103, gd32e230 */
+	case 0x410U: /* Medium density */
 		if ((target->cpuid & CORTEX_CPUID_PARTNO_MASK) == CORTEX_M23)
-			target->driver = "GD32E230";
-		else if ((target->cpuid & CORTEX_CPUID_PARTNO_MASK) == CORTEX_M4)
+			target->driver = "GD32E230"; /* GD32E230, 64 KiB max in 1 KiB pages */
+		else if ((target->cpuid & CORTEX_CPUID_PARTNO_MASK) == CORTEX_M4) {
 			target->driver = "GD32F3";
-		else
-			target->driver = "GD32F1";
+			block_size = 0x800;
+		} else
+			target->driver = "GD32F1"; /* GD32F103, 1 KiB pages */
 		break;
-	case 0x444U: /* Gigadevice gd32e50x */
+	case 0x444U: /* GD32E50x_CL, 512 KiB max in 8 KiB pages */
 		target->driver = "GD32E5";
 		block_size = 0x2000;
+		break;
+	default:
+		return false;
+	}
+
+	const uint32_t signature = target_mem_read32(target, GD32Fx_FLASHSIZE);
+	const uint16_t flash_size = signature & 0xffffU;
+	const uint16_t ram_size = signature >> 16U;
+
+	/*
+	 * GD32F303x User Manual Rev2.9, 2.3.1 Flash memory architecture:
+	 * HD and <=512 KiB CL devices have only bank0 with 2 KiB sized pages
+	 * XD and  >512 KiB CL devices also have bank1 with 4 KiB sized pages
+	 * Same boundaries found in other families.
+	 * XXX: This driver currently only supports parts with a FLASH_BANK_SPLIT
+	 * at the 512 KiB boundary (i.e. 0x08080000) like STM32F1 XL-density.
+	 */
+	if (flash_size > 512U) {
+		const uint16_t flash_size_bank1 = flash_size - 512U;
+		stm32f1_add_flash(target, 0x8000000, 512U * 1024U, block_size);
+		stm32f1_add_flash(target, 0x8080000, flash_size_bank1 * 1024U, 0x1000U);
+	} else
+		stm32f1_add_flash(target, 0x8000000, (size_t)flash_size * 1024U, block_size);
+
+	target->part_id = device_id;
+	target->target_options |= STM32F1_TOPT_32BIT_WRITES;
+	target->mass_erase = stm32f1_mass_erase;
+	target_add_ram(target, 0x20000000, ram_size * 1024U);
+	target_add_commands(target, stm32f1_cmd_list, target->driver);
+
+	return true;
+}
+
+#ifdef ENABLE_RISCV
+/* Identify RISC-V GD32VF1 chips */
+bool gd32vf1_probe(target_s *const target)
+{
+	/* Make sure the architecture ID matches */
+	if (target->cpuid != 0x80000022U)
+		return false;
+	/* Then read out the device ID */
+	const uint16_t device_id = target_mem_read32(target, DBGMCU_IDCODE) & 0xfffU;
+	switch (device_id) {
+	case 0x410U: /* GD32VF103 */
+		target->driver = "GD32VF1";
 		break;
 	default:
 		return false;
@@ -177,47 +226,67 @@ bool gd32f1_probe(target_s *target)
 	target->part_id = device_id;
 	target->mass_erase = stm32f1_mass_erase;
 	target_add_ram(target, 0x20000000, ram_size * 1024U);
-	stm32f1_add_flash(target, 0x8000000, (size_t)flash_size * 1024U, block_size);
+	stm32f1_add_flash(target, 0x8000000, (size_t)flash_size * 1024U, 0x400U);
 	target_add_commands(target, stm32f1_cmd_list, target->driver);
 
 	return true;
 }
+#endif
+
+static bool at32f40_is_dual_bank(const uint16_t part_id)
+{
+	switch (part_id) {
+	case 0x0344U: // AT32F403AVGT7 / LQFP100
+	case 0x0345U: // AT32F403ARGT7 / LQFP64
+	case 0x0346U: // AT32F403ACGT7 / LQFP48
+	case 0x0347U: // AT32F403ACGU7 / QFN48 (found on BlackPill+ WeAct Studio)
+	case 0x034bU: // AT32F407VGT7 / LQFP100
+	case 0x034cU: // AT32F407VGT7 / LQFP64
+	case 0x0353U: // AT32F407AVGT7 / LQFP100
+		// Flash (G): 1024 KiB / 2 KiB per block, dual-bank
+		return true;
+	}
+	return false;
+}
 
 static bool at32f40_detect(target_s *target, const uint16_t part_id)
 {
-	// Current driver supports only *default* memory layout (256 KB Flash / 96 KB SRAM)
-	// XXX: Support for external Flash for 512KB and 1024KB parts requires specific flash code (not implemented)
+	// Current driver supports only *default* memory layout (256 KB ZW Flash / 96 KB SRAM)
+	// XXX: Support for external Flash on SPIM requires specific flash code (not implemented)
 	switch (part_id) {
-	case 0x0240U: // AT32F403AVCT7 256KB / LQFP100
-	case 0x0241U: // AT32F403ARCT7 256KB / LQFP64
-	case 0x0242U: // AT32F403ACCT7 256KB / LQFP48
-	case 0x0243U: // AT32F403ACCU7 256KB / QFN48
-	case 0x0249U: // AT32F407VCT7 256KB / LQFP100
-	case 0x024aU: // AT32F407RCT7 256KB / LQFP64
-	case 0x0254U: // AT32F407AVCT7 256KB / LQFP100
-	case 0x02cdU: // AT32F403AVET7 512KB / LQFP100 (*)
-	case 0x02ceU: // AT32F403ARET7 512KB / LQFP64 (*)
-	case 0x02cfU: // AT32F403ACET7 512KB / LQFP48 (*)
-	case 0x02d0U: // AT32F403ACEU7 512KB / QFN48 (*)
-	case 0x02d1U: // AT32F407VET7 512KB / LQFP100 (*)
-	case 0x02d2U: // AT32F407RET7 512KB / LQFP64 (*)
-	case 0x0344U: // AT32F403AVGT7 1024KB / LQFP100 (*)
-	case 0x0345U: // AT32F403ARGT7 1024KB / LQFP64 (*)
-	case 0x0346U: // AT32F403ACGT7 1024KB / LQFP48 (*)
-	case 0x0347U: // AT32F403ACGU7 1024KB / QFN48 (found on BlackPill+ WeAct Studio) (*)
-	case 0x034bU: // AT32F407VGT7 1024KB / LQFP100 (*)
-	case 0x034cU: // AT32F407VGT7 1024KB / LQFP64 (*)
-	case 0x0353U: // AT32F407AVGT7 1024KB / LQFP100 (*)
-		// Flash: 256 KB / 2KB per block
+	case 0x0240U: // AT32F403AVCT7 / LQFP100
+	case 0x0241U: // AT32F403ARCT7 / LQFP64
+	case 0x0242U: // AT32F403ACCT7 / LQFP48
+	case 0x0243U: // AT32F403ACCU7 / QFN48
+	case 0x0249U: // AT32F407VCT7 / LQFP100
+	case 0x024aU: // AT32F407RCT7 / LQFP64
+	case 0x0254U: // AT32F407AVCT7 / LQFP100
+		// Flash (C): 256 KiB / 2 KiB per block
 		stm32f1_add_flash(target, 0x08000000, 256U * 1024U, 2U * 1024U);
 		break;
-	// Unknown/undocumented
+	case 0x02cdU: // AT32F403AVET7 / LQFP100
+	case 0x02ceU: // AT32F403ARET7 / LQFP64
+	case 0x02cfU: // AT32F403ACET7 / LQFP48
+	case 0x02d0U: // AT32F403ACEU7 / QFN48
+	case 0x02d1U: // AT32F407VET7 / LQFP100
+	case 0x02d2U: // AT32F407RET7 / LQFP64
+		// Flash (E): 512 KiB / 2 KiB per block
+		stm32f1_add_flash(target, 0x08000000, 512U * 1024U, 2U * 1024U);
+		break;
 	default:
-		return false;
+		if (at32f40_is_dual_bank(part_id)) {
+			// Flash (G): 1024 KiB / 2 KiB per block, dual-bank
+			stm32f1_add_flash(target, 0x08000000, 512U * 1024U, 2U * 1024U);
+			stm32f1_add_flash(target, 0x08080000, 512U * 1024U, 2U * 1024U);
+			break;
+		} else // Unknown/undocumented
+			return false;
 	}
-	// All parts have 96KB SRAM
+	// All parts have 96 KiB SRAM
 	target_add_ram(target, 0x20000000, 96U * 1024U);
 	target->driver = "AT32F403A/407";
+	target->part_id = part_id;
+	target->target_options |= STM32F1_TOPT_32BIT_WRITES;
 	target->mass_erase = stm32f1_mass_erase;
 	return true;
 }
@@ -230,7 +299,7 @@ static bool at32f41_detect(target_s *target, const uint16_t part_id)
 	case 0x0242U: // QFN32_4x4
 	case 0x0243U: // LQFP64_7x7
 	case 0x024cU: // QFN48_6x6
-		// Flash: 256 KB / 2KB per block
+		// Flash (C): 256 KiB / 2 KiB per block
 		stm32f1_add_flash(target, 0x08000000, 256U * 1024U, 2U * 1024U);
 		break;
 	case 0x01c4U: // LQFP64_10x10
@@ -238,113 +307,30 @@ static bool at32f41_detect(target_s *target, const uint16_t part_id)
 	case 0x01c6U: // QFN32_4x4
 	case 0x01c7U: // LQFP64_7x7
 	case 0x01cdU: // QFN48_6x6
-		// Flash: 128 KB / 2KB per block
+		// Flash (B): 128 KiB / 2 KiB per block
 		stm32f1_add_flash(target, 0x08000000, 128U * 1024U, 2U * 1024U);
 		break;
 	case 0x0108U: // LQFP64_10x10
 	case 0x0109U: // LQFP48_7x7
 	case 0x010aU: // QFN32_4x4
-		// Flash: 64 KB / 2KB per block
+		// Flash (8): 64 KiB / 2 KiB per block
 		stm32f1_add_flash(target, 0x08000000, 64U * 1024U, 2U * 1024U);
 		break;
 	// Unknown/undocumented
 	default:
 		return false;
 	}
-	// All parts have 32KB SRAM
+	// All parts have 32 KiB SRAM
 	target_add_ram(target, 0x20000000, 32U * 1024U);
 	target->driver = "AT32F415";
+	target->part_id = part_id;
+	target->target_options |= STM32F1_TOPT_32BIT_WRITES;
 	target->mass_erase = stm32f1_mass_erase;
 	return true;
 }
 
-static bool at32f43_detect(target_s *target, const uint16_t part_id)
-{
-	/* AT32F435 EOPB0 ZW/NZW split reconfiguration unsupported,
-	 * assuming default split ZW=256 SRAM=384.
-	 * AT32F437 also have a working "EMAC" (Ethernet MAC)
-	 */
-	uint32_t flash_size_kb = 0;
-	uint32_t sector_size = 0;
-	switch (part_id) {
-	// 0x70084000U parts with 4KB sectors:
-	case 0x0540U: // LQFP144
-	case 0x0543U: // LQFP100
-	case 0x0546U: // LQFP64
-	case 0x0549U: // LQFP48
-	case 0x054cU: // QFN48
-	case 0x054fU: // LQFP144 w/Eth
-	case 0x0552U: // LQFP100 w/Eth
-	case 0x0555U: // LQFP64 w/Eth
-		// Flash (G): 4032 KB in 2 banks (2048+1984), 4KB per sector.
-		flash_size_kb = 4032;
-		sector_size = 4096;
-		break;
-	case 0x0598U: // LQFP144
-	case 0x0599U: // LQFP100
-	case 0x059aU: // LQFP64
-	case 0x059bU: // LQFP48
-	case 0x059cU: // QFN48
-	case 0x059dU: // LQFP144 w/Eth
-	case 0x059eU: // LQFP100 w/Eth
-	case 0x059fU: // LQFP64 w/Eth
-		// Flash (D): 448 KB, only bank 1, 4KB per sector.
-		flash_size_kb = 448;
-		sector_size = 4096;
-		break;
-	// 0x70083000U parts with 2KB sectors:
-	case 0x0341U: // LQFP144
-	case 0x0344U: // LQFP100
-	case 0x0347U: // LQFP64
-	case 0x034aU: // LQFP48
-	case 0x034dU: // QFN48
-	case 0x0350U: // LQFP144 w/Eth
-	case 0x0353U: // LQFP100 w/Eth
-	case 0x0356U: // LQFP64 w/Eth
-		// Flash (M): 1024 KB in 2 banks (equal), 2KB per sector.
-		flash_size_kb = 1024;
-		sector_size = 2048;
-		break;
-	case 0x0242U: // LQFP144
-	case 0x0245U: // LQFP100
-	case 0x0248U: // LQFP64
-	case 0x024bU: // LQFP48
-	case 0x024eU: // QFN48
-	case 0x0251U: // LQFP144 w/Eth
-	case 0x0254U: // LQFP100 w/Eth
-	case 0x0257U: // LQFP64 w/Eth
-		// Flash (C): 256 KB, only bank 1, 2KB per sector.
-		flash_size_kb = 256;
-		sector_size = 2048;
-		break;
-	default:
-		return false;
-	}
-	/*
-	 * Arterytek F43x Flash controller has BLKERS (1<<3U).
-	 * Block erase operates on 64 KB at once for all parts.
-	 * Using here only sector erase (page erase) for compatibility.
-	 */
-	stm32f1_add_flash(target, 0x08000000, flash_size_kb * 1024U, sector_size);
-	// SRAM1 (64KB) can be remapped to 0x10000000.
-	target_add_ram(target, 0x20000000, 64U * 1024U);
-	// SRAM2 (384-64=320 KB default).
-	target_add_ram(target, 0x20010000, 320U * 1024U);
-	/*
-	 * SRAM total is adjustable between 128 KB and 512 KB (max).
-	 * Out of 640 KB SRAM present on silicon, at least 128 KB are always
-	 * dedicated to "zero-wait-state Flash". ZW region is limited by
-	 * specific part flash capacity (for 256, 448 KB) or at 512 KB.
-	 * AT32F435ZMT default EOPB0=0xffff05fa,
-	 * EOPB[0:2]=0b010 for 384 KB SRAM + 256 KB zero-wait-state flash.
-	 */
-	target->driver = "AT32F435";
-	target->mass_erase = stm32f1_mass_erase;
-	return true;
-}
-
-/* Identify AT32F4x devices (Cortex-M4) */
-bool at32fxx_probe(target_s *target)
+/* Identify AT32F40x "Mainstream" line devices (Cortex-M4) */
+bool at32f40x_probe(target_s *target)
 {
 	// Artery clones use Cortex M4 cores
 	if ((target->cpuid & CORTEX_CPUID_PARTNO_MASK) != CORTEX_M4)
@@ -359,8 +345,6 @@ bool at32fxx_probe(target_s *target)
 		return at32f40_detect(target, part_id);
 	if (series == AT32F41_SERIES)
 		return at32f41_detect(target, part_id);
-	if (series == AT32F43_SERIES_4K || series == AT32F43_SERIES_2K)
-		return at32f43_detect(target, part_id);
 	return false;
 }
 
@@ -557,8 +541,8 @@ bool stm32f1_probe(target_s *target)
 	case 0x422U: /* STM32F30x */
 	case 0x446U: /* STM32F303xD/E and STM32F398xE */
 		target_add_ram(target, 0x10000000, 0x4000);
-		/* fall through */
 
+		BMD_FALLTHROUGH
 	case 0x432U: /* STM32F37x */
 	case 0x439U: /* STM32F302C8 */
 		target->driver = "STM32F3";
@@ -596,6 +580,7 @@ bool stm32f1_probe(target_s *target)
 		break;
 
 	default: /* NONE */
+		target->mass_erase = NULL;
 		return false;
 	}
 
@@ -610,7 +595,7 @@ static bool stm32f1_flash_unlock(target_s *target, uint32_t bank_offset)
 {
 	target_mem_write32(target, FLASH_KEYR + bank_offset, KEY1);
 	target_mem_write32(target, FLASH_KEYR + bank_offset, KEY2);
-	uint32_t ctrl = target_mem_read32(target, FLASH_CR);
+	uint32_t ctrl = target_mem_read32(target, FLASH_CR + bank_offset);
 	if (ctrl & FLASH_CR_LOCK)
 		DEBUG_ERROR("unlock failed, cr: 0x%08" PRIx32 "\n", ctrl);
 	return !(ctrl & FLASH_CR_LOCK);
@@ -648,6 +633,15 @@ static bool stm32f1_flash_busy_wait(
 	return !(status & SR_ERROR_MASK);
 }
 
+static bool stm32f1_is_dual_bank(const uint16_t part_id)
+{
+	if (part_id == 0x430U) /* XL-density */
+		return true;
+	if (at32f40_is_dual_bank(part_id))
+		return true;
+	return false;
+}
+
 static uint32_t stm32f1_bank_offset_for(target_addr_t addr)
 {
 	if (addr >= FLASH_BANK_SPLIT)
@@ -662,7 +656,8 @@ static bool stm32f1_flash_erase(target_flash_s *flash, target_addr_t addr, size_
 	DEBUG_TARGET("%s: at %08" PRIx32 "\n", __func__, addr);
 
 	/* Unlocked an appropriate flash bank */
-	if ((target->part_id == 0x430U && end >= FLASH_BANK_SPLIT && !stm32f1_flash_unlock(target, FLASH_BANK2_OFFSET)) ||
+	if ((stm32f1_is_dual_bank(target->part_id) && end >= FLASH_BANK_SPLIT &&
+			!stm32f1_flash_unlock(target, FLASH_BANK2_OFFSET)) ||
 		(addr < FLASH_BANK_SPLIT && !stm32f1_flash_unlock(target, 0)))
 		return false;
 
@@ -695,12 +690,19 @@ static bool stm32f1_flash_write(target_flash_s *flash, target_addr_t dest, const
 	const size_t offset = stm32f1_bank1_length(dest, len);
 	DEBUG_TARGET("%s: at %08" PRIx32 " for %zu bytes\n", __func__, dest, len);
 
+	/* Allow wider writes on Gigadevices and Arterytek */
+	const align_e psize = (target->target_options & STM32F1_TOPT_32BIT_WRITES) ? ALIGN_32BIT : ALIGN_16BIT;
+
 	/* Start by writing any bank 1 data */
 	if (offset) {
 		stm32f1_flash_clear_eop(target, FLASH_BANK1_OFFSET);
 
 		target_mem_write32(target, FLASH_CR, FLASH_CR_PG);
-		cortexm_mem_write_sized(target, dest, src, offset, ALIGN_16BIT);
+		/* Use the target API instead of a direct Cortex-M call for GD32VF103 parts */
+		if (target->designer_code == JEP106_MANUFACTURER_RV_GIGADEVICE && target->cpuid == 0x80000022U)
+			target_mem_write(target, dest, src, offset);
+		else
+			cortexm_mem_write_sized(target, dest, src, offset, psize);
 
 		/* Wait for completion or an error */
 		if (!stm32f1_flash_busy_wait(target, FLASH_BANK1_OFFSET, NULL))
@@ -709,12 +711,16 @@ static bool stm32f1_flash_write(target_flash_s *flash, target_addr_t dest, const
 
 	/* If there's anything to write left over and we're on a part with a second bank, write to bank 2 */
 	const size_t remainder = len - offset;
-	if (target->part_id == 0x430U && remainder) {
+	if (stm32f1_is_dual_bank(target->part_id) && remainder) {
 		const uint8_t *data = src;
 		stm32f1_flash_clear_eop(target, FLASH_BANK2_OFFSET);
 
 		target_mem_write32(target, FLASH_CR + FLASH_BANK2_OFFSET, FLASH_CR_PG);
-		cortexm_mem_write_sized(target, dest + offset, data + offset, remainder, ALIGN_16BIT);
+		/* Use the target API instead of a direct Cortex-M call for GD32VF103 parts */
+		if (target->designer_code == JEP106_MANUFACTURER_RV_GIGADEVICE && target->cpuid == 0x80000022U)
+			target_mem_write(target, dest + offset, data + offset, remainder);
+		else
+			cortexm_mem_write_sized(target, dest + offset, data + offset, remainder, psize);
 
 		/* Wait for completion or an error */
 		if (!stm32f1_flash_busy_wait(target, FLASH_BANK2_OFFSET, NULL))
@@ -751,7 +757,7 @@ static bool stm32f1_mass_erase(target_s *target)
 		return false;
 
 	/* If we're on a part that has a second bank, mass erase that bank too */
-	if (target->part_id == 0x430U)
+	if (stm32f1_is_dual_bank(target->part_id))
 		return stm32f1_mass_erase_bank(target, FLASH_BANK2_OFFSET, &timeout);
 	return true;
 }

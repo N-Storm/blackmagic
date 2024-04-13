@@ -73,7 +73,7 @@ static const debugger_device_s debugger_devices[] = {
 	{VENDOR_ID_STLINK, PRODUCT_ID_STLINKV3_NO_MSD, PROBE_TYPE_STLINK_V2, NULL, "ST-Link v2.1 No MSD"},
 	{VENDOR_ID_STLINK, PRODUCT_ID_STLINKV3, PROBE_TYPE_STLINK_V2, NULL, "ST-Link v3"},
 	{VENDOR_ID_STLINK, PRODUCT_ID_STLINKV3E, PROBE_TYPE_STLINK_V2, NULL, "ST-Link v3E"},
-	{VENDOR_ID_SEGGER, PRODUCT_ID_ANY, PROBE_TYPE_JLINK, NULL, "Segger JLink"},
+	{VENDOR_ID_SEGGER, PRODUCT_ID_ANY, PROBE_TYPE_JLINK, NULL, "Segger J-Link"},
 	{VENDOR_ID_FTDI, PRODUCT_ID_FTDI_FT2232, PROBE_TYPE_FTDI, NULL, "FTDI FT2232"},
 	{VENDOR_ID_FTDI, PRODUCT_ID_FTDI_FT4232, PROBE_TYPE_FTDI, NULL, "FTDI FT4232"},
 	{VENDOR_ID_FTDI, PRODUCT_ID_FTDI_FT232, PROBE_TYPE_FTDI, NULL, "FTDI FT232"},
@@ -406,6 +406,11 @@ static void check_cmsis_interface_type(libusb_device *const device, bmda_probe_s
 			if (strstr(interface_string, "CMSIS") == NULL)
 				continue;
 
+			/* Scan through the endpoints finding the one with the narrowest max transfer length */
+			info->max_packet_length = UINT16_MAX;
+			for (uint8_t index = 0; index < descriptor->bNumEndpoints; ++index)
+				info->max_packet_length = MIN(descriptor->endpoint[index].wMaxPacketSize, info->max_packet_length);
+
 			/* Check if it's a CMSIS-DAP v2 interface */
 			if (descriptor->bInterfaceClass == 0xffU && descriptor->bNumEndpoints == 2U) {
 				info->interface_num = descriptor->bInterfaceNumber;
@@ -417,6 +422,8 @@ static void check_cmsis_interface_type(libusb_device *const device, bmda_probe_s
 					else
 						info->out_ep = ep;
 				}
+				/* If we've found a CMSIS-DAP v2 interface, look no further - we want to prefer these to v1. */
+				break;
 			}
 		}
 	}
@@ -524,7 +531,7 @@ int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
 	/* Count up how many were found and filter the list for a match to the program options request */
 	const size_t probes = probe_info_count(probe_list);
 	const probe_info_s *probe = NULL;
-	/* If there's just one probe and we didn't get match critera, pick it */
+	/* If there's just one probe and we didn't get match criteria, pick it */
 	if (probes == 1 && !cl_opts->opt_serial && !cl_opts->opt_position)
 		probe = probe_list;
 	else /* Otherwise filter the list */
@@ -569,7 +576,7 @@ int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
  *
  * NB: The lengths represent the maximum number of expected bytes and the actual amount
  *   sent/received may be less (per libusb's documentation). If used, rx_buffer must be
- *   suitably intialised up front to avoid UB reads when accessed.
+ *   suitably initialised up front to avoid UB reads when accessed.
  */
 int bmda_usb_transfer(
 	usb_link_s *link, const void *tx_buffer, size_t tx_len, void *rx_buffer, size_t rx_len, uint16_t timeout)

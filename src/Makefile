@@ -1,7 +1,10 @@
 PROBE_HOST ?= native
 PLATFORM_DIR = platforms/$(PROBE_HOST)
 VPATH += $(PLATFORM_DIR) target
-ENABLE_DEBUG ?=
+ENABLE_DEBUG ?= 0
+ENABLE_CORTEXAR ?= 0
+ENABLE_RISCV ?= 0
+ENABLE_XILINX ?= 0
 
 SYS = $(shell $(CC) -dumpmachine)
 
@@ -19,24 +22,29 @@ ifeq (filter, macosx darwin, $(SYS))
 CFLAGS += -Wmaybe-uninitialized -Wstringop-overflow -Wunsafe-loop-optimizations
 endif
 
+ifeq ($(PROBE_HOST),hosted)
+ENABLE_DEBUG := 1
+endif
+
 ifeq ($(ENABLE_DEBUG), 1)
-CFLAGS += -DENABLE_DEBUG
+CFLAGS += -DENABLE_DEBUG=1
+else
+CFLAGS += -DENABLE_DEBUG=0
 endif
 
 SRC =              \
 	adiv5.c        \
 	adiv5_jtag.c   \
 	adiv5_swd.c    \
+	at32f43x.c     \
 	command.c      \
 	cortex.c       \
-	cortexa.c      \
 	cortexm.c      \
 	crc32.c        \
 	efm32.c        \
 	exception.c    \
 	gdb_if.c       \
 	gdb_main.c     \
-	gdb_hostio.c   \
 	gdb_packet.c   \
 	gdb_reg.c      \
 	hex_utils.c    \
@@ -68,8 +76,10 @@ SRC =              \
 	sam4l.c        \
 	samd.c         \
 	samx5x.c       \
+	semihosting.c  \
 	sfdp.c         \
 	spi.c          \
+	s32k3xx.c      \
 	stm32f1.c      \
 	ch32f1.c       \
 	stm32f4.c      \
@@ -79,13 +89,35 @@ SRC =              \
 	stm32l0.c      \
 	stm32l4.c      \
 	stm32g0.c      \
-	renesas.c      \
+	renesas_ra.c   \
 	target.c       \
 	target_flash.c \
 	target_probe.c
 
 ifeq (,$(filter all_platforms,$(MAKECMDGOALS)))
 include $(PLATFORM_DIR)/Makefile.inc
+endif
+
+ifeq ($(ENABLE_CORTEXAR), 1)
+CFLAGS += -DENABLE_CORTEXAR
+SRC +=           \
+	cortexar.c   \
+	renesas_rz.c
+
+ifeq ($(ENABLE_XILINX), 1)
+CFLAGS += -DENABLE_XILINX
+SRC +=         \
+	zynq7000.c
+endif
+endif
+
+ifeq ($(ENABLE_RISCV), 1)
+CFLAGS += -DENABLE_RISCV
+SRC +=               \
+	riscv32.c        \
+	riscv64.c        \
+	riscv_debug.c    \
+	riscv_jtag_dtm.c
 endif
 
 ifneq ($(PC_HOSTED),1)
@@ -127,6 +159,8 @@ endif
 
 ifeq ($(ADVERTISE_NOACKMODE), 1)
 CFLAGS += -DADVERTISE_NOACKMODE=1
+else
+CFLAGS += -DADVERTISE_NOACKMODE=0
 endif
 
 OBJ = $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRC)))
@@ -169,12 +203,11 @@ else
 endif
 
 all_platforms:
-	$(Q)if [ ! -f ../libopencm3/Makefile ]; then \
+	$(Q)if [ ! -f ../deps/libopencm3/Makefile ]; then \
 		echo "Initialising git submodules..." ;\
-		git submodule init ;\
-		git submodule update ;\
+		git submodule update --init ;\
 	fi
-	$(Q)$(MAKE) $(MFLAGS) -C ../libopencm3 lib/stm32/f1 lib/stm32/f4 lib/lm4f
+	$(Q)$(MAKE) $(MFLAGS) -C ../deps/libopencm3 lib/stm32/f1 lib/stm32/f4 lib/stm32/f7 lib/lm4f
 	$(Q)set -e ;\
 	mkdir -p artifacts/$(shell git describe --always --dirty --tags) ;\
 	echo "<html><body><ul>" > artifacts/index.html ;\

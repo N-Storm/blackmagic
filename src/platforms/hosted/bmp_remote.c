@@ -20,23 +20,20 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "general.h"
-#include "gdb_if.h"
 #include "version.h"
 #include "remote.h"
 #include "target.h"
 #include "bmp_remote.h"
-#include "cli.h"
 #include "hex_utils.h"
-#include "exception.h"
 
 #include "remote/protocol_v0.h"
 #include "remote/protocol_v1.h"
 #include "remote/protocol_v2.h"
 #include "remote/protocol_v3.h"
 
-#include <assert.h>
+#ifndef _MSC_VER
 #include <sys/time.h>
-#include <errno.h>
+#endif
 
 #include "adiv5.h"
 
@@ -86,7 +83,7 @@ bool remote_init(const bool power_up)
 		const uint64_t version = remote_decode_response(buffer + 1, length - 1);
 		switch (version) {
 		case 0:
-			/* protocol version number 0 coresponds to an enhanced v0 protocol probe ("v0+") */
+			/* protocol version number 0 corresponds to an enhanced v0 protocol probe ("v0+") */
 			remote_v0_plus_init();
 			break;
 		case 1:

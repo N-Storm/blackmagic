@@ -29,7 +29,32 @@
 
 #define PLATFORM_HAS_TRACESWO
 
-/* Error handling for ALTERNATIVE_PINOUT
+#if ENABLE_DEBUG == 1
+#define PLATFORM_HAS_DEBUG
+extern bool debug_bmp;
+#endif
+
+/*
+ * If the SHIELD macro is passed to make, other macros are defined.
+ * Build the code using `make PROBE_HOST=blackpill-f4x1cx SHIELD=1` to define the SHIELD macro.
+ */
+#ifdef SHIELD
+/* Error handling for the SHIELD macro. If SHIELD has a value > 1, or < 1, an error is thrown. */
+#if SHIELD < 1 || SHIELD > 1
+#error "Invalid value for SHIELD. Value is smaller than 1, or larger than 1. If SHIELD is defined, the value must be 1"
+#endif
+/* If SHIELD is defined, the platform is able to power the vRef pin using the PWR_BR pin and the PLATFORM_HAS_POWER_SWITCH is defined. */
+#ifndef PLATFORM_HAS_POWER_SWITCH
+#define PLATFORM_HAS_POWER_SWITCH
+#endif /* PLATFORM_HAS_POWER_SWITCH */
+/* If SHIELD is defined and ALTERNATIVE_PINOUT is not defined, the ALTERNATIVE_PINOUT 1 is selected. */
+#ifndef ALTERNATIVE_PINOUT
+#define ALTERNATIVE_PINOUT 1
+#endif /* ALTERNATIVE_PINOUT */
+#endif /* SHIELD */
+
+/*
+ * Error handling for ALTERNATIVE_PINOUT
  * If ALTERNATIVE_PINOUT has a value >= 4 (undefined), or <= 0, an error is thrown.
  */
 #ifdef ALTERNATIVE_PINOUT
@@ -38,7 +63,8 @@
 #endif
 #endif /* ALTERNATIVE_PINOUT */
 
-/* Pinout switcher helper function for alternative pinouts.
+/*
+ * Pinout switcher helper function for alternative pinouts.
  * If ALTERNATIVE_PINOUT is passed to make, an alternative pinout is selected.
  * If ALTERNATIVE_PINOUT == 1, it outputs the argument opt1,
  * if ALTERNATIVE_PINOUT == 2, it outputs the argument opt2,
@@ -94,6 +120,31 @@
 #define SWDIO_PORT TMS_PORT
 #define SWDIO_PIN  TMS_PIN
 
+#define SWDIO_MODE_REG_MULT_PB9 (1U << (9U << 1U))
+#define SWDIO_MODE_REG_MULT_PB8 (1U << (8U << 1U))
+/* Update when adding more alternative pinouts */
+#define SWDIO_MODE_REG_MULT PINOUT_SWITCH(SWDIO_MODE_REG_MULT_PB9, SWDIO_MODE_REG_MULT_PB8)
+#define SWDIO_MODE_REG      GPIO_MODER(TMS_PORT)
+
+#define TMS_SET_MODE()                                                    \
+	gpio_mode_setup(TMS_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, TMS_PIN); \
+	gpio_set_output_options(TMS_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, TMS_PIN);
+
+/* Perform SWDIO bus turnaround faster than a gpio_mode_setup() call */
+#define SWDIO_MODE_FLOAT()                       \
+	do {                                         \
+		uint32_t mode_reg = SWDIO_MODE_REG;      \
+		mode_reg &= ~(3U * SWDIO_MODE_REG_MULT); \
+		SWDIO_MODE_REG = mode_reg;               \
+	} while (0)
+
+#define SWDIO_MODE_DRIVE()                      \
+	do {                                        \
+		uint32_t mode_reg = SWDIO_MODE_REG;     \
+		mode_reg |= (1U * SWDIO_MODE_REG_MULT); \
+		SWDIO_MODE_REG = mode_reg;              \
+	} while (0)
+
 #define TRST_PORT PINOUT_SWITCH(GPIOA, GPIOB)
 #define TRST_PIN  PINOUT_SWITCH(GPIO6, GPIO3)
 
@@ -102,6 +153,9 @@
 
 #define PWR_BR_PORT PINOUT_SWITCH(GPIOA, GPIOB)
 #define PWR_BR_PIN  PINOUT_SWITCH(GPIO1, GPIO9)
+
+#define USER_BUTTON_KEY_PORT GPIOA
+#define USER_BUTTON_KEY_PIN  GPIO0
 
 #define LED_PORT       GPIOC
 #define LED_IDLE_RUN   GPIO13
@@ -150,7 +204,8 @@
 /* For STM32F4 DMA trigger source must be specified. Channel 4 is selected, in line with the USART selected in the DMA table. */
 #define USBUSART_DMA_TRG DMA_SxCR_CHSEL_4
 
-/* To use USART1 as USBUSART, DMA2 is selected from https://www.st.com/resource/en/reference_manual/dm00119316-stm32f411xc-e-advanced-arm-based-32-bit-mcus-stmicroelectronics.pdf, page 170, table 28.
+/*
+ * To use USART1 as USBUSART, DMA2 is selected from https://www.st.com/resource/en/reference_manual/dm00119316-stm32f411xc-e-advanced-arm-based-32-bit-mcus-stmicroelectronics.pdf, page 170, table 28.
  * This table defines USART1_TX as stream 7, channel 4, and USART1_RX as stream 5, channel 4.
  */
 #define USBUSART1                USART1
@@ -171,7 +226,8 @@
 #define USBUSART1_DMA_RX_IRQ     NVIC_DMA2_STREAM5_IRQ
 #define USBUSART1_DMA_RX_ISRx(x) dma2_stream5_isr(x)
 
-/* To use USART2 as USBUSART, DMA1 is selected from https://www.st.com/resource/en/reference_manual/dm00119316-stm32f411xc-e-advanced-arm-based-32-bit-mcus-stmicroelectronics.pdf, page 170, table 27.
+/*
+ * To use USART2 as USBUSART, DMA1 is selected from https://www.st.com/resource/en/reference_manual/dm00119316-stm32f411xc-e-advanced-arm-based-32-bit-mcus-stmicroelectronics.pdf, page 170, table 27.
  * This table defines USART2_TX as stream 6, channel 4, and USART2_RX as stream 5, channel 4.
  */
 #define USBUSART2                USART2
@@ -195,10 +251,6 @@
 #define BOOTMAGIC0 UINT32_C(0xb007da7a)
 #define BOOTMAGIC1 UINT32_C(0xbaadfeed)
 
-#define TMS_SET_MODE()     gpio_mode_setup(TMS_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, TMS_PIN);
-#define SWDIO_MODE_FLOAT() gpio_mode_setup(SWDIO_PORT, GPIO_MODE_INPUT, GPIO_PUPD_NONE, SWDIO_PIN);
-
-#define SWDIO_MODE_DRIVE() gpio_mode_setup(SWDIO_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, SWDIO_PIN);
 #define UART_PIN_SETUP()                                                                            \
 	do {                                                                                            \
 		gpio_mode_setup(USBUSART_PORT, GPIO_MODE_AF, GPIO_PUPD_NONE, USBUSART_TX_PIN);              \
@@ -230,9 +282,13 @@
 	{                             \
 		running_status = (state); \
 	}
-#define SET_IDLE_STATE(state)                        \
-	{                                                \
-		gpio_set_val(LED_PORT, LED_IDLE_RUN, state); \
+/*
+ * The state of LED_IDLE_RUN is inverted, as the led used for
+ * LED_IDLE_RUN (PC13) needs to be pulled low to turn the led on.
+ */
+#define SET_IDLE_STATE(state)                         \
+	{                                                 \
+		gpio_set_val(LED_PORT, LED_IDLE_RUN, !state); \
 	}
 #define SET_ERROR_STATE(state)                    \
 	{                                             \

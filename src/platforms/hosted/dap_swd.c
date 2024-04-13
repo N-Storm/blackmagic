@@ -34,6 +34,7 @@
 #include "dap.h"
 #include "dap_command.h"
 #include "buffer_utils.h"
+#include "maths_utils.h"
 
 typedef enum dap_swd_turnaround_cycles {
 	DAP_SWD_TURNAROUND_1_CYCLE = 0U,
@@ -54,7 +55,7 @@ static void dap_swd_seq_out_parity(uint32_t tms_states, size_t clock_cycles);
 
 static bool dap_swd_configure(dap_swd_turnaround_cycles_e turnaround, dap_swd_fault_cfg_e fault_cfg);
 static bool dap_write_reg_no_check(uint16_t addr, uint32_t data);
-static uint32_t dap_swd_clear_error(adiv5_debug_port_s *target_dp, bool protocol_recovery);
+static uint32_t dap_read_reg_no_check(uint16_t addr);
 
 bool dap_swd_init(adiv5_debug_port_s *target_dp)
 {
@@ -66,9 +67,8 @@ bool dap_swd_init(adiv5_debug_port_s *target_dp)
 	/* Mark that we're going into SWD mode and configure the CMSIS-DAP adaptor accordingly */
 	dap_disconnect();
 	dap_mode = DAP_CAP_SWD;
-	dap_swd_configure(DAP_SWD_TURNAROUND_1_CYCLE, DAP_SWD_FAULT_ALWAYS_DATA_PHASE);
+	dap_swd_configure(DAP_SWD_TURNAROUND_1_CYCLE, DAP_SWD_FAULT_NO_DATA_PHASE);
 	dap_connect();
-	dap_reset_link(target_dp);
 
 	/* Set up the underlying SWD functions using the implementation below */
 	swd_proc.seq_in = dap_swd_seq_in;
@@ -78,13 +78,13 @@ bool dap_swd_init(adiv5_debug_port_s *target_dp)
 
 	/* If we have SWD sequences available, make use of them */
 	if (dap_has_swd_sequence)
-		target_dp->dp_low_write = dap_write_reg_no_check;
+		target_dp->write_no_check = dap_write_reg_no_check;
 	else
-		target_dp->dp_low_write = NULL;
+		target_dp->write_no_check = NULL;
 	/* Set up the accelerated SWD functions for basic target operations */
+	target_dp->read_no_check = dap_read_reg_no_check;
 	target_dp->dp_read = dap_dp_read_reg;
-	target_dp->error = dap_swd_clear_error;
-	target_dp->low_access = dap_dp_low_access;
+	target_dp->low_access = dap_dp_raw_access;
 	target_dp->abort = dap_dp_abort;
 	return true;
 }
@@ -127,7 +127,7 @@ static void dap_swd_seq_out_parity(const uint32_t tms_states, const size_t clock
 		DAP_SWD_OUT_SEQUENCE,
 	};
 	write_le4(sequence.data, 0, tms_states);
-	sequence.data[4] = __builtin_parity(tms_states);
+	sequence.data[4] = calculate_odd_parity(tms_states);
 	/* And perform it */
 	if (!perform_dap_swd_sequences(&sequence, 1U))
 		DEBUG_ERROR("dap_swd_seq_out_parity failed\n");
@@ -169,28 +169,12 @@ static bool dap_swd_seq_in_parity(uint32_t *const result, const size_t clock_cyc
 	for (size_t offset = 0; offset < clock_cycles; offset += 8U)
 		data |= sequence.data[offset >> 3U] << offset;
 	*result = data;
-	uint8_t parity = __builtin_parity(data) & 1U;
+	uint8_t parity = calculate_odd_parity(data);
 	parity ^= sequence.data[4] & 1U;
 	return !parity;
 }
 
-static void dap_line_reset(void)
-{
-	const uint8_t data[8] = {
-		0xffU,
-		0xffU,
-		0xffU,
-		0xffU,
-		0xffU,
-		0xffU,
-		0xffU,
-		0x0fU,
-	};
-	if (!perform_dap_swj_sequence(64, data))
-		DEBUG_ERROR("line reset failed\n");
-}
-
-static bool dap_write_reg_no_check(uint16_t addr, const uint32_t data)
+static bool dap_write_reg_no_check(const uint16_t addr, const uint32_t data)
 {
 	DEBUG_PROBE("dap_write_reg_no_check %04x <- %08" PRIx32 "\n", addr, data);
 	/* Setup the sequences */
@@ -210,7 +194,7 @@ static bool dap_write_reg_no_check(uint16_t addr, const uint32_t data)
 			33U,
 			DAP_SWD_OUT_SEQUENCE,
 			/* The 4 data bytes are filled in below with write_le4() */
-			{0U, 0U, 0U, 0U, __builtin_parity(data)},
+			{0U, 0U, 0U, 0U, calculate_odd_parity(data)},
 		},
 	};
 	write_le4(sequences[3].data, 0, data);
@@ -224,39 +208,10 @@ static bool dap_write_reg_no_check(uint16_t addr, const uint32_t data)
 	return ack != SWDP_ACK_OK;
 }
 
-static uint32_t dap_swd_clear_error(adiv5_debug_port_s *const target_dp, const bool protocol_recovery)
+/* This is a wrapper around dap_read_reg() for use by target_dp as the read_no_check function */
+uint32_t dap_read_reg_no_check(const uint16_t addr)
 {
-	DEBUG_PROBE("dap_swd_clear_error (protocol recovery? %s)\n", protocol_recovery ? "true" : "false");
-	/* Only do the comms reset dance on DPv2+ w/ fault or to perform protocol recovery. */
-	if ((target_dp->version >= 2 && target_dp->fault) || protocol_recovery) {
-		/*
-		 * Note that on DPv2+ devices, during a protocol error condition
-		 * the target becomes deselected during line reset. Once reset,
-		 * we must then re-select the target to bring the device back
-		 * into the expected state.
-		 */
-		dap_line_reset();
-		if (target_dp->version >= 2)
-			dap_write_reg_no_check(ADIV5_DP_TARGETSEL, target_dp->targetsel);
-		dap_read_reg(target_dp, ADIV5_DP_DPIDR);
-		/* Exception here is unexpected, so do not catch */
-	}
-	const uint32_t err = dap_read_reg(target_dp, ADIV5_DP_CTRLSTAT) &
-		(ADIV5_DP_CTRLSTAT_STICKYORUN | ADIV5_DP_CTRLSTAT_STICKYCMP | ADIV5_DP_CTRLSTAT_STICKYERR |
-			ADIV5_DP_CTRLSTAT_WDATAERR);
-	uint32_t clr = 0;
-
-	if (err & ADIV5_DP_CTRLSTAT_STICKYORUN)
-		clr |= ADIV5_DP_ABORT_ORUNERRCLR;
-	if (err & ADIV5_DP_CTRLSTAT_STICKYCMP)
-		clr |= ADIV5_DP_ABORT_STKCMPCLR;
-	if (err & ADIV5_DP_CTRLSTAT_STICKYERR)
-		clr |= ADIV5_DP_ABORT_STKERRCLR;
-	if (err & ADIV5_DP_CTRLSTAT_WDATAERR)
-		clr |= ADIV5_DP_ABORT_WDERRCLR;
-
-	if (clr)
-		dap_write_reg(target_dp, ADIV5_DP_ABORT, clr);
-	target_dp->fault = 0;
-	return err;
+	/* Create a dummy DP, the only use for it is to pass the DAP Index to perform_dap_transfer which is ignored for SWD transfers, and return the fault code, which we don't care about */
+	adiv5_debug_port_s dummy_dp = {0};
+	return dap_read_reg(&dummy_dp, addr);
 }

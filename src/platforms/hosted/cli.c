@@ -23,28 +23,32 @@
  */
 
 #include "general.h"
-#include <unistd.h>
+
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <getopt.h>
+
+#if defined(_WIN32) || defined(__CYGWIN__)
+#include <io.h>
+#include <windows.h>
+#define BMDA_NORMAL_MODE _S_IWRITE | _S_IREAD
+#ifndef _MSC_VER
+#include <unistd.h>
+#endif
+#else
+#include <sys/mman.h>
+#define O_BINARY         0
+#define BMDA_NORMAL_MODE S_IRUSR | S_IWUSR
+#endif
+
 #include "version.h"
 #include "target_internal.h"
 #include "cortexm.h"
 #include "command.h"
-
 #include "cli.h"
 #include "bmp_hosted.h"
-
-#ifndef O_BINARY
-#define O_BINARY 0
-#endif
-#if defined(_WIN32) || defined(__CYGWIN__)
-#include <windows.h>
-#else
-#include <sys/mman.h>
-#endif
 
 typedef struct option getopt_option_s;
 
@@ -125,9 +129,20 @@ static void bmp_munmap(mmap_data_s *map)
 #endif
 }
 
+#ifdef ENABLE_GPIOD
+#define GPIOD_PROBE_SELECTION " | -g GPIO_MAPPING"
+#define GPIOD_PROBE_SELECTION_HELP                                          \
+	"\t-g, --gpiod      Use gpiod backend using given gpios specified as\n" \
+	"\t                   <signal>=<gpiochip>:<offset> separated by commas\n"
+#else
+#define GPIOD_PROBE_SELECTION
+#define GPIOD_PROBE_SELECTION_HELP
+#endif
+
 static void cl_help(char **argv)
 {
 	bmp_ident(NULL);
+	/* clang-format off */
 	DEBUG_INFO("\n"
 			   "Usage: %s [-h | -l | [-v BITMASK] [-O] [-d PATH | -P NUMBER | -s SERIAL | -c TYPE]\n"
 			   "\t[-n NUMBER] [-j | -A] [-C] [-t | -T] [-e] [-p] [-R[h]] [-H] [-M STRING ...]\n"
@@ -142,13 +157,14 @@ static void cl_help(char **argv)
 			   "\t-O, --no-stdout  Don't use stdout for debugging output, making it available\n"
 			   "\t                   for use by RTT, Semihosting, or other target output\n"
 			   "\n"
-			   "Probe selection arguments [-d PATH | -P NUMBER | -s SERIAL | -c TYPE]:\n"
+			   "Probe selection arguments [-d PATH | -P NUMBER | -s SERIAL | -c TYPE" GPIOD_PROBE_SELECTION "]:\n"
 			   "\t-d, --device     Use a serial device at the given path\n"
 			   "\t-P, --probe      Use the <number>th debug probe found while scanning the\n"
 			   "\t                   system, see the output from list for the order\n"
 			   "\t-s, --serial     Select the debug probe with the given serial number\n"
 			   "\t-c, --ftdi-type  Select the FTDI-based debug probe with of the given\n"
 			   "\t                   type (cable)\n"
+			   GPIOD_PROBE_SELECTION_HELP
 			   "\n"
 			   "General configuration options: [-n NUMBER] [-j] [-C] [-t | -T] [-e] [-p] [-R[h]]\n"
 			   "\t\t[-H] [-M STRING ...]\n"
@@ -173,10 +189,10 @@ static void cl_help(char **argv)
 			   "\t                   can be repeated for as many commands you wish to run.\n"
 			   "\t                   If the command contains spaces, use quotes around the\n"
 			   "\t                   complete command\n"
+			   "\t-f, --freq       Set an operating frequency for the debug interface\n"
 			   "\n"
 			   "SWD-specific configuration options [-f FREQUENCY | -m TARGET]:\n"
-			   "\t-f, --freq       Set an operating frequency for SWD\n"
-			   "\t-m, --mult-drop  Use the given target ID for selection in SWD multi-drop\n"
+			   "\t-m, --multi-drop  Use the given target ID for selection in SWD multi-drop\n"
 			   "\n"
 			   "Flash operation selection options [-E | -w | -V | -r]:\n"
 			   "\t-E, --erase      Erase the target device Flash\n"
@@ -193,6 +209,7 @@ static void cl_help(char **argv)
 			   "\t                   is till the operation fails or is complete)\n"
 			   "\t<file>           Binary file to use in Flash operations\n",
 		argv[0]);
+	/* clang-format on */
 	exit(0);
 }
 
@@ -225,19 +242,29 @@ static const getopt_option_s long_options[] = {
 	{"read", no_argument, NULL, 'r'},
 	{"addr", required_argument, NULL, 'a'},
 	{"byte-count", required_argument, NULL, 'S'},
+#ifdef ENABLE_GPIOD
+	{"gpiod", required_argument, NULL, 'g'},
+#endif
 	{NULL, 0, NULL, 0},
 };
+
+#ifdef ENABLE_GPIOD
+#define GPIOD_ARG_STR "g:"
+#else
+#define GPIOD_ARG_STR
+#endif
 
 void cl_init(bmda_cli_options_s *opt, int argc, char **argv)
 {
 	opt->opt_target_dev = 1;
 	opt->opt_flash_size = 0xffffffff;
 	opt->opt_flash_start = 0xffffffff;
-	opt->opt_max_swj_frequency = 4000000;
+	opt->opt_max_frequency = 0;
 	opt->opt_scanmode = BMP_SCAN_SWD;
 	opt->opt_mode = BMP_MODE_DEBUG;
 	while (true) {
-		const int option = getopt_long(argc, argv, "eEFhHv:Od:f:s:I:c:Cln:m:M:wVtTa:S:jApP:rR::", long_options, NULL);
+		const int option =
+			getopt_long(argc, argv, "eEFhHv:Od:f:s:I:c:Cln:m:M:wVtTa:S:jApP:rR::" GPIOD_ARG_STR, long_options, NULL);
 		if (option == -1)
 			break;
 
@@ -306,7 +333,7 @@ void cl_init(bmda_cli_options_s *opt, int argc, char **argv)
 					frequency *= 1000U * 1000U;
 					break;
 				}
-				opt->opt_max_swj_frequency = frequency;
+				opt->opt_max_frequency = frequency;
 			}
 			break;
 		case 's':
@@ -388,6 +415,12 @@ void cl_init(bmda_cli_options_s *opt, int argc, char **argv)
 					}
 				}
 			}
+			break;
+#ifdef ENABLE_GPIOD
+		case 'g':
+			if (optarg)
+				opt->opt_gpio_map = optarg;
+#endif
 		}
 	}
 	if (optind && argv[optind]) {
@@ -543,7 +576,7 @@ int cl_execute(bmda_cli_options_s *opt)
 		}
 	} else if (opt->opt_mode == BMP_MODE_FLASH_READ) {
 		/* Open as binary */
-		read_file = open(opt->opt_flash_file, O_TRUNC | O_CREAT | O_RDWR | O_BINARY, S_IRUSR | S_IWUSR);
+		read_file = open(opt->opt_flash_file, O_TRUNC | O_CREAT | O_RDWR | O_BINARY, BMDA_NORMAL_MODE);
 		if (read_file == -1) {
 			DEBUG_ERROR("Error opening flashfile %s for read: %s\n", opt->opt_flash_file, strerror(errno));
 			res = -1;

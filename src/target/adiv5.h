@@ -157,7 +157,7 @@
 #define ADIV5_AP_CSW_HPROT1           (1U << 25U)
 #define ADIV5_AP_CSW_SPIDEN           (1U << 23U)
 /* Bits 22:16 - Reserved */
-/* Bit 15 - MTE (Memory Tagging Enable) for AXI busses */
+/* Bit 15 - MTE (Memory Tagging Enable) for AXI buses */
 #define ADIV5_AP_CSW_MTE (1U << 15U)
 /* Bits 14:12 - Reserved */
 /* Bits 11:8 - Mode, must be zero */
@@ -207,6 +207,11 @@
 #define JTAG_IDCODE_PARTNO_MASK     (0xffffU << JTAG_IDCODE_PARTNO_OFFSET)
 #define JTAG_IDCODE_DESIGNER_OFFSET 1U
 #define JTAG_IDCODE_DESIGNER_MASK   (0x7ffU << JTAG_IDCODE_DESIGNER_OFFSET)
+/* Bits 10:7 - JEP-106 Continuation code */
+/* Bits 6:0 - JEP-106 Identity code */
+#define JTAG_IDCODE_DESIGNER_JEP106_CONT_OFFSET 7U
+#define JTAG_IDCODE_DESIGNER_JEP106_CONT_MASK   (0xfU << ADIV5_DP_DESIGNER_JEP106_CONT_OFFSET)
+#define JTAG_IDCODE_DESIGNER_JEP106_CODE_MASK   (0x7fU)
 
 #define JTAG_IDCODE_PARTNO_DPv0 0xba00U
 
@@ -219,14 +224,21 @@
 #define SWDP_ACK_FAULT       0x04U
 #define SWDP_ACK_NO_RESPONSE 0x07U
 
+/* Constants for the DP's quirks field */
+#define ADIV5_DP_QUIRK_MINDP    (1U << 0U) /* DP is a minimal DP implementation */
+#define ADIV5_DP_QUIRK_DUPED_AP (1U << 1U) /* DP has only 1 AP but the address decoding is bugged */
+/* This one is not a quirk, but the field's a convinient place to store this */
+#define ADIV5_AP_ACCESS_BANKED (1U << 7U) /* Last AP access was done using the banked interface */
+
 typedef struct adiv5_access_port adiv5_access_port_s;
 typedef struct adiv5_debug_port adiv5_debug_port_s;
 
 struct adiv5_debug_port {
 	int refcnt;
 
-	/* dp_low_write returns true if no OK response, but ignores errors */
-	bool (*dp_low_write)(uint16_t addr, const uint32_t data);
+	/* write_no_check returns true if no OK response, but ignores errors */
+	bool (*write_no_check)(uint16_t addr, const uint32_t data);
+	uint32_t (*read_no_check)(uint16_t addr);
 	uint32_t (*dp_read)(adiv5_debug_port_s *dp, uint16_t addr);
 	uint32_t (*error)(adiv5_debug_port_s *dp, bool protocol_recovery);
 	uint32_t (*low_access)(adiv5_debug_port_s *dp, uint8_t RnW, uint16_t addr, uint32_t value);
@@ -247,13 +259,13 @@ struct adiv5_debug_port {
 	uint8_t dev_index;
 	uint8_t fault;
 
+	uint8_t quirks;
+
 	/* targetsel DPv2 */
 	uint8_t instance;
 	uint32_t targetsel;
 
 	uint8_t version;
-
-	bool mindp;
 
 	/* DP designer (not implementer!) and partno */
 	uint16_t designer_code;
@@ -284,6 +296,16 @@ struct adiv5_access_port {
 uint8_t make_packet_request(uint8_t RnW, uint16_t addr);
 
 #if PC_HOSTED == 0
+static inline bool adiv5_write_no_check(adiv5_debug_port_s *const dp, uint16_t addr, const uint32_t value)
+{
+	return dp->write_no_check(addr, value);
+}
+
+static inline uint32_t adiv5_read_no_check(adiv5_debug_port_s *const dp, uint16_t addr)
+{
+	return dp->read_no_check(addr);
+}
+
 static inline uint32_t adiv5_dp_read(adiv5_debug_port_s *dp, uint16_t addr)
 {
 	return dp->dp_read(dp, addr);
@@ -331,6 +353,8 @@ static inline void adiv5_dp_write(adiv5_debug_port_s *dp, uint16_t addr, uint32_
 }
 
 #else
+bool adiv5_write_no_check(adiv5_debug_port_s *dp, uint16_t addr, uint32_t value);
+uint32_t adiv5_read_no_check(adiv5_debug_port_s *dp, uint16_t addr);
 uint32_t adiv5_dp_read(adiv5_debug_port_s *dp, uint16_t addr);
 uint32_t adiv5_dp_error(adiv5_debug_port_s *dp);
 uint32_t adiv5_dp_low_access(adiv5_debug_port_s *dp, uint8_t RnW, uint16_t addr, uint32_t value);
@@ -372,7 +396,6 @@ bool bmda_swd_dp_init(adiv5_debug_port_s *dp);
 #endif
 
 void adiv5_mem_write(adiv5_access_port_s *ap, uint32_t dest, const void *src, size_t len);
-uint64_t adiv5_ap_read_pidr(adiv5_access_port_s *ap, uint32_t addr);
 void *adiv5_unpack_data(void *dest, uint32_t src, uint32_t val, align_e align);
 const void *adiv5_pack_data(uint32_t dest, const void *src, uint32_t *data, align_e align);
 
@@ -386,8 +409,9 @@ uint32_t fw_adiv5_jtagdp_low_access(adiv5_debug_port_s *dp, uint8_t RnW, uint16_
 uint32_t firmware_swdp_read(adiv5_debug_port_s *dp, uint16_t addr);
 uint32_t fw_adiv5_jtagdp_read(adiv5_debug_port_s *dp, uint16_t addr);
 
-bool firmware_dp_low_write(uint16_t addr, uint32_t data);
-uint32_t firmware_swdp_error(adiv5_debug_port_s *dp, bool protocol_recovery);
+bool adiv5_swd_write_no_check(uint16_t addr, uint32_t data);
+uint32_t adiv5_swd_read_no_check(uint16_t addr);
+uint32_t adiv5_swd_clear_error(adiv5_debug_port_s *dp, bool protocol_recovery);
 uint32_t adiv5_jtagdp_error(adiv5_debug_port_s *dp, bool protocol_recovery);
 
 void firmware_swdp_abort(adiv5_debug_port_s *dp, uint32_t abort);

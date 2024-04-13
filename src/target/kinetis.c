@@ -95,6 +95,19 @@
 /* 8 byte phrases need to be written to the k64 flash */
 #define K64_WRITE_LEN 8U
 
+/* Target registers */
+#define MK20DX256_FLASH_BASE        0x00000000U
+#define MK20DX256_FLASH_SIZE        0x00040000U
+#define MK20DX256_FLASH_BLK_SIZE    0x00000800U
+#define MK20DX256_FLEXNVM_BASE      0x10000000U
+#define MK20DX256_FLEXNVM_SIZE      0x00008000U
+#define MK20DX256_FLEXNVM_BLK_SIZE  0x00000400U
+#define MK20DX256_SRAM_L_BASE       0x1fff8000U
+#define MK20DX256_SRAM_L_SIZE       0x00008000U
+#define MK20DX256_SRAM_H_BASE       0x20000000U
+#define MK20DX256_SRAM_H_SIZE       0x00008000U
+
+
 static bool kinetis_cmd_unsafe(target_s *t, int argc, const char **argv);
 
 const command_s kinetis_cmd_list[] = {
@@ -327,7 +340,14 @@ bool kinetis_probe(target_s *const t)
 			}
 			break;
 		case 0x010U: /* K20 Family, DIEID=0x0 */
+			return false;
 		case 0x090U: /* K20 Family, DIEID=0x1 */
+			t->driver = "MK20DX256";
+			target_add_ram(t, MK20DX256_SRAM_L_BASE, MK20DX256_SRAM_L_SIZE);	/* SRAM_L, 32 KB */
+			target_add_ram(t, MK20DX256_SRAM_H_BASE, MK20DX256_SRAM_H_SIZE);	/* SRAM_H, 32 KB */
+			kinetis_add_flash(t, MK20DX256_FLASH_BASE, MK20DX256_FLASH_SIZE, MK20DX256_FLASH_BLK_SIZE, KL_WRITE_LEN);       /* P-Flash, 256 KB, 2 KB Sectors */
+			kinetis_add_flash(t, MK20DX256_FLEXNVM_BASE, MK20DX256_FLEXNVM_SIZE, MK20DX256_FLEXNVM_BLK_SIZE, KL_WRITE_LEN); /* FlexNVM, 32 KB, 1 KB Sectors */
+			break;
 		case 0x110U: /* K20 Family, DIEID=0x2 */
 		case 0x190U: /* K20 Family, DIEID=0x3 */
 		case 0x230U: /* K21 Family, DIEID=0x4 */
@@ -473,7 +493,7 @@ static bool kinetis_flash_cmd_write(target_flash_s *f, target_addr_t dest, const
 		else
 			len = 0;
 		dest += kf->write_len;
-		src += kf->write_len;
+		src = (const uint8_t *)src + kf->write_len;
 	}
 
 	return true;

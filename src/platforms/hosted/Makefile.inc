@@ -2,8 +2,14 @@ ifeq ($(origin CC),default)
     CC := gcc
 endif
 SYS := $(shell $(CC) -dumpmachine)
-CFLAGS += -DENABLE_DEBUG -DPLATFORM_HAS_DEBUG
+CFLAGS += -DPLATFORM_HAS_DEBUG
 CFLAGS +=-I ./target
+
+# Architecture enables
+ENABLE_CORTEXAR := 1
+ENABLE_RISCV := 1
+# Target enables
+ENABLE_XILINX := 1
 
 # Clang requires some special handling here: -gnu means MinGW
 # while -msvc means Clang/CL. We don't currently support the latter
@@ -26,7 +32,7 @@ ifneq (,$(findstring linux, $(SYS)))
 else
     HOSTED_BMP_ONLY ?= 1
 endif
-CFLAGS += -DHOSTED_BMP_ONLY=$(HOSTED_BMP_ONLY)
+CFLAGS += -DHOSTED_BMP_ONLY=$(HOSTED_BMP_ONLY) -D_FILE_OFFSET_BITS=64
 
 ifeq ($(ASAN), 1)
     CFLAGS += -fsanitize=address
@@ -41,6 +47,10 @@ HIDAPILIB = hidapi
 ifneq (,$(findstring linux,$(SYS)))
     SRC += serial_unix.c
     HIDAPILIB = hidapi-hidraw
+else ifneq (,$(findstring freebsd,$(SYS)))
+    # On FreeBSD, only the hidapi on libusb-1.0 variant exists
+    SRC += serial_unix.c
+    HIDAPILIB = hidapi
 else ifneq (,$(findstring mingw,$(SYS)))
     FLAVOUR = $(shell which $(CC))
     ifneq (,$(findstring ucrt64,$(FLAVOUR)))
@@ -102,7 +112,6 @@ ifneq ($(HOSTED_BMP_ONLY), 1)
 endif
 
 ifneq ($(HOSTED_BMP_ONLY), 1)
-    CFLAGS += -DCMSIS_DAP
     SRC += cmsis_dap.c dap.c dap_command.c dap_swd.c dap_jtag.c
     ifneq ($(shell pkg-config --exists $(HIDAPILIB); echo $$?), 0)
         $(error Please install $(HIDAPILIB) dependency or set HOSTED_BMP_ONLY to 1)
