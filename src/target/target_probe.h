@@ -54,6 +54,7 @@ bool rp_rescue_probe(adiv5_access_port_s *ap);
 bool at32f40x_probe(target_s *target); // STM32 clones from Artery
 bool at32f43x_probe(target_s *target);
 bool ch32f1_probe(target_s *target); // will catch all the clones
+bool ch579_probe(target_s *target);
 bool efm32_probe(target_s *target);
 bool gd32f1_probe(target_s *target);
 bool gd32f4_probe(target_s *target);
@@ -76,6 +77,7 @@ bool msp432e4_probe(target_s *target);
 bool msp432p4_probe(target_s *target);
 bool nrf51_probe(target_s *target);
 bool nrf91_probe(target_s *target);
+bool puya_probe(target_s *target);
 bool renesas_ra_probe(target_s *target);
 bool renesas_rz_probe(target_s *target);
 bool rp_probe(target_s *target);

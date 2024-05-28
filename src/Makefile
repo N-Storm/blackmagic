@@ -4,6 +4,7 @@ VPATH += $(PLATFORM_DIR) target
 ENABLE_DEBUG ?= 0
 ENABLE_CORTEXAR ?= 0
 ENABLE_RISCV ?= 0
+ENABLE_PUYA ?= 0
 ENABLE_XILINX ?= 0
 
 SYS = $(shell $(CC) -dumpmachine)
@@ -41,6 +42,7 @@ SRC =              \
 	cortex.c       \
 	cortexm.c      \
 	crc32.c        \
+	ch579.c        \
 	efm32.c        \
 	exception.c    \
 	gdb_if.c       \
@@ -89,6 +91,7 @@ SRC =              \
 	stm32l0.c      \
 	stm32l4.c      \
 	stm32g0.c      \
+	stm32_common.c \
 	renesas_ra.c   \
 	target.c       \
 	target_flash.c \
@@ -96,6 +99,11 @@ SRC =              \
 
 ifeq (,$(filter all_platforms,$(MAKECMDGOALS)))
 include $(PLATFORM_DIR)/Makefile.inc
+endif
+
+ifeq ($(ENABLE_PUYA), 1)
+SRC +=     \
+	puya.c
 endif
 
 ifeq ($(ENABLE_CORTEXAR), 1)

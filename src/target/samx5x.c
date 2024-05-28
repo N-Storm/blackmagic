@@ -316,7 +316,7 @@ bool samx5x_probe(target_s *t)
 		return false;
 
 	/* Read the Device ID */
-	const uint32_t did = target_mem_read32(t, SAMX5X_DSU_DID);
+	const uint32_t did = target_mem32_read32(t, SAMX5X_DSU_DID);
 
 	/* If the Device ID matches */
 	if ((did & SAMX5X_DID_MASK) != SAMX5X_DID_CONST_VALUE)
@@ -325,7 +325,7 @@ bool samx5x_probe(target_s *t)
 	samx5x_priv_s *priv_storage = calloc(1, sizeof(*priv_storage));
 	t->target_storage = priv_storage;
 
-	const uint32_t ctrlstat = target_mem_read32(t, SAMX5X_DSU_CTRLSTAT);
+	const uint32_t ctrlstat = target_mem32_read32(t, SAMX5X_DSU_CTRLSTAT);
 	const samx5x_descr_s samx5x = samx5x_parse_device_id(did);
 
 	/* Protected? */
@@ -351,15 +351,15 @@ bool samx5x_probe(target_s *t)
 	switch (samx5x.mem) {
 	default:
 	case 18:
-		target_add_ram(t, 0x20000000, 0x20000);
+		target_add_ram32(t, 0x20000000, 0x20000);
 		samx5x_add_flash(t, 0x00000000, 0x40000, SAMX5X_BLOCK_SIZE, SAMX5X_PAGE_SIZE);
 		break;
 	case 19:
-		target_add_ram(t, 0x20000000, 0x30000);
+		target_add_ram32(t, 0x20000000, 0x30000);
 		samx5x_add_flash(t, 0x00000000, 0x80000, SAMX5X_BLOCK_SIZE, SAMX5X_PAGE_SIZE);
 		break;
 	case 20:
-		target_add_ram(t, 0x20000000, 0x40000);
+		target_add_ram32(t, 0x20000000, 0x40000);
 		samx5x_add_flash(t, 0x00000000, 0x100000, SAMX5X_BLOCK_SIZE, SAMX5X_PAGE_SIZE);
 		break;
 	}
@@ -370,9 +370,9 @@ bool samx5x_probe(target_s *t)
 	/* If we're not in reset here */
 	if (!platform_nrst_get_val()) {
 		/* We'll have to release the target from extended reset to make attach possible */
-		if (target_mem_read32(t, SAMX5X_DSU_CTRLSTAT) & SAMX5X_STATUSA_CRSTEXT)
+		if (target_mem32_read32(t, SAMX5X_DSU_CTRLSTAT) & SAMX5X_STATUSA_CRSTEXT)
 			/* Write bit to clear from extended reset */
-			target_mem_write32(t, SAMX5X_DSU_CTRLSTAT, SAMX5X_STATUSA_CRSTEXT);
+			target_mem32_write32(t, SAMX5X_DSU_CTRLSTAT, SAMX5X_STATUSA_CRSTEXT);
 	}
 
 	return true;
@@ -382,14 +382,14 @@ bool samx5x_probe(target_s *t)
 static void samx5x_lock_current_address(target_s *t)
 {
 	/* Issue the lock command */
-	target_mem_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_LOCK);
+	target_mem32_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_LOCK);
 }
 
 /* Temporary (until next reset) flash memory unlocking */
 static void samx5x_unlock_current_address(target_s *t)
 {
 	/* Issue the unlock command */
-	target_mem_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_UNLOCK);
+	target_mem32_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_UNLOCK);
 }
 
 /* Check for NVM errors and print debug messages */
@@ -408,13 +408,13 @@ static void samx5x_print_nvm_error(uint16_t errs)
 
 static uint16_t samx5x_read_nvm_error(target_s *t)
 {
-	const uint16_t intflag = target_mem_read16(t, SAMX5X_NVMC_INTFLAG);
+	const uint16_t intflag = target_mem32_read16(t, SAMX5X_NVMC_INTFLAG);
 	return intflag & (SAMX5X_INTFLAG_ADDRE | SAMX5X_INTFLAG_PROGE | SAMX5X_INTFLAG_LOCKE | SAMX5X_INTFLAG_NVME);
 }
 
 static void samx5x_clear_nvm_error(target_s *t)
 {
-	target_mem_write16(t, SAMX5X_NVMC_INTFLAG,
+	target_mem32_write16(t, SAMX5X_NVMC_INTFLAG,
 		SAMX5X_INTFLAG_ADDRE | SAMX5X_INTFLAG_PROGE | SAMX5X_INTFLAG_LOCKE | SAMX5X_INTFLAG_NVME);
 }
 
@@ -448,9 +448,9 @@ static bool samx5x_flash_erase(target_flash_s *f, target_addr_t addr, size_t len
 	}
 
 	/* Check if the bootprot or region lock settings are going to prevent erasing flash. */
-	const uint16_t bootprot = (target_mem_read16(t, SAMX5X_NVMC_STATUS) >> 8U) & 0xfU;
-	const uint32_t runlock = target_mem_read32(t, SAMX5X_NVMC_RUNLOCK);
-	const uint32_t flash_size = (target_mem_read32(t, SAMX5X_NVMC_PARAM) & 0xffffU) * SAMX5X_PAGE_SIZE;
+	const uint16_t bootprot = (target_mem32_read16(t, SAMX5X_NVMC_STATUS) >> 8U) & 0xfU;
+	const uint32_t runlock = target_mem32_read32(t, SAMX5X_NVMC_RUNLOCK);
+	const uint32_t flash_size = (target_mem32_read32(t, SAMX5X_NVMC_PARAM) & 0xffffU) * SAMX5X_PAGE_SIZE;
 	const uint32_t lock_region_size = flash_size >> 5U;
 
 	if (addr < (15U - bootprot) * 8192U) {
@@ -466,7 +466,7 @@ static bool samx5x_flash_erase(target_flash_s *f, target_addr_t addr, size_t len
 	bool is_first_section = true;
 
 	for (size_t offset = 0; offset < len; offset += f->blocksize) {
-		target_mem_write32(t, SAMX5X_NVMC_ADDRESS, addr + offset);
+		target_mem32_write32(t, SAMX5X_NVMC_ADDRESS, addr + offset);
 
 		/* If we're about to touch a new flash region, unlock it. */
 		if (is_first_section || (offset % lock_region_size) == 0) {
@@ -475,10 +475,10 @@ static bool samx5x_flash_erase(target_flash_s *f, target_addr_t addr, size_t len
 		}
 
 		/* Issue the erase command */
-		target_mem_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_ERASEBLOCK);
+		target_mem32_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_ERASEBLOCK);
 
 		/* Poll for NVM Ready */
-		while ((target_mem_read32(t, SAMX5X_NVMC_STATUS) & SAMX5X_STATUS_READY) == 0) {
+		while ((target_mem32_read32(t, SAMX5X_NVMC_STATUS) & SAMX5X_STATUS_READY) == 0) {
 			if (target_check_error(t) || samx5x_check_nvm_error(t)) {
 				DEBUG_WARN("NVM Ready\n");
 				return false;
@@ -512,17 +512,17 @@ static bool samx5x_flash_write(target_flash_s *f, target_addr_t dest, const void
 
 	bool error = false;
 	/* Unlock */
-	target_mem_write32(t, SAMX5X_NVMC_ADDRESS, dest);
+	target_mem32_write32(t, SAMX5X_NVMC_ADDRESS, dest);
 	samx5x_unlock_current_address(t);
 
 	/* Write within a single page. This may be part or all of the page */
-	target_mem_write(t, dest, src, len);
+	target_mem32_write(t, dest, src, len);
 
 	/* Issue the write page command */
-	target_mem_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_WRITEPAGE);
+	target_mem32_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_WRITEPAGE);
 
 	/* Poll for NVM Ready */
-	while ((target_mem_read32(t, SAMX5X_NVMC_STATUS) & SAMX5X_STATUS_READY) == 0) {
+	while ((target_mem32_read32(t, SAMX5X_NVMC_STATUS) & SAMX5X_STATUS_READY) == 0) {
 		if (target_check_error(t) || samx5x_check_nvm_error(t)) {
 			error = true;
 			break;
@@ -552,25 +552,25 @@ static int samx5x_write_user_page(target_s *t, uint8_t *buffer)
 	}
 
 	/* Erase the user page */
-	target_mem_write32(t, SAMX5X_NVMC_ADDRESS, SAMX5X_NVM_USER_PAGE);
+	target_mem32_write32(t, SAMX5X_NVMC_ADDRESS, SAMX5X_NVM_USER_PAGE);
 	/* Issue the erase command */
-	target_mem_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_ERASEPAGE);
+	target_mem32_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_ERASEPAGE);
 
 	/* Poll for NVM Ready */
-	while ((target_mem_read32(t, SAMX5X_NVMC_STATUS) & SAMX5X_STATUS_READY) == 0) {
+	while ((target_mem32_read32(t, SAMX5X_NVMC_STATUS) & SAMX5X_STATUS_READY) == 0) {
 		if (target_check_error(t) || samx5x_check_nvm_error(t))
 			return -1;
 	}
 
 	/* Write back */
 	for (uint32_t offset = 0; offset < SAMX5X_PAGE_SIZE; offset += 16U) {
-		target_mem_write(t, SAMX5X_NVM_USER_PAGE + offset, buffer + offset, 16);
+		target_mem32_write(t, SAMX5X_NVM_USER_PAGE + offset, buffer + offset, 16);
 
 		/* Issue the write page command */
-		target_mem_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_WRITEQUADWORD);
+		target_mem32_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_WRITEQUADWORD);
 
 		/* Poll for NVM Ready */
-		while ((target_mem_read32(t, SAMX5X_NVMC_STATUS) & SAMX5X_STATUS_READY) == 0) {
+		while ((target_mem32_read32(t, SAMX5X_NVMC_STATUS) & SAMX5X_STATUS_READY) == 0) {
 			if (target_check_error(t) || samx5x_check_nvm_error(t))
 				return -2;
 		}
@@ -596,7 +596,7 @@ static int samx5x_update_user_word(target_s *t, uint32_t addr, uint32_t value, u
 	uint8_t buffer[SAMX5X_PAGE_SIZE];
 	uint32_t current_word;
 
-	target_mem_read(t, buffer, SAMX5X_NVM_USER_PAGE, SAMX5X_PAGE_SIZE);
+	target_mem32_read(t, buffer, SAMX5X_NVM_USER_PAGE, SAMX5X_PAGE_SIZE);
 	memcpy(&current_word, buffer + addr, 4);
 
 	uint32_t factory_word = 0;
@@ -626,7 +626,7 @@ static int samx5x_update_user_word(target_s *t, uint32_t addr, uint32_t value, u
 static int samx5x_set_flashlock(target_s *t, uint32_t value)
 {
 	uint8_t buffer[SAMX5X_PAGE_SIZE];
-	target_mem_read(t, buffer, SAMX5X_NVM_USER_PAGE, SAMX5X_PAGE_SIZE);
+	target_mem32_read(t, buffer, SAMX5X_NVM_USER_PAGE, SAMX5X_PAGE_SIZE);
 
 	uint32_t current_value;
 	memcpy(&current_value, buffer + SAMX5X_USER_PAGE_OFFSET_LOCK, 4);
@@ -671,7 +671,7 @@ static bool samx5x_cmd_unlock_flash(target_s *t, int argc, const char **argv)
 static int samx5x_set_bootprot(target_s *t, uint8_t value)
 {
 	uint8_t buffer[SAMX5X_PAGE_SIZE];
-	target_mem_read(t, buffer, SAMX5X_NVM_USER_PAGE, SAMX5X_PAGE_SIZE);
+	target_mem32_read(t, buffer, SAMX5X_NVM_USER_PAGE, SAMX5X_PAGE_SIZE);
 
 	uint32_t current_value;
 	memcpy(&current_value, buffer + SAMX5X_USER_PAGE_OFFSET_BOOTPROT, 4);
@@ -714,7 +714,7 @@ static bool samx5x_cmd_read_userpage(target_s *t, int argc, const char **argv)
 	(void)argv;
 	uint8_t buffer[SAMX5X_PAGE_SIZE];
 
-	target_mem_read(t, buffer, SAMX5X_NVM_USER_PAGE, SAMX5X_PAGE_SIZE);
+	target_mem32_read(t, buffer, SAMX5X_NVM_USER_PAGE, SAMX5X_PAGE_SIZE);
 
 	tc_printf(t, "User Page:\n");
 	for (size_t i = 0; i < SAMX5X_PAGE_SIZE; ++i)
@@ -730,7 +730,7 @@ static bool samx5x_cmd_serial(target_s *t, int argc, const char **argv)
 	tc_printf(t, "Serial Number: 0x");
 
 	for (size_t i = 0; i < 4U; ++i)
-		tc_printf(t, "%08x", target_mem_read32(t, SAMX5X_NVM_SERIAL(i)));
+		tc_printf(t, "%08x", target_mem32_read32(t, SAMX5X_NVM_SERIAL(i)));
 	tc_printf(t, "\n");
 	return true;
 }
@@ -741,10 +741,10 @@ static bool samx5x_cmd_ssb(target_s *t, int argc, const char **argv)
 	(void)argc;
 	(void)argv;
 	/* Issue the ssb command */
-	target_mem_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_SSB);
+	target_mem32_write32(t, SAMX5X_NVMC_CTRLB, SAMX5X_CTRLB_CMD_KEY | SAMX5X_CTRLB_CMD_SSB);
 
 	/* Poll for NVM Ready */
-	while ((target_mem_read32(t, SAMX5X_NVMC_STATUS) & SAMX5X_STATUS_READY) == 0) {
+	while ((target_mem32_read32(t, SAMX5X_NVMC_STATUS) & SAMX5X_STATUS_READY) == 0) {
 		if (target_check_error(t))
 			return false;
 	}
@@ -892,7 +892,7 @@ static bool samx5x_cmd_write8(target_s *t, int argc, const char **argv)
 	}
 
 	DEBUG_INFO("Writing 8-bit value 0x%02" PRIx32 " at address 0x%08" PRIx32 "\n", value, addr);
-	target_mem_write8(t, addr, (uint8_t)value);
+	target_mem32_write8(t, addr, (uint8_t)value);
 	return true;
 }
 
@@ -921,7 +921,7 @@ static bool samx5x_cmd_write16(target_s *t, int argc, const char **argv)
 	}
 
 	DEBUG_INFO("Writing 16-bit value 0x%04" PRIx32 " at address 0x%08" PRIx32 "\n", value, addr);
-	target_mem_write16(t, addr, (uint16_t)value);
+	target_mem32_write16(t, addr, (uint16_t)value);
 	return true;
 }
 

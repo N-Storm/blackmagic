@@ -1,7 +1,7 @@
 /*
  * This file is part of the Black Magic Debug project.
  *
- * Copyright (C) 2023 1BitSquared <info@1bitsquared.com>
+ * Copyright (C) 2024 1BitSquared <info@1bitsquared.com>
  * Written by Rachel Mant <git@dragonmux.network>
  * All rights reserved.
  *
@@ -31,19 +31,15 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef PLATFORMS_HOSTED_REMOTE_PROTOCOL_V1_ADIV5_H
-#define PLATFORMS_HOSTED_REMOTE_PROTOCOL_V1_ADIV5_H
+#ifndef PLATFORMS_HOSTED_REMOTE_PROTOCOL_V4_ADIV5_H
+#define PLATFORMS_HOSTED_REMOTE_PROTOCOL_V4_ADIV5_H
 
 #include <stdint.h>
 #include <stddef.h>
 #include "adiv5.h"
 
-uint32_t remote_v1_adiv5_raw_access(adiv5_debug_port_s *dp, uint8_t rnw, uint16_t addr, uint32_t request_value);
-uint32_t remote_v1_adiv5_dp_read(adiv5_debug_port_s *dp, uint16_t addr);
-uint32_t remote_v1_adiv5_ap_read(adiv5_access_port_s *ap, uint16_t addr);
-void remote_v1_adiv5_ap_write(adiv5_access_port_s *ap, uint16_t addr, uint32_t value);
-void remote_v1_adiv5_mem_read_bytes(adiv5_access_port_s *ap, void *dest, target_addr64_t src, size_t read_length);
-void remote_v1_adiv5_mem_write_bytes(
+void remote_v4_adiv5_mem_read_bytes(adiv5_access_port_s *ap, void *dest, target_addr64_t src, size_t read_length);
+void remote_v4_adiv5_mem_write_bytes(
 	adiv5_access_port_s *ap, target_addr64_t dest, const void *src, size_t write_length, align_e align);
 
-#endif /*PLATFORMS_HOSTED_REMOTE_PROTOCOL_V1_ADIV5_H*/
+#endif /*PLATFORMS_HOSTED_REMOTE_PROTOCOL_V4_ADIV5_H*/

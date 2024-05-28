@@ -442,13 +442,13 @@ void cl_init(bmda_cli_options_s *opt, int argc, char **argv)
 static void display_target(size_t idx, target_s *target, void *context)
 {
 	(void)context;
-	const char *const core_name = target_core_name(target);
-	if (strcmp(target_driver_name(target), "ARM Cortex-M") == 0)
-		DEBUG_INFO("*** %2zu %c Unknown %s Designer %x Part ID %x %s\n", idx, target_attached(target) ? '*' : ' ',
-			target_driver_name(target), target_designer(target), target_part_id(target), core_name ? core_name : "");
+	const char attached = target->attached ? '*' : ' ';
+	const char *const core_name = target->core;
+	if (!strcmp(target->driver, "ARM Cortex-M"))
+		DEBUG_INFO("*** %2zu %c Unknown %s Designer 0x%x Part ID 0x%x %s\n", idx, attached, target->driver,
+			target->designer_code, target->part_id, core_name ? core_name : "");
 	else
-		DEBUG_INFO("*** %2zu %c %s %s\n", idx, target_attached(target) ? '*' : ' ', target_driver_name(target),
-			core_name ? core_name : "");
+		DEBUG_INFO("*** %2zu %c %s %s\n", idx, attached, target->driver, core_name ? core_name : "");
 }
 
 bool scan_for_targets(const bmda_cli_options_s *const opt)
@@ -556,8 +556,8 @@ int cl_execute(bmda_cli_options_s *opt)
 			DEBUG_WARN("Continuous read/write-back DEMCR. Abort with ^C\n");
 			while (true) {
 				uint32_t demcr;
-				target_mem_read(target, &demcr, CORTEXM_DEMCR, 4);
-				target_mem_write32(target, CORTEXM_DEMCR, demcr);
+				target_mem32_read(target, &demcr, CORTEXM_DEMCR, 4);
+				target_mem32_write32(target, CORTEXM_DEMCR, demcr);
 				platform_delay(1); /* To allow trigger */
 			}
 		} else
@@ -639,7 +639,7 @@ int cl_execute(bmda_cli_options_s *opt)
 		const uint32_t start_time = platform_time_ms();
 		for (size_t offset = 0; offset < size; offset += WORKSIZE) {
 			const size_t worksize = MIN(size - offset, WORKSIZE);
-			int n_read = target_mem_read(target, data, flash_src + offset, worksize);
+			int n_read = target_mem32_read(target, data, flash_src + offset, worksize);
 			if (n_read) {
 				if (opt->opt_flash_size == 0) /* we reached end of flash */
 					DEBUG_INFO("Reached end of flash at size %" PRIu32 "\n", flash_src - opt->opt_flash_start);

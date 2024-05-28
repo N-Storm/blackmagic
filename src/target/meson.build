@@ -70,11 +70,13 @@ if is_firmware_build
 		'cortexm': 'Cortex-M support',
 		'riscv32': 'RISC-V 32-bit support',
 		'riscv64': 'RISC-V 64-bit support',
+		'ch579': 'CH579',
 		'efm': 'Energy Micro parts',
 		'hc32': 'HC32 parts',
 		'lpc': 'LPC series parts',
 		'nrf': 'nRF series parts',
 		'nxp': 'Kinetis series parts',
+		'puya': 'Puya PY32 series parts',
 		'renesas': 'Renesas parts',
 		'rp': 'RP2040',
 		'sam': 'ATSAM series parts',
@@ -145,6 +147,11 @@ target_riscv64 = declare_dependency(
 	dependencies: target_riscv,
 )
 
+target_ch579 = declare_dependency(
+	sources: files('ch579.c'),
+	dependencies: target_cortexm,
+)
+
 target_efm = declare_dependency(
 	sources: files('efm32.c'),
 	dependencies: target_cortexm,
@@ -184,6 +191,11 @@ target_nxp = declare_dependency(
 		'nxpke04.c',
 		's32k3xx.c',
 	),
+	dependencies: target_cortexm,
+)
+
+target_puya = declare_dependency(
+	sources: files('puya.c'),
 	dependencies: target_cortexm,
 )
 
@@ -240,6 +252,7 @@ target_stm = declare_dependency(
 		'stm32l0.c',
 		'stm32l4.c',
 		'stm32mp15.c',
+		'stm32_common.c',
 	),
 	dependencies: target_stm_deps,
 )
@@ -283,11 +296,13 @@ libbmd_target_deps = [
 	target_riscv32,
 	target_riscv64,
 	# Enable all targets for libbmd
+	target_ch579,
 	target_efm,
 	target_hc32,
 	target_lpc,
 	target_nrf,
 	target_nxp,
+	target_puya,
 	target_renesas_ra,
 	target_renesas_rz,
 	target_rp,

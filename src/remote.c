@@ -116,8 +116,8 @@ static void remote_respond_string(const char response_code, const char *const st
  * pointers to reconfigure this structure appropriately.
  */
 static adiv5_debug_port_s remote_dp = {
-	.ap_read = firmware_ap_read,
-	.ap_write = firmware_ap_write,
+	.ap_read = adiv5_ap_reg_read,
+	.ap_write = adiv5_ap_reg_write,
 	.mem_read = advi5_mem_read_bytes,
 	.mem_write = adiv5_mem_write_bytes,
 };
@@ -129,10 +129,10 @@ static void remote_packet_process_swd(const char *const packet, const size_t pac
 		if (packet_len == 2) {
 			remote_dp.write_no_check = adiv5_swd_write_no_check;
 			remote_dp.read_no_check = adiv5_swd_read_no_check;
-			remote_dp.dp_read = firmware_swdp_read;
+			remote_dp.dp_read = adiv5_swd_read;
 			remote_dp.error = adiv5_swd_clear_error;
-			remote_dp.low_access = firmware_swdp_low_access;
-			remote_dp.abort = firmware_swdp_abort;
+			remote_dp.low_access = adiv5_swd_raw_access;
+			remote_dp.abort = adiv5_swd_abort;
 			swdptap_init();
 			remote_respond(REMOTE_RESP_OK, 0);
 		} else
@@ -182,10 +182,10 @@ static void remote_packet_process_jtag(const char *const packet, const size_t pa
 	case REMOTE_INIT: /* JS = initialise ============================= */
 		remote_dp.write_no_check = NULL;
 		remote_dp.read_no_check = NULL;
-		remote_dp.dp_read = fw_adiv5_jtagdp_read;
-		remote_dp.error = adiv5_jtagdp_error;
-		remote_dp.low_access = fw_adiv5_jtagdp_low_access;
-		remote_dp.abort = adiv5_jtagdp_abort;
+		remote_dp.dp_read = adiv5_jtag_read;
+		remote_dp.error = adiv5_jtag_clear_error;
+		remote_dp.low_access = adiv5_jtag_raw_access;
+		remote_dp.abort = adiv5_jtag_abort;
 		jtagtap_init();
 		remote_respond(REMOTE_RESP_OK, 0);
 		break;
@@ -323,7 +323,7 @@ static void remote_packet_process_high_level(const char *packet, const size_t pa
 		remote_respond(REMOTE_RESP_OK, REMOTE_HL_VERSION);
 		break;
 
-	case REMOTE_ADD_JTAG_DEV: { /* HJ = fill firmware jtag_devs */
+	case REMOTE_HL_ADD_JTAG_DEV: { /* HJ = fill firmware jtag_devs */
 		/* Check the packet is an appropriate length */
 		if (packet_len < 22U) {
 			remote_respond(REMOTE_RESP_ERR, REMOTE_ERROR_WRONGLEN);
@@ -340,6 +340,12 @@ static void remote_packet_process_high_level(const char *packet, const size_t pa
 		jtag_dev.current_ir = hex_string_to_num(8, packet + 14);
 		jtag_add_device(index, &jtag_dev);
 		remote_respond(REMOTE_RESP_OK, 0);
+		break;
+	}
+
+	case REMOTE_HL_ACCEL: { /* HA = request what accelerations are available */
+		/* Build a response value that depends on what things are built into the firmare */
+		remote_respond(REMOTE_RESP_OK, REMOTE_ACCEL_ADIV5);
 		break;
 	}
 
@@ -389,7 +395,7 @@ static void remote_packet_process_adiv5(const char *const packet, const size_t p
 		break;
 	}
 	/* Raw access comands */
-	case REMOTE_ADIv5_RAW_ACCESS: { /* AR = Perform a raw ADIv5 access */
+	case REMOTE_ADIV5_RAW_ACCESS: { /* AR = Perform a raw ADIv5 access */
 		/* Grab the address to perform an access against and the value to work with */
 		const uint16_t addr = hex_string_to_num(4, packet + 6);
 		const uint32_t value = hex_string_to_num(8, packet + 10);
@@ -419,10 +425,10 @@ static void remote_packet_process_adiv5(const char *const packet, const size_t p
 		/* Grab the CSW value to use in the access */
 		remote_ap.csw = hex_string_to_num(8, packet + 6);
 		/* Grab the start address for the read */
-		const uint32_t address = hex_string_to_num(8, packet + 14U);
+		const target_addr64_t address = hex_string_to_num(16, packet + 14U);
 		/* And how many bytes to read, validating it for buffer overflows */
-		const uint32_t length = hex_string_to_num(8, packet + 22U);
-		if (length > 1024U) {
+		const uint32_t length = hex_string_to_num(8, packet + 30U);
+		if (length > GDB_PACKET_BUFFER_SIZE - REMOTE_ADIV5_MEM_READ_LENGTH) {
 			remote_respond(REMOTE_RESP_PARERR, 0);
 			break;
 		}
@@ -439,10 +445,10 @@ static void remote_packet_process_adiv5(const char *const packet, const size_t p
 		/* Grab the alignment for the access */
 		const align_e align = hex_string_to_num(2, packet + 14U);
 		/* Grab the start address for the write */
-		const uint32_t dest = hex_string_to_num(8, packet + 16U);
+		const target_addr64_t address = hex_string_to_num(16, packet + 16U);
 		/* And how many bytes to read, validating it for buffer overflows */
-		const size_t length = hex_string_to_num(8, packet + 24U);
-		if (length > 1024U) {
+		const uint32_t length = hex_string_to_num(8, packet + 32U);
+		if (length > GDB_PACKET_BUFFER_SIZE - REMOTE_ADIV5_MEM_WRITE_LENGTH) {
 			remote_respond(REMOTE_RESP_PARERR, 0);
 			break;
 		}
@@ -454,9 +460,9 @@ static void remote_packet_process_adiv5(const char *const packet, const size_t p
 		/* Get the aligned packet buffer to reuse for the data to write */
 		void *data = gdb_packet_buffer();
 		/* And decode the data from the packet into it */
-		unhexify(data, packet + 32U, length);
+		unhexify(data, packet + 40U, length);
 		/* Perform the write and report success/failures */
-		adiv5_mem_write_sized(&remote_ap, dest, data, length, align);
+		adiv5_mem_write_aligned(&remote_ap, address, data, length, align);
 		remote_adiv5_respond(NULL, 0);
 		break;
 	}
@@ -582,30 +588,30 @@ void remote_packet_process_spi(const char *const packet, const size_t packet_len
 	}
 }
 
-void remote_packet_process(unsigned i, char *packet)
+void remote_packet_process(char *const packet, const size_t packet_length)
 {
 	switch (packet[0]) {
 	case REMOTE_SWDP_PACKET:
-		remote_packet_process_swd(packet, i);
+		remote_packet_process_swd(packet, packet_length);
 		break;
 
 	case REMOTE_JTAG_PACKET:
-		remote_packet_process_jtag(packet, i);
+		remote_packet_process_jtag(packet, packet_length);
 		break;
 
 	case REMOTE_GEN_PACKET:
-		remote_packet_process_general(packet, i);
+		remote_packet_process_general(packet, packet_length);
 		break;
 
 	case REMOTE_HL_PACKET:
-		remote_packet_process_high_level(packet, i);
+		remote_packet_process_high_level(packet, packet_length);
 		break;
 
-	case REMOTE_ADIv5_PACKET: {
+	case REMOTE_ADIV5_PACKET: {
 		/* Setup an exception frame to try the ADIv5 operation in */
 		volatile exception_s error = {0};
 		TRY_CATCH (error, EXCEPTION_ALL) {
-			remote_packet_process_adiv5(packet, i);
+			remote_packet_process_adiv5(packet, packet_length);
 		}
 		/* Handle any exception we've caught by translating it into a remote protocol response */
 		if (error.type)
@@ -614,7 +620,7 @@ void remote_packet_process(unsigned i, char *packet)
 	}
 
 	case REMOTE_SPI_PACKET:
-		remote_packet_process_spi(packet, i);
+		remote_packet_process_spi(packet, packet_length);
 		break;
 
 	default: /* Oh dear, unrecognised, return an error */

@@ -37,7 +37,9 @@ typedef int32_t mode_t;
 #endif /* _MSC_VER */
 
 typedef struct target target_s;
-typedef uint32_t target_addr_t;
+typedef uint32_t target_addr32_t;
+typedef uint64_t target_addr64_t;
+typedef target_addr32_t target_addr_t;
 typedef struct target_controller target_controller_s;
 
 #if PC_HOSTED == 1
@@ -56,16 +58,13 @@ target_s *target_new(void);
 target_s *target_attach(target_s *target, target_controller_s *controller);
 target_s *target_attach_n(size_t n, target_controller_s *controller);
 void target_detach(target_s *target);
-bool target_attached(target_s *target);
-const char *target_driver_name(target_s *target);
-const char *target_core_name(target_s *target);
-unsigned int target_designer(target_s *target);
-unsigned int target_part_id(target_s *target);
 
 /* Memory access functions */
 bool target_mem_map(target_s *target, char *buf, size_t len);
-int target_mem_read(target_s *target, void *dest, target_addr_t src, size_t len);
-int target_mem_write(target_s *target, target_addr_t dest, const void *src, size_t len);
+bool target_mem32_read(target_s *target, void *dest, target_addr_t src, size_t len);
+bool target_mem64_read(target_s *target, void *dest, target_addr64_t src, size_t len);
+bool target_mem32_write(target_s *target, target_addr_t dest, const void *src, size_t len);
+bool target_mem64_write(target_s *target, target_addr64_t dest, const void *src, size_t len);
 bool target_mem_access_needs_halt(target_s *target);
 /* Flash memory access functions */
 bool target_flash_erase(target_s *target, target_addr_t addr, size_t len);
