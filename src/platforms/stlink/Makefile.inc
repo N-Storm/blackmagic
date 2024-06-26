@@ -6,8 +6,8 @@ OBJCOPY = $(CROSS_COMPILE)objcopy
 OPT_FLAGS = -Os
 CFLAGS += -mcpu=cortex-m3 -mthumb -DSTM32F1 -I../deps/libopencm3/include \
 	-I platforms/common/stm32
-LDFLAGS_BOOT := $(LDFLAGS) --specs=nano.specs -lopencm3_stm32f1 \
-	-Wl,-T,platforms/stlink/stlink.ld -nostartfiles -lc \
+LDFLAGS_BOOT := $(LDFLAGS) -lopencm3_stm32f1 -Lplatforms/stlink \
+	-Tstlink.ld --specs=nano.specs -nostartfiles -lc \
 	-Wl,-Map=mapfile -mthumb -mcpu=cortex-m3 -Wl,-gc-sections \
 	-L../deps/libopencm3/lib
 ifeq ($(ST_BOOTLOADER), 1)
@@ -26,7 +26,12 @@ LDFLAGS += --specs=nosys.specs
 endif
 
 ifeq ($(SWIM_AS_UART), 1)
-CFLAGS += -DSWIM_AS_UART=1
+SWIM_NRST_AS_UART=1
+$(warning Deprecation: SWIM_AS_UART has been renamed to SWIM_NRST_AS_UART; it might be ignored in the future)
+endif
+
+ifeq ($(SWIM_NRST_AS_UART), 1)
+CFLAGS += -DSWIM_NRST_AS_UART=1
 else
 SRC += traceswoasync.c
 endif

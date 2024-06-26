@@ -47,7 +47,7 @@ probe_blackpill_dfu_sources = files('usbdfu.c')
 
 bmd_bootloader = get_option('bmd_bootloader')
 
-probe_blackpill_dfu_serial_length = bmd_bootloader ? '9' : '13'
+probe_blackpill_dfu_serial_length = '13'
 probe_blackpill_load_address = bmd_bootloader ? '0x08004000' : '0x08000000'
 
 probe_blackpill_args = [

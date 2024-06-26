@@ -142,8 +142,8 @@ static void remote_packet_process_swd(const char *const packet, const size_t pac
 	case REMOTE_IN_PAR: { /* SI = In parity ============================= */
 		const size_t clock_cycles = hex_string_to_num(2, packet + 2);
 		uint32_t result = 0;
-		const bool parity_error = swd_proc.seq_in_parity(&result, clock_cycles);
-		remote_respond(parity_error ? REMOTE_RESP_PARERR : REMOTE_RESP_OK, result);
+		const bool parity_ok = swd_proc.seq_in_parity(&result, clock_cycles);
+		remote_respond(parity_ok ? REMOTE_RESP_OK : REMOTE_RESP_PARERR, result);
 		break;
 	}
 
@@ -380,6 +380,7 @@ static void remote_packet_process_adiv5(const char *const packet, const size_t p
 
 	/* Set up the DP and a fake AP structure to perform the access with */
 	remote_dp.dev_index = hex_string_to_num(2, packet + 2);
+	remote_dp.fault = 0U;
 	adiv5_access_port_s remote_ap;
 	remote_ap.apsel = hex_string_to_num(2, packet + 4);
 	remote_ap.dp = &remote_dp;
@@ -609,13 +610,14 @@ void remote_packet_process(char *const packet, const size_t packet_length)
 
 	case REMOTE_ADIV5_PACKET: {
 		/* Setup an exception frame to try the ADIv5 operation in */
-		volatile exception_s error = {0};
-		TRY_CATCH (error, EXCEPTION_ALL) {
+		TRY (EXCEPTION_ALL) {
 			remote_packet_process_adiv5(packet, packet_length);
 		}
+		CATCH () {
 		/* Handle any exception we've caught by translating it into a remote protocol response */
-		if (error.type)
-			remote_respond(REMOTE_RESP_ERR, REMOTE_ERROR_EXCEPTION | ((uint64_t)error.type << 8U));
+		default:
+			remote_respond(REMOTE_RESP_ERR, REMOTE_ERROR_EXCEPTION | ((uint64_t)exception_frame.type << 8U));
+		}
 		break;
 	}
 
