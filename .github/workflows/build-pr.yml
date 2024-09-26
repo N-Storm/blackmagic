@@ -27,10 +27,10 @@ jobs:
     strategy:
       matrix:
         os:
-          - {id: ubuntu-20.04, name: focal}
+          - {id: ubuntu-22.04, name: jammy}
         compiler:
-          - 'clang-15'
-          - 'gcc-11'
+          - 'clang-18'
+          - 'gcc-13'
         arm-compiler:
           - '12.2.Rel1'
       fail-fast: false
@@ -97,7 +97,7 @@ jobs:
 
       # Build the firmware for all platform variants and BMDA in BMP-only mode
       - name: Build all platform variants firmware and BMP only BMDA
-        run: make all_platforms HOSTED_BMP_ONLY=1
+        run: make all_platforms HOSTED_BMP_ONLY=1 -j$(nproc) -Otarget
 
       - name: Clean
         run: make clean
@@ -105,23 +105,23 @@ jobs:
       # Build all the firmware variants that have more than 128kiB of Flash, with RTT enabled
       - name: Build firmware with RTT
         run: |
-          make PROBE_HOST=96b_carbon ENABLE_RTT=1
+          make PROBE_HOST=96b_carbon ENABLE_RTT=1 -j$(nproc) -Otarget
           make -C src clean
-          make PROBE_HOST=blackpill-f401cc ENABLE_RTT=1
+          make PROBE_HOST=blackpill-f401cc ENABLE_RTT=1 -j$(nproc) -Otarget
           make -C src clean
-          make PROBE_HOST=blackpill-f401ce ENABLE_RTT=1
+          make PROBE_HOST=blackpill-f401ce ENABLE_RTT=1 -j$(nproc) -Otarget
           make -C src clean
-          make PROBE_HOST=blackpill-f411ce ENABLE_RTT=1
+          make PROBE_HOST=blackpill-f411ce ENABLE_RTT=1 -j$(nproc) -Otarget
           make -C src clean
-          make PROBE_HOST=f3 ENABLE_RTT=1
+          make PROBE_HOST=f3 ENABLE_RTT=1 -j$(nproc) -Otarget
           make -C src clean
-          make PROBE_HOST=f4discovery ENABLE_RTT=1
+          make PROBE_HOST=f4discovery ENABLE_RTT=1 -j$(nproc) -Otarget
           make -C src clean
-          make PROBE_HOST=hydrabus ENABLE_RTT=1
+          make PROBE_HOST=hydrabus ENABLE_RTT=1 -j$(nproc) -Otarget
           make -C src clean
-          make PROBE_HOST=launchpad-icdi ENABLE_RTT=1
+          make PROBE_HOST=launchpad-icdi ENABLE_RTT=1 -j$(nproc) -Otarget
           make -C src clean
-          make PROBE_HOST=stlinkv3 ENABLE_RTT=1
+          make PROBE_HOST=stlinkv3 ENABLE_RTT=1 -j$(nproc) -Otarget
 
       - name: Clean
         run: make clean
@@ -132,7 +132,7 @@ jobs:
 
       # And build that full binary
       - name: Build full BMDA binary
-        run: make PROBE_HOST=hosted HOSTED_BMP_ONLY=0
+        run: make PROBE_HOST=hosted HOSTED_BMP_ONLY=0 -j$(nproc) -Otarget
 
   build-windows-msvc:
     # Name the job more appropriately so we can tell which VS version is in use
@@ -151,7 +151,6 @@ jobs:
     strategy:
       matrix:
         os:
-          - windows-2019
           - windows-2022
       fail-fast: false
 
@@ -213,6 +212,7 @@ jobs:
         os:
           - windows-2022
         sys:
+          - {abi: mingw64, env: x86_64, compiler: gcc}
           - {abi: ucrt64, env: ucrt-x86_64, compiler: gcc}
           - {abi: clang64, env: clang-x86_64, compiler: clang}
       fail-fast: false
@@ -226,8 +226,8 @@ jobs:
           msystem: ${{matrix.sys.abi}}
           update: true
           path-type: inherit
-          install: >-
-            mingw-w64-${{matrix.sys.env}}-toolchain
+          pacboy: >-
+            toolchain:p
 
       # Build a suitable runtime environment
       - name: Runtime environment
@@ -276,8 +276,7 @@ jobs:
       # Install the dependencies needed for a full BMDA build
       - name: Install BMDA dependencies
         run: |
-          pacman --noconfirm -S mingw-w64-${{matrix.sys.env}}-libusb mingw-w64-${{matrix.sys.env}}-libftdi \
-            mingw-w64-${{matrix.sys.env}}-hidapi
+          pacman --noconfirm -S mingw-w64-${{matrix.sys.env}}-libusb mingw-w64-${{matrix.sys.env}}-hidapi
 
       # And build that full binary
       - name: Build full BMDA
@@ -296,12 +295,13 @@ jobs:
     strategy:
       matrix:
         os:
-          - {id: ubuntu-20.04, name: focal}
+          - {id: ubuntu-22.04, name: jammy}
         arm-compiler:
           - '12.2.Rel1'
         probe:
           - '96b_carbon'
           - 'bluepill'
+          - 'ctxlink'
           - 'f072'
           - 'f3'
           - 'f4discovery'
@@ -344,6 +344,7 @@ jobs:
       # Record the versions of all the tools used in the build
       - name: Version tools
         run: |
+          cc --version
           arm-none-eabi-gcc --version
           meson --version
           ninja --version
@@ -378,7 +379,7 @@ jobs:
       matrix:
         os:
           - macos-latest
-          - macos-11
+          - macos-12
       fail-fast: false
 
     # Steps represent a sequence of tasks that will be executed as part of the job
@@ -437,7 +438,8 @@ jobs:
         compiler:
           - gcc@11
           - gcc@12
-          - gcc@13 # Don't use 'gcc', the symlink is versioned -- see below
+          - gcc@13
+          - gcc@14 # Don't use 'gcc', the symlink is versioned -- see below
         exclude:
           # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=114007
           # Fix was backported to GCC 13, but there's no release available yet
@@ -502,7 +504,7 @@ jobs:
           meson compile -C build
 
   size-diff:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
 
     steps:
       # Setup and use a suitable ARM GCC for the firmware

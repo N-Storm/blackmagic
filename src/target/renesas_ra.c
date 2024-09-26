@@ -284,7 +284,7 @@ typedef enum {
 static bool renesas_uid(target_s *t, int argc, const char **argv);
 
 const command_s renesas_cmd_list[] = {
-	{"uid", renesas_uid, "Prints unique id"},
+	{"uid", renesas_uid, "Print unique device ID"},
 	{NULL, NULL, NULL},
 };
 
@@ -956,7 +956,7 @@ static bool renesas_uid(target_s *const target, const int argc, const char **con
 
 	tc_printf(target, "Unique id: 0x");
 	for (size_t i = 0U; i < 16U; i++)
-		tc_printf(target, "%02" PRIx8, uid[i]);
+		tc_printf(target, "%02x", uid[i]);
 	tc_printf(target, "\n");
 
 	return true;

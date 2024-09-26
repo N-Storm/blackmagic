@@ -33,12 +33,16 @@
 #if PC_HOSTED == 1
 void platform_init(int argc, char **argv);
 void platform_pace_poll(void);
+
+#define BMD_CONST_FUNC
 #else
 void platform_init(void);
 
 inline void platform_pace_poll(void)
 {
 }
+
+#define BMD_CONST_FUNC __attribute__((const))
 #endif
 
 typedef struct platform_timeout platform_timeout_s;
@@ -50,8 +54,13 @@ void platform_delay(uint32_t ms);
 
 extern bool connect_assert_nrst;
 uint32_t platform_target_voltage_sense(void);
+/*
+ * Sample the voltage (Vref aka Vtgt) at which the target is presumably powered,
+ * then format as a string with static storage duration and return a pointer;
+ * or if platform ADC not implemented, then return the fixed string "Unknown".
+ */
 const char *platform_target_voltage(void);
-int platform_hwversion(void);
+int platform_hwversion(void) BMD_CONST_FUNC;
 void platform_nrst_set_val(bool assert);
 bool platform_nrst_get_val(void);
 bool platform_target_get_power(void);
