@@ -33,14 +33,6 @@
 #include "rtt.h"
 #endif
 
-/* This has to be aligned so the remote protocol can re-use it without causing Problems */
-static char BMD_ALIGN_DEF(8) pbuf[GDB_PACKET_BUFFER_SIZE + 1U];
-
-char *gdb_packet_buffer()
-{
-	return pbuf;
-}
-
 static void bmp_poll_loop(void)
 {
 	SET_IDLE_STATE(false);
@@ -62,14 +54,14 @@ static void bmp_poll_loop(void)
 	}
 
 	SET_IDLE_STATE(true);
-	size_t size = gdb_getpacket(pbuf, GDB_PACKET_BUFFER_SIZE);
+	const gdb_packet_s *const packet = gdb_packet_receive();
 	// If port closed and target detached, stay idle
-	if (pbuf[0] != '\x04' || cur_target)
+	if (packet->data[0] != '\x04' || cur_target)
 		SET_IDLE_STATE(false);
-	gdb_main(pbuf, GDB_PACKET_BUFFER_SIZE, size);
+	gdb_main(packet);
 }
 
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 int main(int argc, char **argv)
 {
 	platform_init(argc, argv);
@@ -85,12 +77,12 @@ int main(void)
 		}
 		CATCH () {
 		default:
-			gdb_putpacketz("EFF");
+			gdb_put_packet_error(0xffU);
 			target_list_free();
 			gdb_outf("Uncaught exception: %s\n", exception_frame.msg);
 			morse("TARGET LOST.", true);
 		}
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 		if (shutdown_bmda)
 			break;
 #endif

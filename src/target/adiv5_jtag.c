@@ -25,13 +25,16 @@
 
 #include "general.h"
 #include "exception.h"
+#include "jep106.h"
 #include "adiv5.h"
 #include "jtag_scan.h"
 #include "jtagtap.h"
 #include "morse.h"
 
-#define JTAGDP_ACK_OK   0x02U
-#define JTAGDP_ACK_WAIT 0x01U
+#define JTAG_ACK_WAIT        0x01U
+#define JTAG_ADIv5_ACK_OK    0x02U
+#define JTAG_ADIv6_ACK_FAULT 0x02U
+#define JTAG_ADIv6_ACK_OK    0x04U
 
 /* 35-bit registers that control the ADIv5 DP */
 #define IR_ABORT 0x8U
@@ -52,7 +55,7 @@ void adiv5_jtag_dp_handler(const uint8_t dev_index)
 	dp->low_access = adiv5_jtag_raw_access;
 	dp->error = adiv5_jtag_clear_error;
 	dp->abort = adiv5_jtag_abort;
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 	bmda_jtag_dp_init(dp);
 #endif
 
@@ -75,7 +78,21 @@ void adiv5_jtag_dp_handler(const uint8_t dev_index)
 		((designer & ADIV5_DP_DESIGNER_JEP106_CONT_MASK) << 1U) | (designer & ADIV5_DP_DESIGNER_JEP106_CODE_MASK);
 	dp->partno = (idcode & JTAG_IDCODE_PARTNO_MASK) >> JTAG_IDCODE_PARTNO_OFFSET;
 
-	if (dp->partno == JTAG_IDCODE_PARTNO_DPV0)
+	/* Check which version of DP we have here, if it's an ARM-made DP, and set up `dp->version` accordingly */
+	if (dp->designer_code == JEP106_MANUFACTURER_ARM) {
+		if (dp->partno == JTAG_IDCODE_PARTNO_SOC400_4BIT || dp->partno == JTAG_IDCODE_PARTNO_SOC400_8BIT)
+			dp->version = 0U;
+		else if (dp->partno == JTAG_IDCODE_PARTNO_SOC400_4BIT_CM33 ||
+			dp->partno == JTAG_IDCODE_PARTNO_SOC400_4BIT_LPC43xx)
+			dp->version = 1U;
+		else if (dp->partno == JTAG_IDCODE_PARTNO_SOC600_4BIT || dp->partno == JTAG_IDCODE_PARTNO_SOC600_8BIT)
+			dp->version = 3U;
+		else
+			DEBUG_WARN("Unknown JTAG-DP found, please report partno code %04x\n", dp->partno);
+	}
+	dp->quirks |= ADIV5_DP_JTAG;
+
+	if (dp->version == 0)
 		adiv5_dp_error(dp);
 	else
 		adiv5_dp_abort(dp, ADIV5_DP_ABORT_STKERRCLR);
@@ -96,39 +113,59 @@ uint32_t adiv5_jtag_clear_error(adiv5_debug_port_s *dp, const bool protocol_reco
 	return adiv5_dp_low_access(dp, ADIV5_LOW_WRITE, ADIV5_DP_CTRLSTAT, status) & 0x32U;
 }
 
-uint32_t adiv5_jtag_raw_access(adiv5_debug_port_s *dp, uint8_t rnw, uint16_t addr, uint32_t value)
+uint32_t adiv5_jtag_raw_access(
+	adiv5_debug_port_s *const dp, const uint8_t rnw, const uint16_t addr, const uint32_t value)
 {
-	const bool is_ap = addr & ADIV5_APnDP;
-	addr &= 0xffU;
-
-	const uint64_t request = ((uint64_t)value << 3U) | ((addr >> 1U) & 0x06U) | (rnw ? 1U : 0U);
+	const uint8_t reg = addr & 0x0cU;
+	const uint64_t request = ((uint64_t)value << 3U) | (reg >> 1U) | (rnw ? 1U : 0U);
 
 	uint32_t result;
 	uint8_t ack;
 
-	jtag_dev_write_ir(dp->dev_index, is_ap ? IR_APACC : IR_DPACC);
+	/* Set the instruction to the correct one for the kind of access needed */
+	jtag_dev_write_ir(dp->dev_index, (addr & ADIV5_APnDP) ? IR_APACC : IR_DPACC);
 
 	platform_timeout_s timeout;
 	platform_timeout_set(&timeout, 250);
 	do {
 		uint64_t response;
-		jtag_dev_shift_dr(dp->dev_index, (uint8_t *)&response, (uint8_t *)&request, 35);
-		result = response >> 3U;
-		ack = response & 0x07U;
-	} while (!platform_timeout_is_expired(&timeout) && ack == JTAGDP_ACK_WAIT);
+		/* Send the request and see what response we get back */
+		jtag_dev_shift_dr(dp->dev_index, (uint8_t *)&response, (const uint8_t *)&request, 35);
+		/* Extract the data portion of the response */
+		result = (uint32_t)(response >> 3U);
+		/* Then the acknowledgement code */
+		ack = (uint8_t)(response & 0x07U);
+	} while (!platform_timeout_is_expired(&timeout) && ack == JTAG_ACK_WAIT);
 
-	if (ack == JTAGDP_ACK_WAIT) {
+	/*
+	 * If even after waiting for the 250ms we still get a WAIT response,
+	 * we're done - abort the request, mark it failed.
+	 */
+	if (ack == JTAG_ACK_WAIT) {
 		DEBUG_ERROR("JTAG access resulted in wait, aborting\n");
 		dp->abort(dp, ADIV5_DP_ABORT_DAPABORT);
-		dp->fault = 1;
+		/* Use the SWD ack codes for the fault code to be completely consistent between JTAG-vs-SWD */
+		dp->fault = SWD_ACK_WAIT;
 		return 0;
 	}
 
-	if (ack != JTAGDP_ACK_OK) {
+	/* If this is an ADIv6 JTAG-DPv1, check for fault */
+	if (dp->version > 2 && ack == JTAG_ADIv6_ACK_FAULT) {
+		DEBUG_ERROR("JTAG access resulted in fault\n");
+		/* Use the SWD ack codes for the fault code to be completely consistent between JTAG-vs-SWD */
+		dp->fault = SWD_ACK_FAULT;
+		return 0;
+	}
+
+	/* Check for a not-OK ack under ADIv5 JTAG-DPv0, or ADIv6 JTAG-DPv1 */
+	if ((dp->version < 3 && ack != JTAG_ADIv5_ACK_OK) || (dp->version > 2 && ack != JTAG_ADIv6_ACK_OK)) {
 		DEBUG_ERROR("JTAG access resulted in: %" PRIx32 ":%x\n", result, ack);
 		raise_exception(EXCEPTION_ERROR, "JTAG-DP invalid ACK");
 	}
 
+	/* ADIv6 needs 8 idle cycles run after we get done to ensure the state machine is idle */
+	if (dp->version > 2)
+		jtag_proc.jtagtap_cycle(false, false, 8);
 	return result;
 }
 

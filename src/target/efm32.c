@@ -30,7 +30,8 @@
  * * EFR32BG13P532F512GM32 (EFR Blue Gecko)
  */
 
-/* Refer to the family reference manuals:
+/*
+ * Refer to the family reference manuals:
  *
  * Also refer to AN0062 "Programming Internal Flash Over the Serial Wire Debug Interface"
  * http://www.silabs.com/Support%20Documents/TechnicalDocs/an0062.pdf
@@ -47,7 +48,7 @@
 
 static bool efm32_flash_erase(target_flash_s *f, target_addr_t addr, size_t len);
 static bool efm32_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len);
-static bool efm32_mass_erase(target_s *t);
+static bool efm32_mass_erase(target_s *t, platform_timeout_s *print_progess);
 
 static const uint16_t efm32_flash_write_stub[] = {
 #include "flashstub/efm32.stub"
@@ -98,7 +99,7 @@ const command_s efm32_cmd_list[] = {
 /* Flash Information Area                                                      */
 /* -------------------------------------------------------------------------- */
 
-#define EFM32_INFO      0x0fe00000U
+#define EFM32_INFO      UINT32_C(0x0fe00000)
 #define EFM32_USER_DATA (EFM32_INFO + 0x0000U)
 #define EFM32_LOCK_BITS (EFM32_INFO + 0x4000U)
 #define EFM32_V1_DI     (EFM32_INFO + 0x8000U)
@@ -376,6 +377,12 @@ static uint64_t efm32_v1_read_eui64(target_s *t)
 	return ((uint64_t)target_mem32_read32(t, EFM32_V1_DI_EUI64_1) << 32U) | target_mem32_read32(t, EFM32_V1_DI_EUI64_0);
 }
 
+/* Reads the EFM32 Extended Unique Identifier EUI48 (V2) */
+static uint64_t efm32_v2_read_eui48(target_s *t)
+{
+	return ((uint64_t)target_mem32_read32(t, EFM32_V2_DI_EUI48H) << 32U) | target_mem32_read32(t, EFM32_V2_DI_EUI48L);
+}
+
 /* Reads the Unique Number (DI V2 only) */
 static uint64_t efm32_v2_read_unique(target_s *t, uint8_t di_version)
 {
@@ -537,12 +544,13 @@ bool efm32_probe(target_s *t)
 {
 	/* Check if the OUI in the EUI is silabs or energymicro.
 	 * Use this to identify the Device Identification (DI) version */
-	uint8_t di_version = 1;
-	uint64_t oui24 = ((efm32_v1_read_eui64(t) >> 40U) & 0xffffffU);
-	if (oui24 == EFM32_V1_DI_EUI_SILABS) {
+	uint8_t di_version;
+	const uint32_t oui24_v1 = (efm32_v1_read_eui64(t) >> 40U) & 0xffffffU;
+	const uint32_t oui24_v2 = (efm32_v2_read_eui48(t) >> 24U) & 0xffffffU;
+	if (oui24_v1 == EFM32_V1_DI_EUI_SILABS) {
 		/* Device Identification (DI) version 1 */
 		di_version = 1;
-	} else if (oui24 == EFM32_V2_DI_EUI_ENERGYMICRO) {
+	} else if (oui24_v2 == EFM32_V2_DI_EUI_ENERGYMICRO) {
 		/* Device Identification (DI) version 2 */
 		di_version = 2;
 	} else {
@@ -666,7 +674,7 @@ static bool efm32_flash_write(target_flash_s *f, target_addr_t dest, const void 
 }
 
 /* Uses the MSC ERASEMAIN0/1 command to erase the entire flash */
-static bool efm32_mass_erase(target_s *t)
+static bool efm32_mass_erase(target_s *const t, platform_timeout_s *const print_progess)
 {
 	efm32_priv_s *priv_storage = (efm32_priv_s *)t->target_storage;
 	if (!priv_storage || !priv_storage->device)
@@ -691,17 +699,15 @@ static bool efm32_mass_erase(target_s *t)
 	/* Erase operation */
 	target_mem32_write32(t, EFM32_MSC_WRITECMD(msc), EFM32_MSC_WRITECMD_ERASEMAIN0);
 
-	platform_timeout_s timeout;
-	platform_timeout_set(&timeout, 500);
 	/* Poll MSC Busy */
 	while ((target_mem32_read32(t, EFM32_MSC_STATUS(msc)) & EFM32_MSC_STATUS_BUSY)) {
 		if (target_check_error(t))
 			return false;
-		target_print_progress(&timeout);
+		target_print_progress(print_progess);
 	}
 
 	/* Parts with >= 512 kiB flash have 2 mass erase regions */
-	if (flash_kib >= 512) {
+	if (flash_kib >= 512U) {
 		/* Erase operation */
 		target_mem32_write32(t, EFM32_MSC_WRITECMD(msc), EFM32_MSC_WRITECMD_ERASEMAIN1);
 
@@ -709,7 +715,7 @@ static bool efm32_mass_erase(target_s *t)
 		while ((target_mem32_read32(t, EFM32_MSC_STATUS(msc)) & EFM32_MSC_STATUS_BUSY)) {
 			if (target_check_error(t))
 				return false;
-			target_print_progress(&timeout);
+			target_print_progress(print_progess);
 		}
 	}
 
@@ -768,11 +774,11 @@ static bool efm32_cmd_efm_info(target_s *t, int argc, const char **argv)
 
 	switch (di_version) {
 	case 1:
-		tc_printf(t, "DI version 1 (silabs remix?) base 0x%08" PRIx16 "\n\n", EFM32_V1_DI);
+		tc_printf(t, "DI version 1 (silabs remix?) base 0x%08" PRIx32 "\n\n", EFM32_V1_DI);
 		break;
 
 	case 2:
-		tc_printf(t, "DI version 2 (energy micro remix?) base 0x%08" PRIx16 "\n\n", EFM32_V2_DI);
+		tc_printf(t, "DI version 2 (energy micro remix?) base 0x%08" PRIx32 "\n\n", EFM32_V2_DI);
 		break;
 
 	default:
@@ -926,7 +932,7 @@ static bool efm32_cmd_bootloader(target_s *t, int argc, const char **argv)
 
 #define CMDKEY 0xcfacc118U
 
-static bool efm32_aap_mass_erase(target_s *t);
+static bool efm32_aap_mass_erase(target_s *t, platform_timeout_s *print_progess);
 
 /* AAP Probe */
 typedef struct efm32_aap_priv {
@@ -950,11 +956,12 @@ bool efm32_aap_probe(adiv5_access_port_s *ap)
 		return false;
 	}
 
+	t->enter_flash_mode = target_enter_flash_mode_stub;
 	t->mass_erase = efm32_aap_mass_erase;
 
 	adiv5_ap_ref(ap);
 	t->priv = ap;
-	t->priv_free = (void *)adiv5_ap_unref;
+	t->priv_free = (priv_free_func)adiv5_ap_unref;
 
 	/* Read status */
 	DEBUG_INFO("EFM32: AAP STATUS=%08" PRIx32 "\n", adiv5_ap_read(ap, AAP_STATUS));
@@ -968,9 +975,9 @@ bool efm32_aap_probe(adiv5_access_port_s *ap)
 	return true;
 }
 
-static bool efm32_aap_mass_erase(target_s *t)
+static bool efm32_aap_mass_erase(target_s *const t, platform_timeout_s *const print_progess)
 {
-	adiv5_access_port_s *ap = t->priv;
+	adiv5_access_port_s *ap = cortex_ap(t);
 	uint32_t status;
 
 	/* Read status */
@@ -985,14 +992,12 @@ static bool efm32_aap_mass_erase(target_s *t)
 
 	DEBUG_INFO("EFM32: Issuing DEVICEERASE...\n");
 	adiv5_ap_write(ap, AAP_CMDKEY, CMDKEY);
-	adiv5_ap_write(ap, AAP_CMD, 1);
+	adiv5_ap_write(ap, AAP_CMD, 1U);
 
-	platform_timeout_s timeout;
-	platform_timeout_set(&timeout, 500);
 	/* Read until 0, probably should have a timeout here... */
 	do {
 		status = adiv5_ap_read(ap, AAP_STATUS);
-		target_print_progress(&timeout);
+		target_print_progress(print_progess);
 	} while (status & AAP_STATUS_ERASEBUSY);
 
 	/* Read status */

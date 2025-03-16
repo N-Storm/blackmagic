@@ -36,6 +36,7 @@
 #include "target_internal.h"
 #include "gdb_reg.h"
 #include "riscv_debug.h"
+#include "buffer_utils.h"
 
 #include <assert.h>
 
@@ -123,8 +124,6 @@
 #define RV_CSRW_A0 0x00051073U
 #define RV_EBREAK  0x00100073U
 
-#define RV_ISA_EXTENSIONS_MASK 0x03ffffffU
-
 #define RV_VENDOR_JEP106_CONT_MASK 0x7fffff80U
 #define RV_VENDOR_JEP106_CODE_MASK 0x7fU
 
@@ -132,6 +131,8 @@
 #define RV_DCSR_CAUSE_MASK     0x000001c0U
 #define RV_DCSR_STEPIE         0x00000800U
 #define RV_DCSR_EBREAK_MACHINE 0x00008000U
+#define RV_DCSR_STOP_TIME      (1U << 9)
+#define RV_DCSR_STOP_COUNT     (1U << 10)
 
 #define RV_GPRS_COUNT 32U
 
@@ -174,7 +175,7 @@ static const riscv_csr_descriptor_s riscv_csrs[] = {
 	{"misa", RV_CSR_MISA},
 	{"mie", RV_CSR_MIE},
 	{"mtvec", RV_CSR_MTVEC},
-	{"tscratch", RV_CSR_MSCRATCH},
+	{"mscratch", RV_CSR_MSCRATCH},
 	{"mepc", RV_CSR_MEPC},
 	{"mcause", RV_CSR_MCAUSE},
 	{"mtval", RV_CSR_MTVAL},
@@ -277,14 +278,14 @@ static riscv_debug_version_e riscv_dm_version(uint32_t status);
 
 static uint32_t riscv_hart_discover_isa(riscv_hart_s *hart);
 static void riscv_hart_discover_triggers(riscv_hart_s *hart);
-static void riscv_hart_memory_access_type(riscv_hart_s *hart);
+static void riscv_hart_memory_access_type(target_s *target);
 
 static const char *riscv_target_description(target_s *target);
 
 static bool riscv_check_error(target_s *target);
 static void riscv_halt_request(target_s *target);
 static void riscv_halt_resume(target_s *target, bool step);
-static target_halt_reason_e riscv_halt_poll(target_s *target, target_addr_t *watch);
+static target_halt_reason_e riscv_halt_poll(target_s *target, target_addr64_t *watch);
 static void riscv_reset(target_s *target);
 
 void riscv_dmi_init(riscv_dmi_s *const dmi)
@@ -380,18 +381,17 @@ static void riscv_dm_init(riscv_dm_s *const dbg_module)
 
 static uint8_t riscv_isa_address_width(const uint32_t isa)
 {
-	switch (isa >> 30U) {
-	case 1:
+	switch ((isa & RV_ISA_MXL_MASK) >> RV_ISA_MXL_SHIFT) {
+	case RV_ISA_MXL_32:
 		return 32U;
-	case 2:
+	case RV_ISA_MXL_64:
 		return 64U;
-	case 3:
+	case RV_ISA_MXL_128:
 		return 128U;
 	default:
-		break;
+		DEBUG_INFO("Unknown address width, defaulting to 32\n");
+		return 32U;
 	}
-	DEBUG_INFO("Unknown address width, defaulting to 32\n");
-	return 32U;
 }
 
 static void riscv_hart_read_ids(riscv_hart_s *const hart)
@@ -419,6 +419,58 @@ static void riscv_hart_read_ids(riscv_hart_s *const hart)
 	/* rv128 is unimpl. */
 }
 
+static size_t riscv_snprint_isa_subset(
+	char *const string_buffer, const size_t buffer_size, const uint8_t access_width, const uint32_t extensions)
+{
+	size_t offset = snprintf(string_buffer, buffer_size, "rv%" PRIu8, access_width);
+
+	const bool is_embedded = extensions & RV_ISA_EXT_EMBEDDED;
+
+	offset = write_char(string_buffer, buffer_size, offset, is_embedded ? 'e' : 'i');
+
+	const bool is_general_purpose_isa =
+		!is_embedded && (extensions & RV_ISA_EXT_GENERAL_PURPOSE) == RV_ISA_EXT_GENERAL_PURPOSE;
+
+	if (is_general_purpose_isa) {
+		offset = write_char(string_buffer, buffer_size, offset, 'g');
+		if (extensions & RV_ISA_EXT_QUAD_FLOAT)
+			offset = write_char(string_buffer, buffer_size, offset, 'q');
+	} else {
+		if (extensions & RV_ISA_EXT_MUL_DIV_INT)
+			offset = write_char(string_buffer, buffer_size, offset, 'm');
+		if (extensions & RV_ISA_EXT_ATOMIC)
+			offset = write_char(string_buffer, buffer_size, offset, 'a');
+		if (extensions & RV_ISA_EXT_QUAD_FLOAT)
+			offset = write_char(string_buffer, buffer_size, offset, 'q'); /* Implies d */
+		else if (extensions & RV_ISA_EXT_DOUBLE_FLOAT)
+			offset = write_char(string_buffer, buffer_size, offset, 'd'); /* Implies f */
+		else if (extensions & RV_ISA_EXT_SINGLE_FLOAT)
+			offset = write_char(string_buffer, buffer_size, offset, 'f');
+	}
+	if (extensions & RV_ISA_EXT_DECIMAL_FLOAT)
+		offset = write_char(string_buffer, buffer_size, offset, 'l');
+	if (extensions & RV_ISA_EXT_COMPRESSED)
+		offset = write_char(string_buffer, buffer_size, offset, 'c');
+	if (extensions & RV_ISA_EXT_BIT_MANIP)
+		offset = write_char(string_buffer, buffer_size, offset, 'b');
+	if (extensions & RV_ISA_EXT_DYNAMIC_LANG)
+		offset = write_char(string_buffer, buffer_size, offset, 'j');
+	if (extensions & RV_ISA_EXT_TRANSACT_MEM)
+		offset = write_char(string_buffer, buffer_size, offset, 't');
+	if (extensions & RV_ISA_EXT_PACKED_SIMD)
+		offset = write_char(string_buffer, buffer_size, offset, 'p');
+	if (extensions & RV_ISA_EXT_VECTOR)
+		offset = write_char(string_buffer, buffer_size, offset, 'v');
+	if (extensions & RV_ISA_EXT_USER_INTERRUPTS)
+		offset = write_char(string_buffer, buffer_size, offset, 'n');
+
+	/* null-terminate the string */
+	if (string_buffer && buffer_size > 0)
+		string_buffer[offset < buffer_size ? offset : buffer_size - 1U] = '\0';
+
+	return offset;
+}
+
 static bool riscv_hart_init(riscv_hart_s *const hart)
 {
 	/* Allocate a new target */
@@ -426,7 +478,7 @@ static bool riscv_hart_init(riscv_hart_s *const hart)
 	if (!target)
 		return false;
 
-	/* Grab a reference to the DMI and DM structurues and do preliminary setup of the target structure */
+	/* Grab a reference to the DMI and DM structures and do preliminary setup of the target structure */
 	riscv_dm_ref(hart->dbg_module);
 	target->driver = "RISC-V";
 	target->priv = hart;
@@ -438,17 +490,20 @@ static bool riscv_hart_init(riscv_hart_s *const hart)
 	hart->address_width = riscv_isa_address_width(isa);
 	hart->extensions = isa & RV_ISA_EXTENSIONS_MASK;
 	/* Figure out if the target needs us to use sysbus or not for memory access */
-	riscv_hart_memory_access_type(hart);
+	riscv_hart_memory_access_type(target);
 	/* Then read out the ID registers */
 	riscv_hart_read_ids(hart);
 
-	DEBUG_INFO("Hart %" PRIx32 ": %u-bit RISC-V (arch = %08" PRIx32 "), vendor = %" PRIx32 ", impl = %" PRIx32
-			   ", exts = %08" PRIx32 "\n",
-		hart->hartid, hart->access_width, hart->archid, hart->vendorid, hart->implid, hart->extensions);
+	/* Build the ISA subset string from the Hart */
+	riscv_snprint_isa_subset(hart->isa_name, sizeof(hart->isa_name), hart->access_width, hart->extensions);
+	target->core = hart->isa_name;
+
+	DEBUG_INFO("Hart %" PRIx32 ": %u-bit RISC-V (arch = %08" PRIx32 "), %s ISA (exts = %08" PRIx32
+			   "), vendor = %" PRIx32 ", impl = %" PRIx32 "\n",
+		hart->hartid, hart->access_width, hart->archid, hart->isa_name, hart->extensions, hart->vendorid, hart->implid);
 
 	/* We don't support rv128, so tell the user and fast-quit on this target. */
 	if (hart->access_width == 128U) {
-		target->core = "(unsup) rv128";
 		DEBUG_WARN("rv128 is unsupported, ignoring this hart\n");
 		return true;
 	}
@@ -886,10 +941,11 @@ static void riscv_hart_discover_triggers(riscv_hart_s *const hart)
 	}
 }
 
-static void riscv_hart_memory_access_type(riscv_hart_s *const hart)
+static void riscv_hart_memory_access_type(target_s *const target)
 {
-	uint32_t sysbus_status;
+	riscv_hart_s *const hart = riscv_hart_struct(target);
 	hart->flags &= (uint8_t)~RV_HART_FLAG_MEMORY_SYSBUS;
+	uint32_t sysbus_status;
 	/*
 	 * Try reading the system bus access control and status register.
 	 * Check if the value read back is non-zero for the sbasize field
@@ -899,6 +955,8 @@ static void riscv_hart_memory_access_type(riscv_hart_s *const hart)
 		return;
 	/* If all the checks passed, we now have a valid system bus so can proceed with using it for memory access */
 	hart->flags = RV_HART_FLAG_MEMORY_SYSBUS | (sysbus_status & RV_HART_FLAG_ACCESS_WIDTH_MASK);
+	/* System Bus also means the target can have memory read without halting */
+	target->target_options |= TOPT_NON_HALTING_MEM_IO;
 	/* Make sure the system bus is not in any kind of error state */
 	(void)riscv_dm_write(hart->dbg_module, RV_DM_SYSBUS_CTRLSTATUS, 0x00407000U);
 }
@@ -1011,9 +1069,9 @@ static void riscv_halt_resume(target_s *target, const bool step)
 	if (!riscv_csr_read(hart, RV_DCSR | RV_CSR_FORCE_32_BIT, &stepping_config))
 		return;
 	if (step)
-		stepping_config |= RV_DCSR_STEP | RV_DCSR_STEPIE;
+		stepping_config |= RV_DCSR_STEP | RV_DCSR_STOP_TIME | RV_DCSR_STOP_COUNT;
 	else {
-		stepping_config &= ~(RV_DCSR_STEP | RV_DCSR_STEPIE);
+		stepping_config &= ~(RV_DCSR_STEP);
 		stepping_config |= RV_DCSR_EBREAK_MACHINE;
 	}
 	if (!riscv_csr_write(hart, RV_DCSR | RV_CSR_FORCE_32_BIT, &stepping_config))
@@ -1028,7 +1086,7 @@ static void riscv_halt_resume(target_s *target, const bool step)
 	(void)riscv_dm_write(hart->dbg_module, RV_DM_CONTROL, hart->hartsel);
 }
 
-static target_halt_reason_e riscv_halt_poll(target_s *const target, target_addr_t *const watch)
+static target_halt_reason_e riscv_halt_poll(target_s *const target, target_addr64_t *const watch)
 {
 	(void)watch;
 	riscv_hart_s *const hart = riscv_hart_struct(target);
@@ -1084,17 +1142,6 @@ static void riscv_reset(target_s *const target)
 	riscv_dm_write(hart->dbg_module, RV_DM_CONTROL, hart->hartsel | RV_DM_CTRL_HART_ACK_RESET);
 	riscv_halt_request(target);
 	target_check_error(target);
-}
-
-static const char *riscv_fpu_ext_string(const uint32_t extensions)
-{
-	if (extensions & RV_ISA_EXT_QUAD_FLOAT)
-		return "q";
-	if (extensions & RV_ISA_EXT_DOUBLE_FLOAT)
-		return "d";
-	if (extensions & RV_ISA_EXT_SINGLE_FLOAT)
-		return "f";
-	return "";
 }
 
 /*
@@ -1215,19 +1262,24 @@ static size_t riscv_build_target_fpu_description(char *const buffer, size_t max_
  *  </target>
  */
 static size_t riscv_build_target_description(
-	char *const buffer, size_t max_length, const uint8_t address_width, const uint32_t extensions)
+	char *const buffer, const size_t max_length, const uint8_t address_width, const uint32_t extensions)
 {
-	const bool embedded = extensions & RV_ISA_EXT_EMBEDDED;
-	const uint32_t fpu = extensions & RV_ISA_EXT_ANY_FLOAT;
-
 	size_t print_size = max_length;
 	/* Start with the "preamble" chunks, which are mostly common across targets save for 2 words. */
-	size_t offset =
-		(size_t)snprintf(buffer, print_size, "%s target %sriscv:rv%u%c%s%s <feature name=\"org.gnu.gdb.riscv.cpu\">",
-			gdb_xml_preamble_first, gdb_xml_preamble_second, address_width, embedded ? 'e' : 'i',
-			riscv_fpu_ext_string(fpu), gdb_xml_preamble_third);
+	int offset = snprintf(buffer, print_size, "%s target %sriscv:", gdb_xml_preamble_first, gdb_xml_preamble_second);
+	if (max_length != 0)
+		print_size = max_length - (size_t)offset;
+	/* Write the architecture string, which is the ISA subset */
+	offset += riscv_snprint_isa_subset(buffer + offset, print_size, address_width, extensions);
+	if (max_length != 0)
+		print_size = max_length - (size_t)offset;
+	/* Finally finish the rest of the preamble */
+	offset +=
+		snprintf(buffer + offset, print_size, "%s <feature name=\"org.gnu.gdb.riscv.cpu\">", gdb_xml_preamble_third);
+	if (max_length != 0)
+		print_size = max_length - (size_t)offset;
 
-	const uint8_t gprs = embedded ? 16U : 32U;
+	const uint8_t gprs = extensions & RV_ISA_EXT_EMBEDDED ? 16U : 32U;
 	/* Then build the general purpose register descriptions using the arrays at top of file */
 	/* Note that in a device using the embedded (E) extension, we only generate the first 16. */
 	for (uint8_t i = 0; i < gprs; ++i) {

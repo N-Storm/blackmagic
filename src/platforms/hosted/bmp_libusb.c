@@ -48,7 +48,9 @@ typedef int_least16_t char16_t;
 #include "utils.h"
 #include "hex_utils.h"
 
-#define NO_SERIAL_NUMBER "<no serial number>"
+#define NO_SERIAL_NUMBER          "<no serial number>"
+#define BMP_PRODUCT_STRING        "Black Magic Probe"
+#define BMP_PRODUCT_STRING_LENGTH ARRAY_LENGTH(BMP_PRODUCT_STRING)
 
 void bmp_read_product_version(libusb_device_descriptor_s *device_descriptor, libusb_device *device,
 	libusb_device_handle *handle, char **product, char **manufacturer, char **serial, char **version);
@@ -79,6 +81,23 @@ static const debugger_device_s debugger_devices[] = {
 	{VENDOR_ID_FTDI, PRODUCT_ID_FTDI_FT232, PROBE_TYPE_FTDI, NULL, "FTDI FT232"},
 	{0, 0, PROBE_TYPE_NONE, NULL, ""},
 };
+
+#if defined(_WIN32) || defined(__CYGWIN__)
+static char *strndup(const char *const src, const size_t size)
+{
+	/* Determine how many bytes to copy to the new string, including the NULL terminator */
+	const size_t length = MIN(size, strlen(src)) + 1U;
+	/* Try to allocate storage for the new string */
+	char *result = malloc(length);
+	if (!result)
+		return NULL;
+	/* Now we have storage, copy the bytes over */
+	memcpy(result, src, length - 1U);
+	/* And finally terminate the string to return */
+	result[length - 1U] = '\0';
+	return result;
+}
+#endif
 
 const debugger_device_s *get_debugger_device_from_vid_pid(const uint16_t probe_vid, const uint16_t probe_pid)
 {
@@ -140,21 +159,58 @@ void bmp_read_product_version(libusb_device_descriptor_s *device_descriptor, lib
 	(void)device;
 	(void)serial;
 	(void)manufacturer;
-	*product = get_device_descriptor_string(handle, device_descriptor->iProduct);
+	const char *const description = get_device_descriptor_string(handle, device_descriptor->iProduct);
+	const size_t description_len = strlen(description) + 1U;
 
-	char *start_of_version = strrchr(*product, ' ');
-	if (start_of_version == NULL) {
-		*version = NULL;
-		return;
+	/*
+	 * Black Magic Debug product strings are in one of the following forms:
+	 * Recent: Black Magic Probe v1.10.0-1273-g2b1ce9aee
+	 *       : Black Magic Probe (ST-Link v2) v1.10.0-1273-g2b1ce9aee
+	 *   Old : Black Magic Probe
+	 * From this we want to extract two main things: version (if available), and the product name
+	 */
+
+	/* Let's start out easy - check to see if the string contains an opening paren (alternate platform) */
+	const char *const opening_paren = strchr(description + BMP_PRODUCT_STRING_LENGTH, '(');
+	/* If there isn't one, we're dealing with nominally a native probe */
+	if (!opening_paren) {
+		/* Knowing this, let's see if there are enough bytes for a version string, and if there are.. extract it */
+		if (description_len > BMP_PRODUCT_STRING_LENGTH) {
+			const char *version_begin = strrchr(description, ' ');
+			/* Thankfully, this can't fail, so just grab the version string from what we got */
+			*version = strdup(version_begin + 1U);
+			/* Now extract the remaining chunk of the description as the product string */
+			*product = strndup(description, version_begin - description);
+		} else {
+			/* We don't know the version (pre v1.7) and the description string is the product string */
+			*version = strdup("Unknown");
+			*product = strdup(description);
+		}
+	} else {
+		/* Otherwise, we've got a non-native probe, so find the closing paren for the probe type */
+		const char *const closing_paren = strchr(opening_paren, ')');
+		/* If we didn't find one, we've got a problem */
+		if (!closing_paren) {
+			DEBUG_ERROR("Production description for device is invalid, founding opening '(' but no closing ')'\n");
+			*version = strdup("Unknown");
+			*product = strdup("Invalid");
+		} else {
+			/* If we did find the closing ')', then see if we've got a version string*/
+			const char *const version_begin = strchr(closing_paren, ' ');
+			/* If we do, then extract whatever's left of the string as the version string */
+			if (version_begin)
+				*version = strdup(version_begin + 1U);
+			else
+				*version = strdup("Unknown");
+			/* Now we've dealt with the version information, use everything up to the ')' as the product string */
+			*product = strndup(description, (closing_paren - description) + 1U);
+		}
 	}
 
-	while (start_of_version[0] == ' ' && start_of_version != *product)
-		--start_of_version;
-	start_of_version[1U] = '\0';
-	start_of_version += 2U;
-	while (start_of_version[0] == ' ')
-		++start_of_version;
-	*version = strdup(start_of_version);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
+	free((void *)description);
+#pragma GCC diagnostic pop
 }
 
 /*
@@ -511,22 +567,22 @@ static const probe_info_s *scan_for_devices(bmda_probe_s *info)
 	return probe_info_correct_order(probe_list);
 }
 
-int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
+bool find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
 {
 	if (cl_opts->opt_device)
-		return 1;
+		return false;
 
 	const int result = libusb_init(&info->libusb_ctx);
 	if (result != LIBUSB_SUCCESS) {
 		DEBUG_ERROR("Failed to initialise libusb (%d): %s\n", result, libusb_error_name(result));
-		return -1;
+		return false;
 	}
 
 	/* Scan for all possible probes on the system */
 	const probe_info_s *probe_list = scan_for_devices(info);
 	if (!probe_list) {
 		DEBUG_WARN("No probes found\n");
-		return -1;
+		return false;
 	}
 	/* Count up how many were found and filter the list for a match to the program options request */
 	const size_t probes = probe_info_count(probe_list);
@@ -546,7 +602,8 @@ int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
 			DEBUG_WARN(" %2zu. %-20s %-25s %-25s %s\n", position, probe->product, probe->serial, probe->manufacturer,
 				probe->version);
 		probe_info_list_free(probe_list);
-		return cl_opts->opt_list_only ? 0 : 1; // false;
+		/* Indicate success if we've been asked to generate a listing only */
+		return cl_opts->opt_list_only;
 	}
 
 	/* We found a matching probe, populate bmda_probe_s and signal success */
@@ -557,14 +614,14 @@ int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
 		DEBUG_WARN("Multiple FTDI adapters match Vendor and Product ID.\n");
 		DEBUG_WARN("Please specify adapter type on command line using \"-c\" option.\n");
 		probe_info_list_free(probe_list);
-		return -1; //false
+		return false;
 	}
 	/* If the selected probe is CMSIS-DAP, check for v2 interfaces */
 	if (probe->type == PROBE_TYPE_CMSIS_DAP)
 		check_cmsis_interface_type(probe->device, info);
 
 	probe_info_list_free(probe_list);
-	return 0; // true;
+	return true;
 }
 
 /*
@@ -583,7 +640,7 @@ int bmda_usb_transfer(
 {
 	/* If there's data to send */
 	if (tx_len) {
-		uint8_t *tx_data = (uint8_t *)tx_buffer;
+		const uint8_t *tx_data = (const uint8_t *)tx_buffer;
 		/* Display the request */
 		DEBUG_WIRE(" request:");
 		for (size_t i = 0; i < tx_len && i < 32U; ++i)
@@ -592,9 +649,12 @@ int bmda_usb_transfer(
 			DEBUG_WIRE(" ...");
 		DEBUG_WIRE("\n");
 
-		/* Perform the transfer */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
+		/* Perform the transfer - NB, libusb has a miserably const-and-signed-incorrect API, hence some the casts here */
 		const int result = libusb_bulk_transfer(
-			link->device_handle, link->ep_tx | LIBUSB_ENDPOINT_OUT, tx_data, (int)tx_len, NULL, timeout);
+			link->device_handle, link->ep_tx | LIBUSB_ENDPOINT_OUT, (uint8_t *)tx_data, (int)tx_len, NULL, timeout);
+#pragma GCC diagnostic pop
 		/* Then decode the result value - if its anything other than LIBUSB_SUCCESS, something went horribly wrong */
 		if (result != LIBUSB_SUCCESS) {
 			DEBUG_ERROR(

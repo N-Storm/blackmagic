@@ -44,7 +44,7 @@
 #include "adi.h"
 #include "adiv6.h"
 #include "adiv6_internal.h"
-#ifdef ENABLE_RISCV
+#ifdef CONFIG_RISCV
 #include "riscv_debug.h"
 #endif
 
@@ -69,7 +69,7 @@ bool adiv6_dp_init(adiv5_debug_port_s *const dp)
 {
 	dp->ap_read = adiv6_ap_reg_read;
 	dp->ap_write = adiv6_ap_reg_write;
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 	bmda_adiv6_dp_init(dp);
 #endif
 
@@ -128,7 +128,7 @@ static uint64_t adiv6_dp_read_pidr(adiv6_access_port_s *const ap)
 static bool adiv6_reset_resources(adiv6_access_port_s *const rom_table)
 {
 	/* Read out power request ID register 0 and check if power control is actually implemented */
-	const uint8_t pridr0 = adiv5_ap_read(&rom_table->base, CORESIGHT_ROM_PRIDR0) & 0x3fU;
+	const uint8_t pridr0 = adiv5_ap_read(&rom_table->base, ADIV5_AP_REG(CORESIGHT_ROM_PRIDR0)) & 0x3fU;
 	if ((pridr0 & CORESIGHT_ROM_PRIDR0_VERSION_MASK) != CORESIGHT_ROM_PRIDR0_VERSION_NOT_IMPL)
 		rom_table->base.flags |= ADIV6_DP_FLAGS_HAS_PWRCTRL;
 	/* Now try and perform a debug reset request */
@@ -136,16 +136,16 @@ static bool adiv6_reset_resources(adiv6_access_port_s *const rom_table)
 		platform_timeout_s timeout;
 		platform_timeout_set(&timeout, 250);
 
-		adiv5_ap_write(&rom_table->base, CORESIGHT_ROM_DBGRSTRR, CORESIGHT_ROM_DBGRST_REQ);
+		adiv5_ap_write(&rom_table->base, ADIV5_AP_REG(CORESIGHT_ROM_DBGRSTRR), CORESIGHT_ROM_DBGRST_REQ);
 		/* While the reset request is in progress */
-		while (adiv5_ap_read(&rom_table->base, CORESIGHT_ROM_DBGRSTRR) & CORESIGHT_ROM_DBGRST_REQ) {
+		while (adiv5_ap_read(&rom_table->base, ADIV5_AP_REG(CORESIGHT_ROM_DBGRSTRR)) & CORESIGHT_ROM_DBGRST_REQ) {
 			/* Check if it's been acknowledge, and if it has, deassert the request */
-			if (adiv5_ap_read(&rom_table->base, CORESIGHT_ROM_DBGRSTAR) & CORESIGHT_ROM_DBGRST_REQ)
-				adiv5_ap_write(&rom_table->base, CORESIGHT_ROM_DBGRSTRR, 0U);
+			if (adiv5_ap_read(&rom_table->base, ADIV5_AP_REG(CORESIGHT_ROM_DBGRSTAR)) & CORESIGHT_ROM_DBGRST_REQ)
+				adiv5_ap_write(&rom_table->base, ADIV5_AP_REG(CORESIGHT_ROM_DBGRSTRR), 0U);
 			/* Check if the reset has timed out */
 			if (platform_timeout_is_expired(&timeout)) {
 				DEBUG_WARN("adiv6: debug reset failed\n");
-				adiv5_ap_write(&rom_table->base, CORESIGHT_ROM_DBGRSTRR, 0U);
+				adiv5_ap_write(&rom_table->base, ADIV5_AP_REG(CORESIGHT_ROM_DBGRSTRR), 0U);
 				break;
 			}
 		}
@@ -174,7 +174,7 @@ static bool adiv6_parse_coresight_v0_rom_table(
 	const uint16_t part_number = pidr & PIDR_PN_MASK;
 
 	/* Now we know we're in a CoreSight v0 ROM table, read out the device ID field and set up the memory flag on the AP */
-	const uint8_t dev_id = adiv5_ap_read(&rom_table->base, CORESIGHT_ROM_DEVID) & 0x7fU;
+	const uint8_t dev_id = adiv5_ap_read(&rom_table->base, ADIV5_AP_REG(CORESIGHT_ROM_DEVID)) & 0x7fU;
 	if (dev_id & CORESIGHT_ROM_DEVID_SYSMEM)
 		rom_table->base.flags |= ADIV5_AP_FLAGS_HAS_MEM;
 	const uint8_t rom_format = dev_id & CORESIGHT_ROM_DEVID_FORMAT;
@@ -213,20 +213,21 @@ static bool adiv6_parse_coresight_v0_rom_table(
 		}
 		/* Got a good entry? great! Figure out if it has a power domain to cycle and what the address offset is */
 		const target_addr64_t offset = entry & CORESIGHT_ROM_ROMENTRY_OFFSET_MASK;
-		if ((rom_table->base.flags & ADIV6_DP_FLAGS_HAS_PWRCTRL) & entry & CORESIGHT_ROM_ROMENTRY_POWERID_VALID) {
+		if ((rom_table->base.flags & ADIV6_DP_FLAGS_HAS_PWRCTRL) && (entry & CORESIGHT_ROM_ROMENTRY_POWERID_VALID)) {
 			const uint8_t power_domain_offset =
 				((entry & CORESIGHT_ROM_ROMENTRY_POWERID_MASK) >> CORESIGHT_ROM_ROMENTRY_POWERID_SHIFT) << 2U;
 			/* Check if the power control register for this domain is present */
-			if (adiv5_ap_read(&rom_table->base, CORESIGHT_ROM_DBGPCR_BASE + power_domain_offset) &
+			if (adiv5_ap_read(&rom_table->base, ADIV5_AP_REG(CORESIGHT_ROM_DBGPCR_BASE + power_domain_offset)) &
 				CORESIGHT_ROM_DBGPCR_PRESENT) {
 				/* And if it is, ask the domain to power up */
-				adiv5_ap_write(
-					&rom_table->base, CORESIGHT_ROM_DBGPCR_BASE + power_domain_offset, CORESIGHT_ROM_DBGPCR_PWRREQ);
+				adiv5_ap_write(&rom_table->base, ADIV5_AP_REG(CORESIGHT_ROM_DBGPCR_BASE + power_domain_offset),
+					CORESIGHT_ROM_DBGPCR_PWRREQ);
 				/* Then spin for a little waiting for the domain to become powered usefully */
 				platform_timeout_s timeout;
 				platform_timeout_set(&timeout, 250);
-				while (!(adiv5_ap_read(&rom_table->base, CORESIGHT_ROM_DBGPSR_BASE + power_domain_offset) &
-					CORESIGHT_ROM_DBGPSR_STATUS_ON)) {
+				while (
+					!(adiv5_ap_read(&rom_table->base, ADIV5_AP_REG(CORESIGHT_ROM_DBGPSR_BASE + power_domain_offset)) &
+						CORESIGHT_ROM_DBGPSR_STATUS_ON)) {
 					if (platform_timeout_is_expired(&timeout)) {
 						DEBUG_WARN("adiv6: power-up failed\n");
 						return false;
@@ -306,30 +307,29 @@ static bool adiv6_component_probe(adiv5_debug_port_s *const dp, const target_add
 		uint8_t dev_type = 0U;
 		if (cid_class == cidc_dc) {
 			/* Read out the component's identification information */
-			const uint32_t dev_arch = adiv5_ap_read(&base_ap.base, ADIV5_AP_REG(DEVARCH_OFFSET));
-			dev_type = adiv5_ap_read(&base_ap.base, ADIV5_AP_REG(DEVTYPE_OFFSET)) & DEVTYPE_MASK;
+			const uint32_t dev_arch = adiv5_ap_read(&base_ap.base, ADIV5_AP_REG(CORESIGHT_ROM_DEVARCH));
+			dev_type = adiv5_ap_read(&base_ap.base, ADIV5_AP_REG(CORESIGHT_ROM_DEVTYPE)) & DEVTYPE_MASK;
 
 			if (dev_arch & DEVARCH_PRESENT)
 				arch_id = dev_arch & DEVARCH_ARCHID_MASK;
 		}
 
-		/* Check if this is a CoreSight component ROM table */
-		if (cid_class == cidc_dc && arch_id == DEVARCH_ARCHID_ROMTABLE_V0) {
-			if (pidr & PIDR_SIZE_MASK) {
-				DEBUG_ERROR("Fault reading ROM table\n");
-				return false;
-			}
-			return adiv6_parse_coresight_v0_rom_table(&base_ap, base_address, pidr);
-		}
-
 		/* If it's an ARM component of some kind, look it up in the ARM component table */
-		if (designer_code == JEP106_MANUFACTURER_ARM) {
+		if (designer_code == JEP106_MANUFACTURER_ARM || arch_id == DEVARCH_ARCHID_ROMTABLE_V0) {
 			const arm_coresight_component_s *const component =
 				adi_lookup_component(base_address, entry_number, " ", cid_class, pidr, dev_type, arch_id);
 			if (component == NULL)
 				return true;
 
 			switch (component->arch) {
+			/* Handle when the component is a CoreSight component ROM table */
+			case aa_rom_table:
+				if (pidr & PIDR_SIZE_MASK)
+					DEBUG_ERROR("Fault reading ROM table\n");
+				else
+					return adiv6_parse_coresight_v0_rom_table(&base_ap, base_address, pidr);
+				break;
+			/* Handle when the component is an AP */
 			case aa_access_port: {
 				/* We've got an ADIv6 APv2, so try and set up to use it */
 				adiv6_access_port_s *ap = adiv6_new_ap(dp, base_address, entry_number);
@@ -340,7 +340,7 @@ static bool adiv6_component_probe(adiv5_debug_port_s *const dp, const target_add
 				ap->base.designer_code = rom_designer_code;
 				ap->base.partno = rom_part_number;
 
-#ifdef ENABLE_RISCV
+#ifdef CONFIG_RISCV
 				/* Special-cases for RISC-V parts using ADI as a DTM */
 				if (rom_designer_code == JEP106_MANUFACTURER_RASPBERRY && rom_part_number == ID_RP2350 &&
 					ap->base.base == 0U) {

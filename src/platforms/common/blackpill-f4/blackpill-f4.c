@@ -50,6 +50,20 @@ void platform_init(void)
 	rcc_periph_clock_enable(RCC_GPIOC);
 	rcc_periph_clock_enable(RCC_GPIOB);
 	rcc_periph_clock_enable(RCC_CRC);
+#if SWO_ENCODING == 1 || SWO_ENCODING == 3
+	/* Make sure to power up the timer used for trace */
+	rcc_periph_clock_enable(SWO_TIM_CLK);
+#endif
+#if SWO_ENCODING == 2 || SWO_ENCODING == 3
+	/* Enable relevant USART and DMA early in platform init */
+	rcc_periph_clock_enable(SWO_UART_CLK);
+	rcc_periph_clock_enable(SWO_DMA_CLK);
+	/* Deal with receiving on Tx pin by enabling Half-Duplex mode */
+#if SWO_UART_PORT == GPIOB && SWO_UART_RX_PIN == GPIO6
+	//usart_enable_halfduplex(SWO_UART);
+	USART_CR3(SWO_UART) |= USART_CR3_HDSEL;
+#endif
+#endif
 
 #ifndef BMD_BOOTLOADER
 	/* Blackpill board has a floating button on PA0. Pull it up and use as active-low. */
@@ -94,8 +108,21 @@ void platform_init(void)
 	gpio_set_output_options(TCK_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_25MHZ, TCK_PIN);
 	gpio_set_output_options(TMS_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_25MHZ, TMS_PIN);
 
+	/* Pull up TRST pin */
+	gpio_set(TRST_PORT, TRST_PIN);
+	gpio_mode_setup(TRST_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_PULLUP, TRST_PIN);
+	gpio_set_output_options(TRST_PORT, GPIO_OTYPE_OD, GPIO_OSPEED_2MHZ, TRST_PIN);
+	/* Pull up nRST pin */
+	gpio_set(NRST_PORT, NRST_PIN);
+	gpio_mode_setup(NRST_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_PULLUP, NRST_PIN);
+	gpio_set_output_options(NRST_PORT, GPIO_OTYPE_OD, GPIO_OSPEED_2MHZ, NRST_PIN);
+
 	/* Set up LED pins */
-	gpio_mode_setup(LED_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, LED_IDLE_RUN | LED_ERROR | LED_BOOTLOADER);
+	gpio_mode_setup(LED_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, LED_IDLE_RUN | LED_ERROR);
+	/* Set up LED_BOOTLOADER if it hasn't been set up yet in the bootloader section above */
+#ifdef BMD_BOOTLOADER
+	gpio_mode_setup(LED_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, LED_BOOTLOADER);
+#endif
 	gpio_mode_setup(LED_PORT_UART, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, LED_UART);
 
 #ifdef PLATFORM_HAS_POWER_SWITCH
@@ -116,19 +143,12 @@ void platform_init(void)
 	OTG_FS_GCCFG &= ~(OTG_GCCFG_VBUSBSEN | OTG_GCCFG_VBUSASEN);
 
 	/* By default, do not drive the SWD bus too fast. */
-	platform_max_frequency_set(3000000);
+	platform_max_frequency_set(2000000);
 }
 
 void platform_nrst_set_val(bool assert)
 {
-	if (assert) {
-		gpio_mode_setup(NRST_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, NRST_PIN);
-		gpio_set_output_options(NRST_PORT, GPIO_OTYPE_OD, GPIO_OSPEED_2MHZ, NRST_PIN);
-		gpio_clear(NRST_PORT, NRST_PIN);
-	} else {
-		gpio_mode_setup(NRST_PORT, GPIO_MODE_INPUT, GPIO_PUPD_NONE, NRST_PIN);
-		gpio_set(NRST_PORT, NRST_PIN);
-	}
+	gpio_set_val(NRST_PORT, NRST_PIN, !assert);
 }
 
 bool platform_nrst_get_val(void)
@@ -177,9 +197,24 @@ uint32_t platform_target_voltage_sense(void)
 }
 #endif
 
+void platform_ospeed_update(const uint32_t frequency)
+{
+	const uint8_t ospeed = frequency > 2000000U ? GPIO_OSPEED_25MHZ : GPIO_OSPEED_2MHZ;
+
+	gpio_set_output_options(TCK_PORT, GPIO_OTYPE_PP, ospeed, TCK_PIN);
+	gpio_set_output_options(TMS_PORT, GPIO_OTYPE_PP, ospeed, TMS_PIN);
+	gpio_set_output_options(TDI_PORT, GPIO_OTYPE_PP, ospeed, TDI_PIN);
+}
+
 void platform_target_clk_output_enable(bool enable)
 {
-	(void)enable;
+	if (enable) {
+		gpio_mode_setup(TCK_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, TCK_PIN);
+		SWDIO_MODE_DRIVE();
+	} else {
+		gpio_mode_setup(TCK_PORT, GPIO_MODE_INPUT, GPIO_PUPD_NONE, TCK_PIN);
+		SWDIO_MODE_FLOAT();
+	}
 }
 
 bool platform_spi_init(const spi_bus_e bus)

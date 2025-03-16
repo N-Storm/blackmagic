@@ -103,6 +103,7 @@ static const arm_coresight_component_s arm_component_lut[] = {
 	{0x4c4, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M4 ROM", "(Cortex-M4 ROM)")},
 	{0x4c7, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M7 PPB", "(Cortex-M7 PPB ROM Table)")},
 	{0x4c8, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M7 ROM", "(Cortex-M7 ROM)")},
+	{0x000, 0x00, 0x0af7, aa_rom_table, cidc_dc, ARM_COMPONENT_STR("CoreSight ROM", "(ROM Table)")},
 	{0x906, 0x14, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight CTI", "(Cross Trigger)")},
 	{0x907, 0x21, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight ETB", "(Trace Buffer)")},
 	{0x908, 0x12, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight CSTF", "(Trace Funnel)")},
@@ -162,6 +163,13 @@ static const arm_coresight_component_s arm_component_lut[] = {
 	{0xd21, 0x14, 0x1a14, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M33", "(Cross Trigger)")},
 	{0xd21, 0x13, 0x4a13, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M33", "(Embedded Trace)")},
 	{0xd21, 0x11, 0, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M33", "(Trace Port Interface Unit)")},
+	{0xd22, 0x00, 0x2a04, aa_cortexm, cidc_dc, ARM_COMPONENT_STR("Cortex-M55", "(Ssystem Control Space)")},
+	{0xd22, 0x00, 0x1a02, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M55", "(Data Watchpoint and Trace)")},
+	{0xd22, 0x00, 0x1a03, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M55", "(Breakpoint Unit)")},
+	{0xd22, 0x43, 0x1a01, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M55", "(Instrumentation Trace Macrocell)")},
+	{0xd22, 0x13, 0x4a13, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M55", "(Embedded Trace)")},
+	{0xd22, 0x16, 0x0a06, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M55", "(Performance Monitoring Unit)")},
+	{0xd22, 0x14, 0x1a14, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M55", "(Cross Trigger)")},
 	{0x132, 0x31, 0x0a31, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 MTB", "(Execution Trace)")},
 	{0x132, 0x43, 0x1a01, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 ITM", "(Instrumentation Trace Module)")},
 	{0x132, 0x00, 0x1a02, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 DWT", "(Data Watchpoint and Trace)")},
@@ -174,9 +182,14 @@ static const arm_coresight_component_s arm_component_lut[] = {
 	{0x9e2, 0x00, 0x0a17, aa_access_port, cidc_dc, ARM_COMPONENT_STR("ADIv6 MEM-APv2", "(Memory Access Port)")},
 	{0x9e3, 0x00, 0x0a17, aa_access_port, cidc_dc, ARM_COMPONENT_STR("ADIv6 MEM-APv2", "(Memory Access Port)")},
 	{0x193, 0x00, 0x0000, aa_nosupport, cidc_sys, ARM_COMPONENT_STR("CoreSight TSG", "(Timestamp Generator)")},
+	{0x9e4, 0x00, 0x0a17, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("CoreSight MTE", "(Memory Tagging Extensioon)")},
 	{0x9e7, 0x11, 0x0000, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("CoreSight TPIU", "(Trace Port Interface Unit)")},
+	{0x9e8, 0x21, 0x0000, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("CoreSight TCM", "(Trace Memory Controller)")},
 	{0x9eb, 0x12, 0x0000, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("CoreSight ATBF", "(ATB Funnel)")},
+	{0x9ec, 0x22, 0x0000, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("CoreSight ATBR", "(ATB Replicator)")},
 	{0x9ed, 0x14, 0x1a14, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("CoreSight CTI", "(Cross Trigger Interface)")},
+	{0x9ee, 0x00, 0x0000, aa_nosupport, cidc_dc,
+		ARM_COMPONENT_STR("CoreSight CATU", "(CoreSight Address Translation Unit)")},
 	{0xfff, 0x00, 0, aa_end, cidc_unknown, ARM_COMPONENT_STR("end", "end")},
 };
 
@@ -240,7 +253,7 @@ static const char *adi_cid_class_string(const cid_class_e cid_class)
 	default:
 		return "Unknown component"; /* Noted as reserved in the spec */
 	}
-};
+}
 #endif
 
 uint16_t adi_designer_from_pidr(const uint64_t pidr)
@@ -289,7 +302,7 @@ const arm_coresight_component_s *adi_lookup_component(const target_addr64_t base
 	(void)entry_number;
 #endif
 
-	const uint16_t part_number = pidr & PIDR_PN_MASK;
+	const uint16_t part_number = arch_id == DEVARCH_ARCHID_ROMTABLE_V0 ? 0U : (pidr & PIDR_PN_MASK);
 	for (size_t index = 0; arm_component_lut[index].arch != aa_end; ++index) {
 		if (arm_component_lut[index].part_number != part_number || arm_component_lut[index].dev_type != dev_type ||
 			arm_component_lut[index].arch_id != arch_id)
@@ -334,6 +347,134 @@ static void adi_display_ap(const adiv5_access_port_s *const ap)
 #endif
 }
 
+static bool adi_configure_mem_ap(adiv5_access_port_s *const ap)
+{
+	const uint8_t ap_type = ADIV5_AP_IDR_TYPE(ap->idr);
+
+	/* Grab the config, base and CSW registers */
+	const uint32_t cfg = adiv5_ap_read(ap, ADIV5_AP_CFG);
+	ap->csw = adiv5_ap_read(ap, ADIV5_AP_CSW);
+	/* This reads the lower half of BASE */
+	ap->base = adiv5_ap_read(ap, ADIV5_AP_BASE_LOW);
+	const uint8_t base_flags = (uint8_t)ap->base & (ADIV5_AP_BASE_FORMAT | ADIV5_AP_BASE_PRESENT);
+	/* Check if this is a 64-bit AP */
+	if (cfg & ADIV5_AP_CFG_LARGE_ADDRESS) {
+		/* If this base value is invalid for a LPAE MEM-AP, bomb out here */
+		if (base_flags == (ADIV5_AP_BASE_FORMAT_LEGACY | ADIV5_AP_BASE_PRESENT_NO_ENTRY)) {
+			DEBUG_INFO(" -> Invalid\n");
+			return false;
+		}
+		/* Otherwise note this is a 64-bit AP and read the high part */
+		ap->flags |= ADIV5_AP_FLAGS_64BIT;
+		ap->base |= (uint64_t)adiv5_ap_read(ap, ADIV5_AP_BASE_HIGH) << 32U;
+	}
+	/* Check the Debug Base Address register for not-present. See ADIv5 Specification C2.6.1 */
+	if (base_flags == (ADIV5_AP_BASE_FORMAT_ADIV5 | ADIV5_AP_BASE_PRESENT_NO_ENTRY) ||
+		(!(ap->flags & ADIV5_AP_FLAGS_64BIT) && (uint32_t)ap->base == ADIV5_AP_BASE_NOT_PRESENT)) {
+		bool ignore_not_present = false;
+		/*
+			 * Debug Base Address not present in this MEM-AP
+			 * No debug entries... useless AP
+			 * AP0 on STM32MP157C reads 0x00000002
+			 *
+			 * NB: MSPM0 parts erroneously set BASE.P = 0 despite there being
+			 * valid debug components on AP0, so we have to have an exception
+			 * for this part family.
+			 */
+		if (ap->dp->target_designer_code == JEP106_MANUFACTURER_TEXAS && ap->base == 0xf0000002U)
+			ignore_not_present = true;
+
+		else if (ap->dp->target_designer_code == JEP106_MANUFACTURER_NORDIC && ap->base != 0x00000002U)
+			ignore_not_present = true;
+
+		if (!ignore_not_present) {
+			DEBUG_INFO(" -> Not Present\n");
+			return false;
+		}
+	}
+	/* Make sure we only pay attention to the base address, not the presence and format bits */
+	ap->base &= ADIV5_AP_BASE_BASEADDR;
+	/* Check if the AP is disabled, skipping it if that is the case */
+	if ((ap->csw & ADIV5_AP_CSW_AP_ENABLED) == 0U) {
+		DEBUG_INFO(" -> Disabled\n");
+		return false;
+	}
+
+	/* Apply bus-common fixups to the CSW value */
+	ap->csw &= ~(ADIV5_AP_CSW_SIZE_MASK | ADIV5_AP_CSW_ADDRINC_MASK);
+	ap->csw |= ADIV5_AP_CSW_DBGSWENABLE;
+
+	switch (ap_type) {
+	case ADIV5_AP_IDR_TYPE_APB2_3:
+		/* We have no prot modes on APB2 and APB3 */
+		break;
+	case ADIV5_AP_IDR_TYPE_AXI3_4:
+		/* XXX: Handle AXI4 w/ ACE-Lite which makes Mode and Type do ~things~™ (§E1.3.1, pg237) */
+		/* Clear any existing prot modes and disable memory tagging */
+		ap->csw &= ~(ADIV5_AP_CSW_AXI3_4_PROT_MASK | ADIV5_AP_CSW_AXI_MTE);
+		/* Check if secure access is allowed and enable it if so */
+		if (ap->csw & ADIV5_AP_CSW_SPIDEN)
+			ap->csw &= ~ADIV5_AP_CSW_AXI_PROT_NS;
+		else
+			ap->csw |= ADIV5_AP_CSW_AXI_PROT_NS;
+		/* Always privileged accesses */
+		ap->csw |= ADIV5_AP_CSW_AXI_PROT_PRIV;
+		break;
+	case ADIV5_AP_IDR_TYPE_AXI5:
+		/* Clear any existing prot modes and disable memory tagging */
+		ap->csw &= ~(ADIV5_AP_CSW_AXI5_PROT_MASK | ADIV5_AP_CSW_AXI_MTE);
+		/* Check if secure access is allowed and enable it if so */
+		if (ap->csw & ADIV5_AP_CSW_SPIDEN)
+			ap->csw &= ~ADIV5_AP_CSW_AXI_PROT_NS;
+		else
+			ap->csw |= ADIV5_AP_CSW_AXI_PROT_NS;
+		/* Always privileged accesses */
+		ap->csw |= ADIV5_AP_CSW_AXI_PROT_PRIV;
+		break;
+	case ADIV5_AP_IDR_TYPE_AHB3:
+	case ADIV5_AP_IDR_TYPE_AHB5:
+	case ADIV5_AP_IDR_TYPE_AHB5_HPROT:
+		/* Clear any existing HPROT modes */
+		ap->csw &= ~ADIV5_AP_CSW_AHB_HPROT_MASK;
+		/*
+			 * Ensure that MasterType is set to generate transactions as requested from the AHB-AP,
+			 * and that we generate privileged data requests via the HPROT bits
+			 */
+		ap->csw |= ADIV5_AP_CSW_AHB_MASTERTYPE | ADIV5_AP_CSW_AHB_HPROT_DATA | ADIV5_AP_CSW_AHB_HPROT_PRIV;
+		/* Check to see if secure access is supported and allowed */
+		if (ap->csw & ADIV5_AP_CSW_SPIDEN)
+			ap->csw &= ~ADIV5_AP_CSW_AHB_HNONSEC;
+		else
+			ap->csw |= ADIV5_AP_CSW_AHB_HNONSEC;
+		break;
+	case ADIV5_AP_IDR_TYPE_APB4_5:
+		/* Clear any existing prot modes and disable memory tagging */
+		ap->csw &= ~ADIV5_AP_CSW_APB_PPROT_MASK;
+		/* Check if secure access is allowed and enable it if so */
+		if (ap->csw & ADIV5_AP_CSW_SPIDEN)
+			ap->csw &= ~ADIV5_AP_CSW_APB_PPROT_NS;
+		else
+			ap->csw |= ADIV5_AP_CSW_APB_PPROT_NS;
+		ap->csw |= ADIV5_AP_CSW_APB_PPROT_PRIV;
+		break;
+	default:
+		DEBUG_ERROR("Unhandled AP type %u\n", ap_type);
+	}
+
+	if (cfg & ADIV5_AP_CFG_LARGE_ADDRESS)
+		DEBUG_INFO(" CFG=%08" PRIx32 " BASE=%08" PRIx32 "%08" PRIx32 " CSW=%08" PRIx32, cfg,
+			(uint32_t)(ap->base >> 32U), (uint32_t)ap->base, ap->csw);
+	else
+		DEBUG_INFO(" CFG=%08" PRIx32 " BASE=%08" PRIx32 " CSW=%08" PRIx32, cfg, (uint32_t)ap->base, ap->csw);
+
+	if (ap->csw & ADIV5_AP_CSW_TRINPROG) {
+		DEBUG_ERROR("AP %3u: Transaction in progress. AP is not usable!\n", ap->apsel);
+		return false;
+	}
+
+	return true;
+}
+
 bool adi_configure_ap(adiv5_access_port_s *const ap)
 {
 	/* Grab the ID register and make sure the value is sane (non-zero) */
@@ -345,108 +486,7 @@ bool adi_configure_ap(adiv5_access_port_s *const ap)
 	DEBUG_INFO("AP %3u: IDR=%08" PRIx32, ap->apsel, ap->idr);
 	/* If this is a MEM-AP */
 	if (ap_class == ADIV5_AP_IDR_CLASS_MEM && ap_type >= 1U && ap_type <= 8U) {
-		/* Grab the config, base and CSW registers */
-		const uint32_t cfg = adiv5_ap_read(ap, ADIV5_AP_CFG);
-		ap->csw = adiv5_ap_read(ap, ADIV5_AP_CSW);
-		/* This reads the lower half of BASE */
-		ap->base = adiv5_ap_read(ap, ADIV5_AP_BASE_LOW);
-		const uint8_t base_flags = (uint8_t)ap->base & (ADIV5_AP_BASE_FORMAT | ADIV5_AP_BASE_PRESENT);
-		/* Make sure we only pay attention to the base address, not the presence and format bits */
-		ap->base &= ADIV5_AP_BASE_BASEADDR;
-		/* Check if this is a 64-bit AP */
-		if (cfg & ADIV5_AP_CFG_LARGE_ADDRESS) {
-			/* If this base value is invalid for a LPAE MEM-AP, bomb out here */
-			if (base_flags == (ADIV5_AP_BASE_FORMAT_LEGACY | ADIV5_AP_BASE_PRESENT_NO_ENTRY)) {
-				DEBUG_INFO(" -> Invalid\n");
-				return false;
-			}
-			/* Otherwise note this is a 64-bit AP and read the high part */
-			ap->flags |= ADIV5_AP_FLAGS_64BIT;
-			ap->base |= (uint64_t)adiv5_ap_read(ap, ADIV5_AP_BASE_HIGH) << 32U;
-		}
-		/* Check the Debug Base Address register for not-present. See ADIv5 Specification C2.6.1 */
-		if (base_flags == (ADIV5_AP_BASE_FORMAT_ADIV5 | ADIV5_AP_BASE_PRESENT_NO_ENTRY) ||
-			(!(ap->flags & ADIV5_AP_FLAGS_64BIT) && (uint32_t)ap->base == ADIV5_AP_BASE_NOT_PRESENT)) {
-			/*
-			 * Debug Base Address not present in this MEM-AP
-			 * No debug entries... useless AP
-			 * AP0 on STM32MP157C reads 0x00000002
-			 */
-			DEBUG_INFO(" -> Not Present\n");
-			return false;
-		}
-		/* Check if the AP is disabled, skipping it if that is the case */
-		if ((ap->csw & ADIV5_AP_CSW_AP_ENABLED) == 0U) {
-			DEBUG_INFO(" -> Disabled\n");
-			return false;
-		}
-
-		/* Apply bus-common fixups to the CSW value */
-		ap->csw &= ~(ADIV5_AP_CSW_SIZE_MASK | ADIV5_AP_CSW_ADDRINC_MASK);
-		ap->csw |= ADIV5_AP_CSW_DBGSWENABLE;
-
-		switch (ap_type) {
-		case ADIV5_AP_IDR_TYPE_AXI3_4:
-			/* XXX: Handle AXI4 w/ ACE-Lite which makes Mode and Type do ~things~™ (§E1.3.1, pg237) */
-			/* Clear any existing prot modes and disable memory tagging */
-			ap->csw &= ~(ADIV5_AP_CSW_AXI3_4_PROT_MASK | ADIV5_AP_CSW_AXI_MTE);
-			/* Check if secure access is allowed and enable it if so */
-			if (ap->csw & ADIV5_AP_CSW_SPIDEN)
-				ap->csw &= ~ADIV5_AP_CSW_AXI_PROT_NS;
-			else
-				ap->csw |= ADIV5_AP_CSW_AXI_PROT_NS;
-			/* Always privileged accesses */
-			ap->csw |= ADIV5_AP_CSW_AXI_PROT_PRIV;
-			break;
-		case ADIV5_AP_IDR_TYPE_AXI5:
-			/* Clear any existing prot modes and disable memory tagging */
-			ap->csw &= ~(ADIV5_AP_CSW_AXI5_PROT_MASK | ADIV5_AP_CSW_AXI_MTE);
-			/* Check if secure access is allowed and enable it if so */
-			if (ap->csw & ADIV5_AP_CSW_SPIDEN)
-				ap->csw &= ~ADIV5_AP_CSW_AXI_PROT_NS;
-			else
-				ap->csw |= ADIV5_AP_CSW_AXI_PROT_NS;
-			/* Always privileged accesses */
-			ap->csw |= ADIV5_AP_CSW_AXI_PROT_PRIV;
-			break;
-		case ADIV5_AP_IDR_TYPE_AHB3:
-		case ADIV5_AP_IDR_TYPE_AHB5:
-		case ADIV5_AP_IDR_TYPE_AHB5_HPROT:
-			/* Clear any existing HPROT modes */
-			ap->csw &= ~ADIV5_AP_CSW_AHB_HPROT_MASK;
-			/*
-			 * Ensure that MasterType is set to generate transactions as requested from the AHB-AP,
-			 * and that we generate privileged data requests via the HPROT bits
-			 */
-			ap->csw |= ADIV5_AP_CSW_AHB_MASTERTYPE | ADIV5_AP_CSW_AHB_HPROT_DATA | ADIV5_AP_CSW_AHB_HPROT_PRIV;
-			/* Check to see if secure access is supported and allowed */
-			if (ap->csw & ADIV5_AP_CSW_SPIDEN)
-				ap->csw &= ~ADIV5_AP_CSW_AHB_HNONSEC;
-			else
-				ap->csw |= ADIV5_AP_CSW_AHB_HNONSEC;
-			break;
-		case ADIV5_AP_IDR_TYPE_APB4_5:
-			/* Clear any existing prot modes and disable memory tagging */
-			ap->csw &= ~ADIV5_AP_CSW_APB_PPROT_MASK;
-			/* Check if secure access is allowed and enable it if so */
-			if (ap->csw & ADIV5_AP_CSW_SPIDEN)
-				ap->csw &= ~ADIV5_AP_CSW_APB_PPROT_NS;
-			else
-				ap->csw |= ADIV5_AP_CSW_APB_PPROT_NS;
-			ap->csw |= ADIV5_AP_CSW_APB_PPROT_PRIV;
-			break;
-		default:
-			DEBUG_ERROR("Unhandled AP type %u\n", ap_type);
-		}
-
-		if (cfg & ADIV5_AP_CFG_LARGE_ADDRESS)
-			DEBUG_INFO(" CFG=%08" PRIx32 " BASE=%08" PRIx32 "%08" PRIx32 " CSW=%08" PRIx32, cfg,
-				(uint32_t)(ap->base >> 32U), (uint32_t)ap->base, ap->csw);
-		else
-			DEBUG_INFO(" CFG=%08" PRIx32 " BASE=%08" PRIx32 " CSW=%08" PRIx32, cfg, (uint32_t)ap->base, ap->csw);
-
-		if (ap->csw & ADIV5_AP_CSW_TRINPROG) {
-			DEBUG_ERROR("AP %3u: Transaction in progress. AP is not usable!\n", ap->apsel);
+		if (!adi_configure_mem_ap(ap)) {
 			return false;
 		}
 	}
@@ -536,6 +576,11 @@ uint32_t adi_mem_read32(adiv5_access_port_s *const ap, const target_addr32_t add
 	return ret;
 }
 
+void adi_mem_write32(adiv5_access_port_s *const ap, const target_addr32_t addr, const uint32_t value)
+{
+	adiv5_mem_write(ap, addr, &value, sizeof(value));
+}
+
 static void adi_parse_adi_rom_table(adiv5_access_port_s *const ap, const target_addr32_t base_address,
 	const size_t recursion_depth, const char *const indent, const uint64_t pidr)
 {
@@ -565,7 +610,7 @@ static void adi_parse_adi_rom_table(adiv5_access_port_s *const ap, const target_
 	}
 
 	/* Check SYSMEM bit */
-	const bool memtype = adi_mem_read32(ap, base_address + ADIV5_ROM_MEMTYPE) & ADIV5_ROM_MEMTYPE_SYSMEM;
+	const bool memtype = adi_mem_read32(ap, base_address + ADI_ROM_MEMTYPE) & ADI_ROM_MEMTYPE_SYSMEM;
 	if (adiv5_dp_error(ap->dp))
 		DEBUG_ERROR("Fault reading ROM table entry\n");
 	else if (memtype)
@@ -586,14 +631,147 @@ static void adi_parse_adi_rom_table(adiv5_access_port_s *const ap, const target_
 		if (entry == 0)
 			break;
 
-		if (!(entry & ADIV5_ROM_ROMENTRY_PRESENT)) {
+		if (!(entry & ADI_ROM_ROMENTRY_PRESENT)) {
 			DEBUG_INFO("%s%" PRIu32 " Entry 0x%08" PRIx32 " -> Not present\n", indent, i, entry);
 			continue;
 		}
 
 		/* Probe recursively */
-		adi_ap_component_probe(ap, base_address + (entry & ADIV5_ROM_ROMENTRY_OFFSET), recursion_depth + 1U, i);
+		adi_ap_component_probe(ap, base_address + (entry & ADI_ROM_ROMENTRY_OFFSET), recursion_depth + 1U, i);
 	}
+	DEBUG_INFO("%sROM Table: END\n", indent);
+}
+
+static bool adi_reset_resources(adiv5_access_port_s *const ap, const target_addr64_t base_address)
+{
+	/* Read out power request ID register 0 and check if power control is actually implemented */
+	const uint8_t pridr0 = adi_mem_read32(ap, base_address + CORESIGHT_ROM_PRIDR0) & 0x3fU;
+	if ((pridr0 & CORESIGHT_ROM_PRIDR0_VERSION_MASK) != CORESIGHT_ROM_PRIDR0_VERSION_NOT_IMPL)
+		ap->flags |= ADIV6_DP_FLAGS_HAS_PWRCTRL;
+	/* Now try and perform a debug reset request */
+	if (pridr0 & CORESIGHT_ROM_PRIDR0_HAS_DBG_RESET_REQ) {
+		platform_timeout_s timeout;
+		platform_timeout_set(&timeout, 250);
+
+		adi_mem_write32(ap, base_address + CORESIGHT_ROM_DBGRSTRR, CORESIGHT_ROM_DBGRST_REQ);
+		/* While the reset request is in progress */
+		while (adi_mem_read32(ap, base_address + CORESIGHT_ROM_DBGRSTRR) & CORESIGHT_ROM_DBGRST_REQ) {
+			/* Check if it's been acknowledge, and if it has, deassert the request */
+			if (adi_mem_read32(ap, base_address + CORESIGHT_ROM_DBGRSTAR) & CORESIGHT_ROM_DBGRST_REQ)
+				adi_mem_write32(ap, base_address + CORESIGHT_ROM_DBGRSTRR, 0U);
+			/* Check if the reset has timed out */
+			if (platform_timeout_is_expired(&timeout)) {
+				DEBUG_WARN("adi: debug reset failed\n");
+				adi_mem_write32(ap, base_address + CORESIGHT_ROM_DBGRSTRR, 0U);
+				break;
+			}
+		}
+	}
+	/* Regardless of what happened, extract whether system reset is supported this way */
+	if (pridr0 & CORESIGHT_ROM_PRIDR0_HAS_SYS_RESET_REQ)
+		ap->flags |= ADIV6_DP_FLAGS_HAS_SYSRESETREQ;
+	return true;
+}
+
+static inline uint64_t adi_read_coresight_rom_entry(
+	adiv5_access_port_s *const ap, const uint8_t rom_format, const target_addr64_t entry_address)
+{
+	const uint32_t entry_lower = adi_mem_read32(ap, entry_address);
+	if (rom_format == CORESIGHT_ROM_DEVID_FORMAT_32BIT)
+		return entry_lower;
+	const uint32_t entry_upper = adi_mem_read32(ap, entry_address + 4U);
+	return ((uint64_t)entry_upper << 32U) | (uint64_t)entry_lower;
+}
+
+static void adi_parse_coresight_v0_rom_table(adiv5_access_port_s *const ap, const target_addr64_t base_address,
+	const uint64_t recursion_depth, const char *const indent, const uint64_t pidr)
+{
+	/* Extract the designer code and part number from the part ID register */
+	const uint16_t designer_code = adi_designer_from_pidr(pidr);
+	const uint16_t part_number = pidr & PIDR_PN_MASK;
+
+#if defined(DEBUG_INFO_IS_NOOP)
+	(void)indent;
+	(void)designer_code;
+	(void)part_number;
+#endif
+
+	/* Now we know we're in a CoreSight v0 ROM table, read out the device ID field and set up the memory flag on the AP */
+	const uint8_t dev_id = adi_mem_read32(ap, base_address + CORESIGHT_ROM_DEVID) & 0x7fU;
+
+	if (adiv5_dp_error(ap->dp))
+		DEBUG_ERROR("Fault reading ROM table DEVID\n");
+
+	if (dev_id & CORESIGHT_ROM_DEVID_SYSMEM)
+		ap->flags |= ADIV5_AP_FLAGS_HAS_MEM;
+	const uint8_t rom_format = dev_id & CORESIGHT_ROM_DEVID_FORMAT;
+
+	/* Check if the power control registers are available, and if they are try to reset all debug resources */
+	if ((dev_id & CORESIGHT_ROM_DEVID_HAS_POWERREQ) && !adi_reset_resources(ap, base_address))
+		return;
+
+	DEBUG_INFO("%sROM Table: BASE=0x%0" PRIx32 "%08" PRIx32 " SYSMEM=%u, Manufacturer %03x Partno %03x (PIDR = "
+			   "0x%02" PRIx32 "%08" PRIx32 ")\n",
+		indent, (uint32_t)(base_address >> 32U), (uint32_t)base_address, 0U, designer_code, part_number,
+		(uint32_t)(pidr >> 32U), (uint32_t)pidr);
+
+	/* ROM table has at most 512 entries when 32-bit and 256 entries when 64-bit */
+	const uint32_t max_entries = rom_format == CORESIGHT_ROM_DEVID_FORMAT_32BIT ? 512U : 256U;
+	const size_t entry_shift = rom_format == CORESIGHT_ROM_DEVID_FORMAT_32BIT ? 2U : 3U;
+	for (uint32_t index = 0; index < max_entries; ++index) {
+		adiv5_dp_error(ap->dp);
+
+		/* Start by reading out the entry */
+		const uint64_t entry = adi_read_coresight_rom_entry(ap, rom_format, base_address + (index << entry_shift));
+
+		if (adiv5_dp_error(ap->dp)) {
+			DEBUG_ERROR("Fault reading ROM table entry %" PRIu32 "\n", index);
+			break;
+		}
+
+		const uint8_t presence = entry & CORESIGHT_ROM_ROMENTRY_ENTRY_MASK;
+		/* Check if the entry is valid */
+		if (presence == CORESIGHT_ROM_ROMENTRY_ENTRY_FINAL)
+			break;
+		/* Check for an entry to skip */
+		if (presence == CORESIGHT_ROM_ROMENTRY_ENTRY_NOT_PRESENT) {
+			DEBUG_INFO("%s%" PRIu32 " Entry 0x%0" PRIx32 "%08" PRIx32 " -> Not present\n", indent, index,
+				(uint32_t)(entry >> 32U), (uint32_t)entry);
+			continue;
+		}
+		/* Check that the entry isn't invalid */
+		if (presence == CORESIGHT_ROM_ROMENTRY_ENTRY_INVALID) {
+			DEBUG_INFO("%s%" PRIu32 " Entry invalid\n", indent, index);
+			continue;
+		}
+		/* Got a good entry? great! Figure out if it has a power domain to cycle and what the address offset is */
+		const target_addr64_t offset = entry & CORESIGHT_ROM_ROMENTRY_OFFSET_MASK;
+		if ((ap->flags & ADIV6_DP_FLAGS_HAS_PWRCTRL) & entry & CORESIGHT_ROM_ROMENTRY_POWERID_VALID) {
+			const uint8_t power_domain_offset =
+				((entry & CORESIGHT_ROM_ROMENTRY_POWERID_MASK) >> CORESIGHT_ROM_ROMENTRY_POWERID_SHIFT) << 2U;
+			/* Check if the power control register for this domain is present */
+			if (adi_mem_read32(ap, base_address + CORESIGHT_ROM_DBGPCR_BASE + power_domain_offset) &
+				CORESIGHT_ROM_DBGPCR_PRESENT) {
+				/* And if it is, ask the domain to power up */
+				adi_mem_write32(
+					ap, base_address + CORESIGHT_ROM_DBGPCR_BASE + power_domain_offset, CORESIGHT_ROM_DBGPCR_PWRREQ);
+				/* Then spin for a little waiting for the domain to become powered usefully */
+				platform_timeout_s timeout;
+				platform_timeout_set(&timeout, 250);
+				while (!(adi_mem_read32(ap, base_address + CORESIGHT_ROM_DBGPSR_BASE + power_domain_offset) &
+					CORESIGHT_ROM_DBGPSR_STATUS_ON)) {
+					if (platform_timeout_is_expired(&timeout)) {
+						DEBUG_WARN("adi: power-up failed\n");
+						return;
+					}
+				}
+			}
+		}
+
+		/* Now recursively probe the component */
+		adi_ap_component_probe(ap, base_address + offset, recursion_depth + 1U, index);
+	}
+
 	DEBUG_INFO("%sROM Table: END\n", indent);
 }
 
@@ -670,8 +848,8 @@ void adi_ap_component_probe(
 		uint16_t arch_id = 0;
 		if (cid_class == cidc_dc) {
 			/* Read out the component's identification information */
-			const uint32_t devarch = adi_mem_read32(ap, base_address + DEVARCH_OFFSET);
-			dev_type = adi_mem_read32(ap, base_address + DEVTYPE_OFFSET) & DEVTYPE_MASK;
+			const uint32_t devarch = adi_mem_read32(ap, base_address + CORESIGHT_ROM_DEVARCH);
+			dev_type = adi_mem_read32(ap, base_address + CORESIGHT_ROM_DEVTYPE) & DEVTYPE_MASK;
 
 			if (devarch & DEVARCH_PRESENT)
 				arch_id = devarch & DEVARCH_ARCHID_MASK;
@@ -680,24 +858,31 @@ void adi_ap_component_probe(
 		/* Look the component up and dispatch to a probe routine accordingly */
 		const arm_coresight_component_s *const component =
 			adi_lookup_component(base_address, entry_number, indent, cid_class, pidr, dev_type, arch_id);
+		if (component == NULL)
+			return;
 
-		if (component) {
-			switch (component->arch) {
-			case aa_cortexm:
-				DEBUG_INFO("%s-> cortexm_probe\n", indent + 1);
-				cortexm_probe(ap);
-				break;
-			case aa_cortexa:
-				DEBUG_INFO("%s-> cortexa_probe\n", indent + 1);
-				cortexa_probe(ap, base_address);
-				break;
-			case aa_cortexr:
-				DEBUG_INFO("%s-> cortexr_probe\n", indent + 1);
-				cortexr_probe(ap, base_address);
-				break;
-			default:
-				break;
-			}
+		switch (component->arch) {
+		case aa_cortexm:
+			DEBUG_INFO("%s-> cortexm_probe\n", indent + 1);
+			cortexm_probe(ap);
+			break;
+		case aa_cortexa:
+			DEBUG_INFO("%s-> cortexa_probe\n", indent + 1);
+			cortexa_probe(ap, base_address);
+			break;
+		case aa_cortexr:
+			DEBUG_INFO("%s-> cortexr_probe\n", indent + 1);
+			cortexr_probe(ap, base_address);
+			break;
+		/* Handle when the component is a CoreSight component ROM table */
+		case aa_rom_table:
+			if (pidr & PIDR_SIZE_MASK)
+				DEBUG_ERROR("Fault reading ROM table\n");
+			else
+				adi_parse_coresight_v0_rom_table(ap, base_address, recursion, indent, pidr);
+			break;
+		default:
+			break;
 		}
 	}
 }

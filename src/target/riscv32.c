@@ -40,11 +40,6 @@
 #include "gdb_packet.h"
 #include "adiv5.h"
 
-typedef struct riscv32_regs {
-	uint32_t gprs[32];
-	uint32_t pc;
-} riscv32_regs_s;
-
 /* This defines a match trigger that's for an address or data location */
 #define RV32_MATCH_ADDR_DATA_TRIGGER 0x20000000U
 /* A dmode of 1 restricts the writability of the trigger to debug mode only */
@@ -78,10 +73,11 @@ static int riscv32_breakwatch_clear(target_s *target, breakwatch_s *breakwatch);
 
 bool riscv32_probe(target_s *const target)
 {
+	/* 'E' base ISA has 16 GPRs + PC, 'I' base ISA has 32 GPRs + PC */
+	riscv_hart_s *const hart = riscv_hart_struct(target);
+	target->regs_size = ((hart->extensions & RV_ISA_EXT_EMBEDDED ? 16U : 32U) + 1U) * sizeof(uint32_t);
+
 	/* Finish setting up the target structure with generic rv32 functions */
-	target->core = "rv32";
-	/* Provide the length of a suitable registers structure */
-	target->regs_size = sizeof(riscv32_regs_s);
 	target->regs_read = riscv32_regs_read;
 	target->regs_write = riscv32_regs_write;
 	target->reg_write = riscv32_reg_write;
@@ -103,7 +99,7 @@ bool riscv32_probe(target_s *const target)
 		break;
 	}
 
-#if PC_HOSTED == 0
+#if CONFIG_BMDA == 0
 	gdb_outf("Please report unknown device with Designer 0x%x\n", target->designer_code);
 #else
 	DEBUG_WARN("Please report unknown device with Designer 0x%x\n", target->designer_code);
@@ -115,30 +111,30 @@ static void riscv32_regs_read(target_s *const target, void *const data)
 {
 	/* Grab the hart structure and figure out how many registers need reading out */
 	riscv_hart_s *const hart = riscv_hart_struct(target);
-	riscv32_regs_s *const regs = (riscv32_regs_s *)data;
+	uint32_t *const regs = (uint32_t *)data;
 	const size_t gprs_count = hart->extensions & RV_ISA_EXT_EMBEDDED ? 16U : 32U;
 	/* Loop through reading out the GPRs */
 	for (size_t gpr = 0; gpr < gprs_count; ++gpr) {
 		// TODO: handle when this fails..
-		riscv_csr_read(hart, RV_GPR_BASE + gpr, &regs->gprs[gpr]);
+		riscv_csr_read(hart, RV_GPR_BASE + gpr, &regs[gpr]);
 	}
 	/* Special access to grab the program counter that would be executed on resuming the hart */
-	riscv_csr_read(hart, RV_DPC, &regs->pc);
+	riscv_csr_read(hart, RV_DPC, &regs[gprs_count]);
 }
 
 static void riscv32_regs_write(target_s *const target, const void *const data)
 {
 	/* Grab the hart structure and figure out how many registers need reading out */
 	riscv_hart_s *const hart = riscv_hart_struct(target);
-	riscv32_regs_s *const regs = (riscv32_regs_s *)data;
+	const uint32_t *const regs = (const uint32_t *)data;
 	const size_t gprs_count = hart->extensions & RV_ISA_EXT_EMBEDDED ? 16U : 32U;
 	/* Loop through writing out the GPRs, except for the first which is always 0 */
 	for (size_t gpr = 1; gpr < gprs_count; ++gpr) {
 		// TODO: handle when this fails..
-		riscv_csr_write(hart, RV_GPR_BASE + gpr, &regs->gprs[gpr]);
+		riscv_csr_write(hart, RV_GPR_BASE + gpr, &regs[gpr]);
 	}
 	/* Special access to poke in the program counter that will be executed on resuming the hart */
-	riscv_csr_write(hart, RV_DPC, &regs->pc);
+	riscv_csr_write(hart, RV_DPC, &regs[gprs_count]);
 }
 
 static inline size_t riscv32_bool_to_4(const bool ret)

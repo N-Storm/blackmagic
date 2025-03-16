@@ -39,7 +39,7 @@
 #include "cortexm.h"
 #include "cortex_internal.h"
 #include "exception.h"
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 #include "bmp_hosted.h"
 #endif
 
@@ -128,7 +128,7 @@ static uint32_t cortexm_initial_halt(adiv5_access_port_s *ap)
 		 * will do nothing (return 0) and instead need RDBUFF read to get the data.
 		 */
 		if ((ap->dp->quirks & ADIV5_DP_QUIRK_MINDP)
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 			&& bmda_probe_info.type != PROBE_TYPE_CMSIS_DAP && bmda_probe_info.type != PROBE_TYPE_STLINK_V2
 #endif
 		)
@@ -176,7 +176,7 @@ static uint32_t cortexm_initial_halt(adiv5_access_port_s *ap)
  */
 static bool cortexm_prepare(adiv5_access_port_s *ap)
 {
-#if PC_HOSTED == 1 || ENABLE_DEBUG == 1
+#if CONFIG_BMDA == 1 || ENABLE_DEBUG == 1
 	uint32_t start_time = platform_time_ms();
 #endif
 	uint32_t dhcsr = cortexm_initial_halt(ap);
@@ -267,13 +267,18 @@ uint32_t adiv5_dp_read_dpidr(adiv5_debug_port_s *const dp)
 {
 	if (dp->read_no_check)
 		return adiv5_read_no_check(dp, ADIV5_DP_DPIDR);
-	volatile uint32_t dpidr = 0;
+	volatile uint32_t dpidr = 0U;
 	TRY (EXCEPTION_ALL) {
-		dpidr = adiv5_dp_low_access(dp, ADIV5_LOW_READ, ADIV5_DP_DPIDR, 0U);
+		/* JTAG has a clean DP read routine, so use that as that handles the RDBUFF quirk of the physical protocol */
+		if (dp->quirks & ADIV5_DP_JTAG)
+			dpidr = adiv5_dp_read(dp, ADIV5_DP_DPIDR);
+		/* Otherwise, if we're talking over SWD, issue a raw access for the register to avoid protocol recovery */
+		else
+			dpidr = adiv5_dp_low_access(dp, ADIV5_LOW_READ, ADIV5_DP_DPIDR, 0U);
 	}
 	CATCH () {
 	default:
-		return 0;
+		return 0U;
 	}
 	return dpidr;
 }
@@ -368,18 +373,20 @@ void adiv5_dp_init(adiv5_debug_port_s *const dp)
 	dp->ap_read = adiv5_ap_reg_read;
 	dp->mem_read = adiv5_mem_read_bytes;
 	dp->mem_write = adiv5_mem_write_bytes;
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 	bmda_adiv5_dp_init(dp);
 #endif
 
 	/*
-	 * Start by assuming DP v1 or later.
-	 * this may not be true for JTAG-DP (we attempt to detect this with the part ID code)
-	 * in such cases (DPv0) DPIDR is not implemented and reads are UNPREDICTABLE.
+	 * Unless we've got an ARM SoC-400 JTAG-DP, which must be ADIv5 and so DPv0, we can safely assume
+	 * that the DPIDR exists to read and find out what DP version we're working with here.
 	 *
-	 * for SWD-DP, we are guaranteed to be DP v1 or later.
+	 * If the part ID code indicates it is a SoC-400 JTAG-DP, however, it is DPv0. In this case, DPIDR
+	 * is not implemented and attempting to read is is UNPREDICTABLE so we want to avoid doing that.
 	 */
-	if (dp->designer_code != JEP106_MANUFACTURER_ARM || dp->partno != JTAG_IDCODE_PARTNO_DPV0) {
+	if (dp->designer_code != JEP106_MANUFACTURER_ARM || dp->partno != JTAG_IDCODE_PARTNO_SOC400_4BIT) {
+		/* Ensure that DPIDR is definitely selected */
+		adiv5_dp_write(dp, ADIV5_DP_SELECT, ADIV5_DP_BANK0);
 		const uint32_t dpidr = adiv5_dp_read_dpidr(dp);
 		if (!dpidr) {
 			DEBUG_ERROR("Failed to read DPIDR\n");
@@ -506,29 +513,32 @@ void adiv5_dp_init(adiv5_debug_port_s *const dp)
 		}
 
 		kinetis_mdm_probe(ap);
-		nrf51_mdm_probe(ap);
+		nrf51_ctrl_ap_probe(ap);
+		nrf54l_ctrl_ap_probe(ap);
 		efm32_aap_probe(ap);
 		lpc55_dmap_probe(ap);
 
-		/* Try to prepare the AP if it seems to be a AHB3 MEM-AP */
-		if (!ap->apsel && ADIV5_AP_IDR_CLASS(ap->idr) == 8U && ADIV5_AP_IDR_TYPE(ap->idr) == ARM_AP_TYPE_AHB3) {
-			if (!cortexm_prepare(ap))
-				DEBUG_WARN("adiv5: Failed to prepare AP, results may be unpredictable\n");
-		}
+		if (ADIV5_AP_IDR_CLASS(ap->idr) == ADIV5_AP_IDR_CLASS_MEM) {
+			/* Try to prepare the AP if it seems to be a AHB3 MEM-AP */
+			if (!ap->apsel && ADIV5_AP_IDR_TYPE(ap->idr) == ARM_AP_TYPE_AHB3) {
+				if (!cortexm_prepare(ap))
+					DEBUG_WARN("adiv5: Failed to prepare AP, results may be unpredictable\n");
+			}
 
-		/* The rest should only be added after checking ROM table */
-		adi_ap_component_probe(ap, ap->base, 0, 0);
-		/* Having completed discovery on this AP, try to resume any halted cores */
-		adi_ap_resume_cores(ap);
+			/* The rest should only be added after checking ROM table */
+			adi_ap_component_probe(ap, ap->base, 0, 0);
+			/* Having completed discovery on this AP, try to resume any halted cores */
+			adi_ap_resume_cores(ap);
 
-		/*
-		 * Due to the Tiva TM4C1294KCDT (among others) repeating the single AP ad-nauseum,
-		 * this check is needed so that we bail rather than repeating the same AP ~256 times.
-		 */
-		if (ap->dp->quirks & ADIV5_DP_QUIRK_DUPED_AP) {
-			adiv5_ap_unref(ap);
-			adiv5_dp_unref(dp);
-			return;
+			/*
+			* Due to the Tiva TM4C1294KCDT (among others) repeating the single AP ad-nauseum,
+			* this check is needed so that we bail rather than repeating the same AP ~256 times.
+			*/
+			if (ap->dp->quirks & ADIV5_DP_QUIRK_DUPED_AP) {
+				adiv5_ap_unref(ap);
+				adiv5_dp_unref(dp);
+				return;
+			}
 		}
 
 		adiv5_ap_unref(ap);

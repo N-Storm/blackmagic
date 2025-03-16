@@ -102,7 +102,7 @@ const jtag_dev_descr_s dev_descr[] = {
 		.descr = "NPX: LPC11C24.",
 	},
 #endif
-#ifdef ENABLE_XILINX
+#ifdef CONFIG_XILINX
 	{
 		.idcode = 0x1396d093U,
 		.idmask = 0xffffffffU,
@@ -404,7 +404,7 @@ const jtag_dev_descr_s dev_descr[] = {
 			},
 	},
 #endif
-#ifdef ENABLE_RISCV
+#ifdef CONFIG_RISCV
 	{
 		.idcode = 0x0000563dU,
 		.idmask = 0x0fffffffU,
@@ -414,7 +414,7 @@ const jtag_dev_descr_s dev_descr[] = {
 		.handler = riscv_jtag_dtm_handler,
 	},
 #endif
-#if defined(ENABLE_CORTEXAR) // && defined(ENABLE_SITARA)
+#if defined(CONFIG_CORTEXAR) // && defined(ENABLE_SITARA)
 	{
 		.idcode = 0x0b90002fU,
 		.idmask = 0x0ff00fffU,

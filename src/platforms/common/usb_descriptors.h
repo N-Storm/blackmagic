@@ -32,8 +32,6 @@
 #include "version.h"
 #include "usb_types.h"
 
-#define BOARD_IDENT "Black Magic Probe " PLATFORM_IDENT FIRMWARE_VERSION
-
 /* Top-level device descriptor */
 static const usb_device_descriptor_s dev_desc = {
 	.bLength = USB_DT_DEVICE_SIZE,
@@ -52,7 +50,7 @@ static const usb_device_descriptor_s dev_desc = {
 #endif
 	.idVendor = 0x1d50,
 	.idProduct = 0x6018,
-	.bcdDevice = 0x0109,
+	.bcdDevice = 0x0200,
 	.iManufacturer = 1,
 	.iProduct = 2,
 	.iSerialNumber = 3,
@@ -416,6 +414,10 @@ static const usb_config_descriptor_s config = {
 
 	.interface = ifaces,
 };
+
+#ifdef PLATFORM_IDENT_DYNAMIC
+#error "Dynamic platform identification not supported by the in-tree USB descriptors at this time"
+#endif
 
 static const char *const usb_strings[] = {
 	"Black Magic Debug",

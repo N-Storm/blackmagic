@@ -31,7 +31,7 @@ static bool nrf51_flash_erase(target_flash_s *f, target_addr_t addr, size_t len)
 static bool nrf51_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len);
 static bool nrf51_flash_prepare(target_flash_s *f);
 static bool nrf51_flash_done(target_flash_s *f);
-static bool nrf51_mass_erase(target_s *t);
+static bool nrf51_mass_erase(target_s *t, platform_timeout_s *print_progess);
 
 static bool nrf51_cmd_erase_uicr(target_s *t, int argc, const char **argv);
 static bool nrf51_cmd_protect_flash(target_s *t, int argc, const char **argv);
@@ -142,14 +142,14 @@ bool nrf51_probe(target_s *t)
 	uint32_t info_part = target_mem32_read32(t, NRF52_PART_INFO);
 	if (info_part != 0xffffffffU && info_part != 0 && (info_part & 0x00ff000U) == 0x52000U) {
 		uint32_t ram_size = target_mem32_read32(t, NRF52_INFO_RAM);
-		t->driver = "Nordic nRF52";
+		t->driver = "nRF52";
 		t->target_options |= TOPT_INHIBIT_NRST;
 		target_add_ram32(t, 0x20000000U, ram_size * 1024U);
 		nrf51_add_flash(t, 0, page_size * code_size, page_size);
 		nrf51_add_flash(t, NRF51_UICR, page_size, page_size);
 		target_add_commands(t, nrf51_cmd_list, "nRF52");
 	} else {
-		t->driver = "Nordic nRF51";
+		t->driver = "nRF51";
 		/*
 		 * Use the biggest RAM size seen in NRF51 fammily.
 		 * IDCODE is kept as '0', as deciphering is hard and there is later no usage.
@@ -164,29 +164,36 @@ bool nrf51_probe(target_s *t)
 	return true;
 }
 
-static bool nrf51_wait_ready(target_s *const t, platform_timeout_s *const timeout)
+static bool nrf51_wait_ready(target_s *const t, platform_timeout_s *const print_progress)
 {
 	/* Poll for NVMC_READY */
 	while (target_mem32_read32(t, NRF51_NVMC_READY) == 0) {
 		if (target_check_error(t))
 			return false;
-		if (timeout)
-			target_print_progress(timeout);
+		if (print_progress)
+			target_print_progress(print_progress);
 	}
 	return true;
 }
 
-static bool nrf51_flash_prepare(target_flash_s *f)
+static bool nrf51_flash_prepare(target_flash_s *const f)
 {
-	target_s *t = f->t;
-	/* If there is a buffer allocated, we're in the Flash write phase, otherwise it's erase */
-	if (f->buf)
+	target_s *const target = f->t;
+
+	switch (f->operation) {
+	case FLASH_OPERATION_WRITE:
 		/* Enable write */
-		target_mem32_write32(t, NRF51_NVMC_CONFIG, NRF51_NVMC_CONFIG_WEN);
-	else
+		target_mem32_write32(target, NRF51_NVMC_CONFIG, NRF51_NVMC_CONFIG_WEN);
+		break;
+	case FLASH_OPERATION_ERASE:
 		/* Enable erase */
-		target_mem32_write32(t, NRF51_NVMC_CONFIG, NRF51_NVMC_CONFIG_EEN);
-	return nrf51_wait_ready(t, NULL);
+		target_mem32_write32(target, NRF51_NVMC_CONFIG, NRF51_NVMC_CONFIG_EEN);
+		break;
+	default:
+		return false; /* Unsupported operation */
+	}
+
+	return nrf51_wait_ready(target, NULL);
 }
 
 static bool nrf51_flash_done(target_flash_s *f)
@@ -225,20 +232,16 @@ static bool nrf51_flash_write(target_flash_s *f, target_addr_t dest, const void 
 	return nrf51_wait_ready(t, NULL);
 }
 
-static bool nrf51_mass_erase(target_s *t)
+static bool nrf51_mass_erase(target_s *const t, platform_timeout_s *const print_progess)
 {
-	target_reset(t);
-
 	/* Enable erase */
 	target_mem32_write32(t, NRF51_NVMC_CONFIG, NRF51_NVMC_CONFIG_EEN);
 	if (!nrf51_wait_ready(t, NULL))
 		return false;
 
-	platform_timeout_s timeout;
-	platform_timeout_set(&timeout, 500U);
 	/* Erase all */
 	target_mem32_write32(t, NRF51_NVMC_ERASEALL, 1U);
-	return nrf51_wait_ready(t, &timeout);
+	return nrf51_wait_ready(t, print_progess);
 }
 
 static bool nrf51_cmd_erase_uicr(target_s *t, int argc, const char **argv)
@@ -397,20 +400,20 @@ static bool nrf51_cmd_read(target_s *t, int argc, const char **argv)
 	return nrf51_cmd_read_help(t, 0, NULL);
 }
 
-#define NRF52_MDM_IDR 0x02880000U
+#define NRF52_CTRL_AP_IDR 0x02880000U
 
-static bool nrf51_mdm_mass_erase(target_s *t);
+static bool nrf51_ctrl_ap_mass_erase(target_s *t, platform_timeout_s *print_progess);
 
-#define MDM_POWER_EN  ADIV5_DP_REG(0x01U)
-#define MDM_SELECT_AP ADIV5_DP_REG(0x02U)
-#define MDM_STATUS    ADIV5_AP_REG(0x08U)
-#define MDM_CONTROL   ADIV5_AP_REG(0x04U)
-#define MDM_PROT_EN   ADIV5_AP_REG(0x0cU)
+#define CTRL_AP_POWER_EN  ADIV5_DP_REG(0x01U)
+#define CTRL_AP_SELECT_AP ADIV5_DP_REG(0x02U)
+#define CTRL_AP_STATUS    ADIV5_AP_REG(0x08U)
+#define CTRL_AP_CONTROL   ADIV5_AP_REG(0x04U)
+#define CTRL_AP_PROT_EN   ADIV5_AP_REG(0x0cU)
 
-bool nrf51_mdm_probe(adiv5_access_port_s *ap)
+bool nrf51_ctrl_ap_probe(adiv5_access_port_s *ap)
 {
 	switch (ap->idr) {
-	case NRF52_MDM_IDR:
+	case NRF52_CTRL_AP_IDR:
 		break;
 	default:
 		return false;
@@ -420,42 +423,41 @@ bool nrf51_mdm_probe(adiv5_access_port_s *ap)
 	if (!t)
 		return false;
 
-	t->mass_erase = nrf51_mdm_mass_erase;
+	t->enter_flash_mode = target_enter_flash_mode_stub;
+	t->mass_erase = nrf51_ctrl_ap_mass_erase;
 	adiv5_ap_ref(ap);
 	t->priv = ap;
-	t->priv_free = (void *)adiv5_ap_unref;
+	t->priv_free = (priv_free_func)adiv5_ap_unref;
 
-	uint32_t status = adiv5_ap_read(ap, MDM_PROT_EN);
-	status = adiv5_ap_read(ap, MDM_PROT_EN);
+	adiv5_ap_read(ap, CTRL_AP_PROT_EN);
+	const uint32_t status = adiv5_ap_read(ap, CTRL_AP_PROT_EN);
 	if (status)
-		t->driver = "Nordic nRF52 Access Port";
+		t->driver = "nRF52 Access Port";
 	else
-		t->driver = "Nordic nRF52 Access Port (protected)";
+		t->driver = "nRF52 Access Port (protected)";
 	t->regs_size = 0;
 
 	return true;
 }
 
-static bool nrf51_mdm_mass_erase(target_s *t)
+static bool nrf51_ctrl_ap_mass_erase(target_s *const t, platform_timeout_s *const print_progess)
 {
-	adiv5_access_port_s *ap = t->priv;
+	adiv5_access_port_s *const ap = t->priv;
 
-	uint32_t status = adiv5_ap_read(ap, MDM_STATUS);
-	adiv5_dp_write(ap->dp, MDM_POWER_EN, 0x50000000U);
-	adiv5_dp_write(ap->dp, MDM_SELECT_AP, 0x01000000U);
-	adiv5_ap_write(ap, MDM_CONTROL, 0x00000001U);
+	uint32_t status = adiv5_ap_read(ap, CTRL_AP_STATUS);
+	adiv5_dp_write(ap->dp, CTRL_AP_POWER_EN, 0x50000000U);
+	adiv5_dp_write(ap->dp, CTRL_AP_SELECT_AP, 0x01000000U);
+	adiv5_ap_write(ap, CTRL_AP_CONTROL, 0x00000001U);
 
-	platform_timeout_s timeout;
-	platform_timeout_set(&timeout, 500U);
 	// Read until 0, probably should have a timeout here...
 	do {
-		status = adiv5_ap_read(ap, MDM_STATUS);
-		target_print_progress(&timeout);
+		status = adiv5_ap_read(ap, CTRL_AP_STATUS);
+		target_print_progress(print_progess);
 	} while (status);
 
 	// The second read will provide true prot status
-	status = adiv5_ap_read(ap, MDM_PROT_EN);
-	status = adiv5_ap_read(ap, MDM_PROT_EN);
+	status = adiv5_ap_read(ap, CTRL_AP_PROT_EN);
+	status = adiv5_ap_read(ap, CTRL_AP_PROT_EN);
 
 	// Should we return the prot status here?
 	return true;

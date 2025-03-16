@@ -2,6 +2,8 @@
  * This file is part of the Black Magic Debug project.
  *
  * Copyright (C) 2019-2021 Uwe Bonnes <bon@elektron.ikp.physik.tu-darmstadt.de>
+ * Copyright (C) 2023-2024 1BitSquared <info@1bitsquared.com>
+ * Modified by Rachel Mant <git@dragonmux.network>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,7 +26,7 @@
 #include "adiv5.h"
 #include "cli.h"
 
-bool dap_init(void);
+bool dap_init(bool allow_fallback);
 void dap_exit_function(void);
 void dap_adiv5_dp_init(adiv5_debug_port_s *dp);
 void dap_adiv6_dp_init(adiv5_debug_port_s *dp);
@@ -33,6 +35,7 @@ bool dap_swd_init(adiv5_debug_port_s *dp);
 void dap_jtag_dp_init(adiv5_debug_port_s *dp);
 uint32_t dap_max_frequency(uint32_t clock);
 void dap_swd_configure(uint8_t cfg);
-void dap_nrst_set_val(bool assert);
+bool dap_nrst_get_val(void);
+bool dap_nrst_set_val(bool assert);
 
 #endif /* PLATFORMS_HOSTED_CMSIS_DAP_H */

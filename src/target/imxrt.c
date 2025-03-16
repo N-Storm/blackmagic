@@ -50,10 +50,26 @@
 #define IMXRT_SRC_BOOT_MODE1 (IMXRT_SRC_BASE + 0x004U)
 #define IMXRT_SRC_BOOT_MODE2 (IMXRT_SRC_BASE + 0x01cU)
 
-#define IMXRT_OCRAM1_BASE  UINT32_C(0x20280000)
-#define IMXRT_OCRAM1_SIZE  0x00080000U
-#define IMXRT_OCRAM2_BASE  UINT32_C(0x20200000)
-#define IMXRT_OCRAM2_SIZE  0x00080000U
+#define IMXRT_OCRAM1_BASE UINT32_C(0x20280000)
+#define IMXRT_OCRAM1_SIZE 0x00080000U
+#define IMXRT_OCRAM2_BASE UINT32_C(0x20200000)
+#define IMXRT_OCRAM2_SIZE 0x00080000U
+
+#define IMXRT117x_PART_ID 0x88c6U
+
+#define IMXRT117x_OCRAM_M4_BASE   0x20200000U /* Only available when M4 is powered up */
+#define IMXRT117x_OCRAM_M4_SIZE   0x00040000U
+#define IMXRT117x_OCRAM1_BASE     0x20240000U
+#define IMXRT117x_OCRAM1_SIZE     0x00080000U
+#define IMXRT117x_OCRAM2_BASE     0x202c0000U
+#define IMXRT117x_OCRAM2_SIZE     0x00080000U
+#define IMXRT117x_OCRAM1_ECC_BASE 0x20340000U
+#define IMXRT117x_OCRAM1_ECC_SIZE 0x00010000U
+#define IMXRT117x_OCRAM2_ECC_BASE 0x20350000U
+#define IMXRT117x_OCRAM2_ECC_SIZE 0x00010000U
+#define IMXRT117x_OCRAM_M7_BASE   0x20360000U
+#define IMXRT117x_OCRAM_M7_SIZE   0x000a0000U
+
 #define IMXRT_FLEXSPI_BASE UINT32_C(0x60000000)
 
 #define IMXRT_MPU_BASE UINT32_C(0xe000ed90)
@@ -244,8 +260,19 @@ bool imxrt_probe(target_s *const target)
 	}
 
 	/* Build the RAM map for the part */
-	target_add_ram32(target, IMXRT_OCRAM1_BASE, IMXRT_OCRAM1_SIZE);
-	target_add_ram32(target, IMXRT_OCRAM2_BASE, IMXRT_OCRAM2_SIZE);
+	if (target->part_id == IMXRT117x_PART_ID) {
+		target_add_ram32(target, IMXRT117x_OCRAM_M4_BASE, IMXRT117x_OCRAM_M4_SIZE);
+		target_add_ram32(target, IMXRT117x_OCRAM1_BASE, IMXRT117x_OCRAM1_SIZE);
+		target_add_ram32(target, IMXRT117x_OCRAM2_BASE, IMXRT117x_OCRAM2_SIZE);
+		target_add_ram32(target, IMXRT117x_OCRAM1_ECC_BASE, IMXRT117x_OCRAM1_ECC_SIZE);
+		target_add_ram32(target, IMXRT117x_OCRAM2_ECC_BASE, IMXRT117x_OCRAM2_ECC_SIZE);
+		target_add_ram32(target, IMXRT117x_OCRAM_M7_BASE, IMXRT117x_OCRAM_M7_SIZE);
+
+	} else {
+		/* Generic RAM mapping - probably not accurate to all IMXRT devices */
+		target_add_ram32(target, IMXRT_OCRAM1_BASE, IMXRT_OCRAM1_SIZE);
+		target_add_ram32(target, IMXRT_OCRAM2_BASE, IMXRT_OCRAM2_SIZE);
+	}
 
 	if (priv->boot_source == BOOT_FLEX_SPI) {
 		/* Try to detect the Flash that should be attached */
@@ -253,7 +280,6 @@ bool imxrt_probe(target_s *const target)
 		spi_flash_id_s flash_id;
 		imxrt_spi_read(target, SPI_FLASH_CMD_READ_JEDEC_ID, 0, &flash_id, sizeof(flash_id));
 
-		target->mass_erase = bmp_spi_mass_erase;
 		target->enter_flash_mode = imxrt_enter_flash_mode;
 		target->exit_flash_mode = imxrt_exit_flash_mode;
 
@@ -286,8 +312,8 @@ static bool imxrt_ident_device(target_s *const target)
 	const uint16_t cpuid_partno = target->cpuid & CORTEX_CPUID_PARTNO_MASK;
 	if (cpuid_partno == CORTEX_M33)
 		rom_location = IMXRTx00_ROM_FINGERPRINT_ADDR;
-	else if (cpuid_partno == CORTEX_M7) {
-		if (target->part_id == 0x88c6U)
+	else if (cpuid_partno == CORTEX_M4 || cpuid_partno == CORTEX_M7) {
+		if (target->part_id == IMXRT117x_PART_ID)
 			rom_location = IMXRT11xx_ROM_FINGERPRINT_ADDR;
 		else
 			rom_location = IMXRT10xx_ROM_FINGERPRINT_ADDR;
@@ -521,7 +547,7 @@ static void imxrt_spi_wait_complete(target_s *const target)
 	target_mem32_write32(target, IMXRT_FLEXSPI1_INT(priv), IMXRT_FLEXSPI1_INT_PRG_CMD_DONE);
 	/* Check if any errors occurred */
 	if (target_mem32_read32(target, IMXRT_FLEXSPI1_INT(priv)) & IMXRT_FLEXSPI1_INT_CMD_ERR) {
-#if ENABLE_DEBUG == 1 && PC_HOSTED == 1
+#if ENABLE_DEBUG == 1 && CONFIG_BMDA == 1
 		/* Read out the status code and display it */
 		const uint32_t status = target_mem32_read32(target, IMXRT_FLEXSPI1_STAT1(priv));
 		DEBUG_TARGET("Error executing sequence, offset %u, error code %u\n", (uint8_t)(status >> 16U) & 0xfU,

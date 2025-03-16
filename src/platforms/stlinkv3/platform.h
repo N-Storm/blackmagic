@@ -90,7 +90,7 @@ extern bool debug_bmp;
 
 #define TMS_SET_MODE()                                                    \
 	gpio_mode_setup(TMS_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, TMS_PIN); \
-	gpio_set_output_options(TMS_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, TMS_PIN);
+	gpio_set_output_options(TMS_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_25MHZ, TMS_PIN);
 
 #define SWDIO_MODE_FLOAT()                         \
 	do {                                           \
@@ -112,14 +112,14 @@ extern bool debug_bmp;
 	do {                                                                              \
 		gpio_set_output_options(TMS_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_25MHZ, TMS_PIN); \
 		gpio_set_output_options(TCK_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_25MHZ, TCK_PIN); \
-		gpio_set_output_options(TDO_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_25MHZ, TDO_PIN); \
+		gpio_set_output_options(TDI_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_25MHZ, TDI_PIN); \
 	} while (0)
 
 #define PIN_MODE_NORMAL()                                                            \
 	do {                                                                             \
 		gpio_set_output_options(TMS_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, TMS_PIN); \
 		gpio_set_output_options(TCK_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, TCK_PIN); \
-		gpio_set_output_options(TDO_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, TDO_PIN); \
+		gpio_set_output_options(TDI_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, TDI_PIN); \
 	} while (0)
 
 extern const struct _usbd_driver stm32f723_usb_driver;
@@ -170,7 +170,7 @@ extern const struct _usbd_driver stm32f723_usb_driver;
 	do {                                                                                                   \
 		rcc_periph_clock_enable(USBUSART_PORT_CLKEN);                                                      \
 		gpio_mode_setup(USBUSART_PORT, GPIO_MODE_AF, GPIO_PUPD_PULLUP, USBUSART_TX_PIN | USBUSART_RX_PIN); \
-		gpio_set_output_options(USBUSART_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, USBUSART_TX_PIN);          \
+		gpio_set_output_options(USBUSART_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_25MHZ, USBUSART_TX_PIN);         \
 		gpio_set_af(USBUSART_PORT, USBUSART_PIN_AF, USBUSART_TX_PIN | USBUSART_RX_PIN);                    \
 	} while (0)
 

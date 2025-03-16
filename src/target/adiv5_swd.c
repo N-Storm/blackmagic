@@ -75,11 +75,19 @@ static void dormant_to_swd_sequence(void)
 	 * §5.3.4 Switching out of Dormant state
 	 */
 
-	DEBUG_INFO("Switching out of dormant state into SWD\n");
-
 	/* Send at least 8 SWCLKTCK cycles with SWDIOTMS HIGH */
 	swd_line_reset_sequence(false);
+
+	/*
+	 * If the target is both JTAG and SWD with JTAG as default, switch JTAG->DS first.
+	 * See B5.3.2
+	 */
+	DEBUG_INFO("Switching from JTAG to dormant\n");
+	swd_proc.seq_out(ADIV5_JTAG_TO_DORMANT_SEQUENCE0, 5U);
+	swd_proc.seq_out(ADIV5_JTAG_TO_DORMANT_SEQUENCE1, 31U);
+	swd_proc.seq_out(ADIV5_JTAG_TO_DORMANT_SEQUENCE2, 8U);
 	/* Send the 128-bit Selection Alert sequence on SWDIOTMS */
+	DEBUG_INFO("Switching out of dormant state into SWD\n");
 	swd_proc.seq_out(ADIV5_SELECTION_ALERT_SEQUENCE_0, 32U);
 	swd_proc.seq_out(ADIV5_SELECTION_ALERT_SEQUENCE_1, 32U);
 	swd_proc.seq_out(ADIV5_SELECTION_ALERT_SEQUENCE_2, 32U);
@@ -133,7 +141,7 @@ bool adiv5_swd_write_no_check(const uint16_t addr, const uint32_t data)
 	const uint8_t res = swd_proc.seq_in(3U);
 	swd_proc.seq_out_parity(data, 32U);
 	swd_proc.seq_out(0, 8U);
-	return res != SWDP_ACK_OK;
+	return res != SWD_ACK_OK;
 }
 
 uint32_t adiv5_swd_read_no_check(const uint16_t addr)
@@ -144,7 +152,7 @@ uint32_t adiv5_swd_read_no_check(const uint16_t addr)
 	uint32_t data = 0;
 	swd_proc.seq_in_parity(&data, 32U);
 	swd_proc.seq_out(0, 8U);
-	return res == SWDP_ACK_OK ? data : 0;
+	return res == SWD_ACK_OK ? data : 0;
 }
 
 bool adiv5_swd_scan(const uint32_t targetid)
@@ -165,7 +173,7 @@ bool adiv5_swd_scan(const uint32_t targetid)
 	dp->error = adiv5_swd_clear_error;
 	dp->abort = adiv5_swd_abort;
 
-#if PC_HOSTED == 0
+#if CONFIG_BMDA == 0
 	swdptap_init();
 #else
 	if (!bmda_swd_dp_init(dp)) {
@@ -234,13 +242,13 @@ bool adiv5_swd_scan(const uint32_t targetid)
 	}
 
 	/* If we were given targetid or we have a DPv2+ device, do a multi-drop scan */
-#if PC_HOSTED == 0
+#if CONFIG_BMDA == 0
 	/* On non hosted platforms, scan_multidrop can be constant */
 	const
 #endif
 		bool scan_multidrop = targetid || dp->version >= 2U;
 
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 	if (scan_multidrop && !dp->write_no_check) {
 		DEBUG_WARN("Discovered multi-drop enabled target but CMSIS_DAP < v1.2 cannot handle multi-drop\n");
 		scan_multidrop = false;
@@ -353,14 +361,25 @@ uint32_t adiv5_swd_clear_error(adiv5_debug_port_s *const dp, const bool protocol
 		swd_line_reset_sequence(true);
 		if (dp->version >= 2U)
 			adiv5_write_no_check(dp, ADIV5_DP_TARGETSEL, dp->targetsel);
-		adiv5_read_no_check(dp, ADIV5_DP_DPIDR);
-		/* Exception here is unexpected, so do not catch */
+		adiv5_dp_low_access(dp, ADIV5_LOW_READ, ADIV5_DP_DPIDR, 0U);
 	}
-	const uint32_t err = adiv5_read_no_check(dp, ADIV5_DP_CTRLSTAT) &
-		(ADIV5_DP_CTRLSTAT_STICKYORUN | ADIV5_DP_CTRLSTAT_STICKYCMP | ADIV5_DP_CTRLSTAT_STICKYERR |
-			ADIV5_DP_CTRLSTAT_WDATAERR);
-	uint32_t clr = 0;
+	/* Try to read the current target status */
+	const uint32_t err = adiv5_read_no_check(dp, ADIV5_DP_CTRLSTAT);
+	/* If the read failed for some reason */
+	if (err == 0U) {
+		/* We probably hit a protocol error.. */
+		if (!protocol_recovery)
+			/* So, restart this function, doing a full protocol recovery cycle */
+			return adiv5_swd_clear_error(dp, true);
+		/*
+		 * Otherwise if we tried and failed to recover the part, propagate an error value so
+		 * the caller doesn't think everything's fine and dandy
+		 */
+		return ADIV5_DP_CTRLSTAT_ERRMASK;
+	}
 
+	/* Hope we got a valid status.. unpack any errors that need clearing */
+	uint32_t clr = 0;
 	if (err & ADIV5_DP_CTRLSTAT_STICKYORUN)
 		clr |= ADIV5_DP_ABORT_ORUNERRCLR;
 	if (err & ADIV5_DP_CTRLSTAT_STICKYCMP)
@@ -370,10 +389,13 @@ uint32_t adiv5_swd_clear_error(adiv5_debug_port_s *const dp, const bool protocol
 	if (err & ADIV5_DP_CTRLSTAT_WDATAERR)
 		clr |= ADIV5_DP_ABORT_WDERRCLR;
 
+	/* If there are any, then clear them */
 	if (clr)
 		adiv5_write_no_check(dp, ADIV5_DP_ABORT, clr);
 	dp->fault = 0;
-	return err;
+	return err &
+		(ADIV5_DP_CTRLSTAT_STICKYORUN | ADIV5_DP_CTRLSTAT_STICKYCMP | ADIV5_DP_CTRLSTAT_STICKYERR |
+			ADIV5_DP_CTRLSTAT_WDATAERR);
 }
 
 uint32_t adiv5_swd_raw_access(adiv5_debug_port_s *dp, const uint8_t rnw, const uint16_t addr, const uint32_t value)
@@ -383,13 +405,13 @@ uint32_t adiv5_swd_raw_access(adiv5_debug_port_s *dp, const uint8_t rnw, const u
 
 	const uint8_t request = make_packet_request(rnw, addr);
 	uint32_t response = 0;
-	uint8_t ack = SWDP_ACK_WAIT;
+	uint8_t ack = SWD_ACK_WAIT;
 	platform_timeout_s timeout;
 	platform_timeout_set(&timeout, 250U);
 	do {
 		swd_proc.seq_out(request, 8U);
 		ack = swd_proc.seq_in(3U);
-		if (ack == SWDP_ACK_FAULT) {
+		if (ack == SWD_ACK_FAULT) {
 			DEBUG_ERROR("SWD access resulted in fault, retrying\n");
 			/* On fault, abort the request and repeat */
 			/* Yes, this is self-recursive.. no, we can't think of a better option */
@@ -397,28 +419,28 @@ uint32_t adiv5_swd_raw_access(adiv5_debug_port_s *dp, const uint8_t rnw, const u
 				ADIV5_DP_ABORT_ORUNERRCLR | ADIV5_DP_ABORT_WDERRCLR | ADIV5_DP_ABORT_STKERRCLR |
 					ADIV5_DP_ABORT_STKCMPCLR);
 		}
-	} while ((ack == SWDP_ACK_WAIT || ack == SWDP_ACK_FAULT) && !platform_timeout_is_expired(&timeout));
+	} while ((ack == SWD_ACK_WAIT || ack == SWD_ACK_FAULT) && !platform_timeout_is_expired(&timeout));
 
-	if (ack == SWDP_ACK_WAIT) {
+	if (ack == SWD_ACK_WAIT) {
 		DEBUG_ERROR("SWD access resulted in wait, aborting\n");
 		dp->abort(dp, ADIV5_DP_ABORT_DAPABORT);
 		dp->fault = ack;
 		return 0;
 	}
 
-	if (ack == SWDP_ACK_FAULT) {
+	if (ack == SWD_ACK_FAULT) {
 		DEBUG_ERROR("SWD access resulted in fault\n");
 		dp->fault = ack;
 		return 0;
 	}
 
-	if (ack == SWDP_ACK_NO_RESPONSE) {
+	if (ack == SWD_ACK_NO_RESPONSE) {
 		DEBUG_ERROR("SWD access resulted in no response\n");
 		dp->fault = ack;
 		return 0;
 	}
 
-	if (ack != SWDP_ACK_OK) {
+	if (ack != SWD_ACK_OK) {
 		DEBUG_ERROR("SWD access has invalid ack %x\n", ack);
 		raise_exception(EXCEPTION_ERROR, "SWD invalid ACK");
 	}

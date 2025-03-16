@@ -1,7 +1,7 @@
 /*
  * This file is part of the Black Magic Debug project.
  *
- * Copyright (C) 2023 1BitSquared <info@1bitsquared.com>
+ * Copyright (C) 2023-2024 1BitSquared <info@1bitsquared.com>
  * Written by Rachel Mant <git@dragonmux.network>
  * All rights reserved.
  *
@@ -208,7 +208,7 @@ static bool dap_write_reg_no_check(const uint16_t addr, const uint32_t data)
 	}
 	/* Check the ack state */
 	const uint8_t ack = sequences[1].data[0] & 7U;
-	return ack != SWDP_ACK_OK;
+	return ack != SWD_ACK_OK;
 }
 
 static uint32_t dap_read_reg_no_check(const uint16_t addr)
@@ -237,5 +237,5 @@ static uint32_t dap_read_reg_no_check(const uint16_t addr)
 	DEBUG_PROBE("dap_read_reg_no_check %04x -> %08" PRIx32 "\n", addr, data);
 	/* Check the ack state */
 	const uint8_t ack = sequences[1].data[0] & 7U;
-	return ack == SWDP_ACK_OK ? data : 0;
+	return ack == SWD_ACK_OK ? data : 0;
 }

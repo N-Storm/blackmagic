@@ -1,5 +1,9 @@
 /*
+ * This file is part of the Black Magic Debug project.
+ *
  * Copyright (c) 2013-2015, Alex Taradov <alex@taradov.com>
+ * Copyright (C) 2023-2024 1BitSquared <info@1bitsquared.com>
+ * Modified by Rachel Mant <git@dragonmux.network>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -68,6 +72,7 @@ typedef enum dap_led_type {
 #define DAP_QUIRK_NO_JTAG_MUTLI_TAP          (1U << 0U)
 #define DAP_QUIRK_BAD_SWD_NO_RESP_DATA_PHASE (1U << 1U)
 #define DAP_QUIRK_BROKEN_SWD_SEQUENCE        (1U << 2U)
+#define DAP_QUIRK_NEEDS_EXTRA_ZLP_READ       (1U << 3U)
 
 extern uint8_t dap_caps;
 extern dap_cap_e dap_mode;
@@ -87,14 +92,16 @@ uint32_t dap_adiv6_ap_read(adiv5_access_port_s *base_ap, uint16_t addr);
 void dap_adiv6_ap_write(adiv5_access_port_s *base_ap, uint16_t addr, uint32_t value);
 void dap_adiv5_mem_read_single(adiv5_access_port_s *target_ap, void *dest, target_addr64_t src, align_e align);
 void dap_adiv5_mem_write_single(adiv5_access_port_s *target_ap, target_addr64_t dest, const void *src, align_e align);
-void dap_adiv5_mem_access_setup(adiv5_access_port_s *target_ap, target_addr64_t addr, align_e align);
+bool dap_adiv5_mem_access_setup(adiv5_access_port_s *target_ap, target_addr64_t addr, align_e align);
 void dap_adiv6_mem_read_single(adiv6_access_port_s *target_ap, void *dest, target_addr64_t src, align_e align);
 void dap_adiv6_mem_write_single(adiv6_access_port_s *target_ap, target_addr64_t dest, const void *src, align_e align);
-void dap_adiv6_mem_access_setup(adiv6_access_port_s *target_ap, target_addr64_t addr, align_e align);
+bool dap_adiv6_mem_access_setup(adiv6_access_port_s *target_ap, target_addr64_t addr, align_e align);
 bool dap_mem_read_block(adiv5_access_port_s *target_ap, void *dest, target_addr64_t src, size_t len, align_e align);
 bool dap_mem_write_block(
 	adiv5_access_port_s *target_ap, target_addr64_t dest, const void *src, size_t len, align_e align);
 bool dap_run_cmd(const void *request_data, size_t request_length, void *response_data, size_t response_length);
+bool dap_run_transfer(const void *request_data, size_t request_length, void *response_data, size_t response_length,
+	size_t *actual_length);
 bool dap_jtag_configure(void);
 
 void dap_dp_abort(adiv5_debug_port_s *target_dp, uint32_t abort);

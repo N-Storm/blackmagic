@@ -73,14 +73,6 @@ static bool debug_serial_send_complete = true;
 #endif
 
 #if ENABLE_DEBUG == 1 && defined(PLATFORM_HAS_DEBUG)
-/*
- * This call initialises "SemiHosting", only we then do our own SVC interrupt things to
- * route all output through to the debug USB serial interface if debug_bmp is true.
- *
- * https://github.com/mirror/newlib-cygwin/blob/master/newlib/libc/sys/arm/syscalls.c#L115
- */
-void initialise_monitor_handles(void);
-
 static char debug_serial_debug_buffer[AUX_UART_BUFFER_SIZE];
 static uint16_t debug_serial_debug_write_index;
 static uint16_t debug_serial_debug_read_index;
@@ -219,15 +211,12 @@ void usb_serial_set_config(usbd_device *dev, uint16_t value)
 	usbd_register_control_callback(dev, USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
 		USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT, gdb_serial_control_request);
 
-	/* Notify the host that DCD is asserted.
+	/*
+	 * Notify the host that DCD is asserted.
 	 * Allows the use of /dev/tty* devices on *BSD/MacOS
 	 */
 	usb_serial_set_state(dev, GDB_IF_NO, CDCACM_GDB_NOTIF_ENDPOINT);
 	usb_serial_set_state(dev, UART_IF_NO, CDCACM_UART_NOTIF_ENDPOINT);
-
-#if ENABLE_DEBUG == 1 && defined(PLATFORM_HAS_DEBUG)
-	initialise_monitor_handles();
-#endif
 }
 
 void debug_serial_send_stdout(const uint8_t *const data, const size_t len)
@@ -277,8 +266,7 @@ static void debug_serial_send_data(void)
 	debug_serial_send_complete = false;
 	aux_serial_update_receive_buffer_fullness();
 
-	/* Forcibly empty fifo if no USB endpoint.
-	 * If fifo empty, nothing further to do. */
+	/* Forcibly empty fifo if no USB endpoint. If fifo empty, nothing further to do. */
 	if (usb_get_config() != 1 ||
 		(aux_serial_receive_buffer_empty()
 #if ENABLE_DEBUG == 1 && defined(PLATFORM_HAS_DEBUG)

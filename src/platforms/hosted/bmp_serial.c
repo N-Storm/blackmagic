@@ -19,20 +19,27 @@
 
 /* Find all known serial connected debuggers */
 
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-#ifndef _DEFAULT_SOURCE
-#define _DEFAULT_SOURCE
+#include "general.h"
+#if defined(_WIN32) || defined(__CYGWIN__)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <initguid.h>
+#include <usbiodef.h>
+#include <devpkey.h>
+#include <setupapi.h>
+#include <assert.h>
+#else
+#include <dirent.h>
 #endif
 #include <string.h>
-#include <dirent.h>
 #include <errno.h>
-#include "general.h"
 #include "bmp_hosted.h"
 #include "probe_info.h"
 #include "utils.h"
 #include "version.h"
+
+#define BMP_PRODUCT_STRING "Black Magic Probe"
 
 void bmp_ident(bmda_probe_s *info)
 {
@@ -48,120 +55,327 @@ void libusb_exit_function(bmda_probe_s *info)
 };
 
 #ifdef __APPLE__
-int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
+bool find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
 {
-	DEBUG_ERROR("Please implement find_debuggers for MACOS!\n");
+	DEBUG_ERROR("Please use full BMDA on macOS, BMP-only not supported\n");
 	(void)cl_opts;
 	(void)info;
-	return -1;
+	return false;
 }
-#elif defined(__WIN32__) || defined(__CYGWIN__)
+#elif defined(_WIN32) || defined(__CYGWIN__)
+#define BMD_INSTANCE_PREFIX_LENGTH 22U
+#define BMP_PRODUCT_STRING_LENGTH  ARRAY_LENGTH(BMP_PRODUCT_STRING)
 
-/* This source has been used as an example:
- * https://stackoverflow.com/questions/3438366/setupdigetdeviceproperty-usage-example */
-
-#include <windows.h>
-#include <setupapi.h>
-#include <cfgmgr32.h> // for MAX_DEVICE_ID_LEN, CM_Get_Parent and CM_Get_Device_ID
-#include <tchar.h>
-#include <stdio.h>
-
-/* include DEVPKEY_Device_BusReportedDeviceDesc from WinDDK\7600.16385.1\inc\api\devpropdef.h */
-#ifdef DEFINE_DEVPROPKEY
-#undef DEFINE_DEVPROPKEY
-#endif
-#define DEFINE_DEVPROPKEY(name, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8, pid) \
-	const DEVPROPKEY DECLSPEC_SELECTANY name = {{l, w1, w2, {b1, b2, b3, b4, b5, b6, b7, b8}}, pid}
-
-/* include DEVPKEY_Device_BusReportedDeviceDesc from WinDDK\7600.16385.1\inc\api\devpkey.h */
-DEFINE_DEVPROPKEY(DEVPKEY_Device_BusReportedDeviceDesc, 0x540b947e, 0x8b40, 0x45bc, 0xa8, 0xa2, 0x6a, 0x0b, 0x89, 0x4c,
-	0xbd, 0xa2, 4); // DEVPROP_TYPE_STRING
-
-/* List all USB devices with some additional information.
- * Unfortunately, this code is quite ugly. */
-int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
+static void display_error(const LSTATUS error, const char *const operation, const char *const path)
 {
-	unsigned i;
-	DWORD dwSize;
-	DEVPROPTYPE ulPropertyType;
-	CONFIGRET status;
-	HDEVINFO hDevInfo;
-	SP_DEVINFO_DATA DeviceInfoData;
-	TCHAR szDeviceInstanceID[MAX_DEVICE_ID_LEN];
-	WCHAR busReportedDeviceSesc[4096];
-	size_t probes_found = 0;
-	bool is_printing_probes_info = cl_opts->opt_list_only != 0;
+	char *message = NULL;
+	/* Format the status into a message to present to the user */
+	FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL,
+		error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (char *)&message, 0, NULL);
+	/* Tell them what happened and what went bad, then free the buffer FormatMessage() gives us */
+	DEBUG_ERROR("Error %s %s, got error %08lx: %s\n", operation, path, error, message);
+	LocalFree(message);
+}
 
-	info->type = PROBE_TYPE_BMP;
+static HKEY open_hklm_registry_path(const char *const path, const REGSAM permissions)
+{
+	HKEY handle = INVALID_HANDLE_VALUE;
+	/* Attempt to open a HKLM registry key path */
+	const LSTATUS result = RegOpenKeyEx(HKEY_LOCAL_MACHINE, path, 0, permissions, &handle);
+	if (result != ERROR_SUCCESS) {
+		display_error(result, "opening registry key", path);
+		return INVALID_HANDLE_VALUE;
+	}
+	return handle;
+}
 
-	hDevInfo = SetupDiGetClassDevs(0, "USB", NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
-	if (hDevInfo == INVALID_HANDLE_VALUE)
-		return -1;
-print_probes_info:
-	for (i = 0;; i++) {
-		char serial_number[sizeof info->serial];
-		DeviceInfoData.cbSize = sizeof(DeviceInfoData);
-		if (!SetupDiEnumDeviceInfo(hDevInfo, i, &DeviceInfoData))
-			break;
+static bool read_value_u32_from_path(HKEY path_handle, const char *const value_name, uint32_t *const result_value)
+{
+	DWORD value = 0U;
+	DWORD value_len = sizeof(value);
+	/* Try to retreive the requested value */
+	const LSTATUS result = RegGetValue(path_handle, NULL, value_name, RRF_RT_REG_DWORD, NULL, &value, &value_len);
+	/* If that fails, tell the user and return failure */
+	if (result != ERROR_SUCCESS || value_len != sizeof(value)) {
+		display_error(result, "retriving registry value", value_name);
+		return false;
+	}
+	/* Otherwise convert the result to uint32_t, storing it, and return success */
+	*result_value = value;
+	return true;
+}
 
-		status = CM_Get_Device_ID(DeviceInfoData.DevInst, szDeviceInstanceID, MAX_PATH, 0);
-		if (status != CR_SUCCESS)
-			continue;
+static const char *read_value_str_from_path(HKEY path_handle, const char *const value_name, size_t *const result_len)
+{
+	DWORD value_len = 0U;
+	/* Start by trying to discover how long the string held by the key is */
+	const LSTATUS result = RegGetValue(path_handle, NULL, value_name, RRF_RT_REG_SZ, NULL, NULL, &value_len);
+	/* If that didn't work, we have no hoope, so bail */
+	if (result != ERROR_SUCCESS && result != ERROR_MORE_DATA) {
+		display_error(result, "retrieving registry value", value_name);
+		return NULL;
+	}
 
-		if (!sscanf(szDeviceInstanceID, "USB\\VID_1D50&PID_6018\\%s", serial_number))
-			continue;
+	/* It worked! Okay, now allocate storage for the result string large enough to hold it */
+	*result_len = value_len;
+	char *value = calloc(1, value_len);
+	/* calloc() failure pointing to heap exhaustion(?!) */
+	if (!value) {
+		DEBUG_ERROR("Could not allocate sufficient memory for key value\n");
+		return NULL;
+	}
 
-		if (SetupDiGetDevicePropertyW(hDevInfo, &DeviceInfoData, &DEVPKEY_Device_BusReportedDeviceDesc, &ulPropertyType,
-				(BYTE *)busReportedDeviceSesc, sizeof busReportedDeviceSesc, &dwSize, 0)) {
-			probes_found++;
-			if (is_printing_probes_info) {
-				DEBUG_WARN("%2zu: %s, %ls\n", probes_found, serial_number, busReportedDeviceSesc);
-			} else {
-				bool probe_identified = true;
-				if ((cl_opts->opt_serial && strstr(serial_number, cl_opts->opt_serial)) ||
-					(cl_opts->opt_position && cl_opts->opt_position == probes_found) ||
-					/* Special case for the very first probe found. */
-					(probe_identified = false, probes_found == 1U)) {
-					strncpy(info->serial, serial_number, sizeof info->serial);
-					strncpy(info->manufacturer, "BMP", sizeof info->manufacturer);
-					snprintf(info->product, sizeof info->product, "%ls", busReportedDeviceSesc);
-					/* Don't bother to parse the version string. It is a part of the
-					 * product description string. It seems that at the moment it
-					 * is only being used to print a version string in response
-					 * to the 'monitor version' command, so it doesn't really matter
-					 * if the version string is printed as a part of the product string,
-					 * or as a separate string, the result is pretty much the same. */
-					info->version[0] = 0;
-					if (probe_identified)
-						return 0;
-				}
-			}
+	/* Finally, try reading the value and return it to the user if this didn't explode */
+	assert(RegGetValue(path_handle, NULL, value_name, RRF_RT_REG_SZ, NULL, value, &value_len) == ERROR_SUCCESS);
+	return value;
+}
+
+static const char *query_product_description(const char *const instance_id, size_t *const result_len)
+{
+	/* Start by asking for all the device information for the device */
+	HDEVINFO device_info = SetupDiGetClassDevs(&GUID_DEVINTERFACE_USB_DEVICE, instance_id, NULL, DIGCF_DEVICEINTERFACE);
+	/* Check if that suceeded, and bail if it didn't.. */
+	if (device_info == INVALID_HANDLE_VALUE) {
+		display_error((LSTATUS)GetLastError(), "querying", "device information");
+		return NULL;
+	}
+
+	/* Extract the device info data from the information set so we can then query a property */
+	SP_DEVINFO_DATA device_data = {
+		.cbSize = sizeof(SP_DEVINFO_DATA),
+	};
+	if (!SetupDiOpenDeviceInfo(device_info, instance_id, NULL, 0U, &device_data)) {
+		/* If that didn't work, report the error and bail out */
+		display_error((LSTATUS)GetLastError(), "retreiving", "device information");
+		SetupDiDestroyDeviceInfoList(device_info);
+		return NULL;
+	}
+
+	/* Find out how big a buffer is needed for the string */
+	DEVPROPTYPE property_type = DEVPROP_TYPE_NULL;
+	DWORD value_len = 0U;
+	/*
+	 * This call is guaranteed to "fail" because we don't provide a big enough buffer,
+	 * so we have to be careful how we check the result
+	 */
+	if (!SetupDiGetDevicePropertyW(device_info, &device_data, &DEVPKEY_Device_BusReportedDeviceDesc, &property_type,
+			NULL, 0U, &value_len, 0U)) {
+		const DWORD result = GetLastError();
+		/* Single out the result code for the buffer size return and dispatch the rest to error handling */
+		if (result != ERROR_INSUFFICIENT_BUFFER) {
+			display_error((LSTATUS)result, "querying", "product description");
+			SetupDiDestroyDeviceInfoList(device_info);
+			return NULL;
 		}
 	}
-	if (is_printing_probes_info)
-		return 1;
-	if (probes_found == 1U)
-		/* Exactly one probe found. Its information has already been filled
-		 * in the detection loop, so use this probe. */
-		return 0;
-	if (probes_found < 1U) {
-		DEBUG_ERROR("No BMP probe found\n");
-		return -1;
+	/* Check the value will be of the correct type */
+	if (property_type != DEVPROP_TYPE_STRING) {
+		DEBUG_ERROR("Product description value of improper type\n");
+		SetupDiDestroyDeviceInfoList(device_info);
+		return NULL;
 	}
-	/* Otherwise, if this line is reached, then more than one probe has been found,
-	 * and no probe was identified as selected by the user.
-	 * Restart the identification loop, this time printing the probe information,
-	 * and then return. */
-	DEBUG_WARN("%zu debuggers found!\nSelect with -P <pos>, or "
-			   "-s <(partial)serial no.>\n",
-		probes_found);
-	probes_found = 0;
-	is_printing_probes_info = true;
-	goto print_probes_info;
+
+	/* Now we know how big of an allocation to make, allocate a buffer big enough to receive the value */
+	uint8_t *const value = calloc(1, value_len);
+	/* Check if the allocation succeeded, and bail if not */
+	if (!value) {
+		DEBUG_ERROR("Could not allocate sufficient memory for device product description value\n");
+		SetupDiDestroyDeviceInfoList(device_info);
+		return NULL;
+	}
+	/* Now actually retreive the description string and check the result of the call is sane */
+	assert(SetupDiGetDevicePropertyW(device_info, &device_data, &DEVPKEY_Device_BusReportedDeviceDesc, &property_type,
+			   value, value_len, NULL, 0U) == TRUE);
+	assert(property_type == DEVPROP_TYPE_STRING);
+	/* Clean up working with the device info */
+	SetupDiDestroyDeviceInfoList(device_info);
+	/*
+	 * The result of all this will be a wide character string, which is not particularly useful to us,
+	 * so, convert the string to UTF-8 for use in BMD and return that instead.
+	 */
+	const size_t value_len_chars = wcsnlen((wchar_t *)value, value_len / 2U) + 1U;
+	*result_len = (size_t)WideCharToMultiByte(CP_UTF8, 0U, (wchar_t *)value, (int)value_len_chars, NULL, 0, NULL, NULL);
+	char *const result = malloc(*result_len);
+	WideCharToMultiByte(CP_UTF8, 0U, (wchar_t *)value, (int)value_len_chars, result, (int)*result_len, NULL, NULL);
+	free(value);
+	return result;
 }
 
+static char *strndup(const char *const src, const size_t size)
+{
+	/* Determine how many bytes to copy to the new string, including the NULL terminator */
+	const size_t length = MIN(size, strlen(src)) + 1U;
+	/* Try to allocate storage for the new string */
+	char *result = malloc(length);
+	if (!result)
+		return NULL;
+	/* Now we have storage, copy the bytes over */
+	memcpy(result, src, length - 1U);
+	/* And finally terminate the string to return */
+	result[length - 1U] = '\0';
+	return result;
+}
+
+static probe_info_s *discover_device_entry(const char *const instance_id, probe_info_s *const probe_list)
+{
+	/* Extract the serial number portion of the instance ID */
+	const char *const serial = strdup(instance_id + BMD_INSTANCE_PREFIX_LENGTH);
+	/* If that failed to duplicate the string segment needed, bail */
+	if (!serial)
+		return probe_list;
+
+	/* Prepare the probe information to hand to the probe_info_s system */
+	const char *version = NULL;
+	const char *type = NULL;
+	const char *const product = strdup(BMP_PRODUCT_STRING);
+
+	/* Query SetupAPI to find out what the actual product description string of the device is */
+	size_t description_len = 0U;
+	const char *const description = query_product_description(instance_id, &description_len);
+	/* Check that the query succeeded, then double-check that the string starts with the expected product string */
+	if (!description || !begins_with(description, description_len, BMP_PRODUCT_STRING)) {
+		if (description)
+			DEBUG_ERROR("Product description for device with serial %s was not valid\n", serial);
+		else
+			DEBUG_ERROR("Failed to retrieve product description for device with serial %s\n", serial);
+		free((void *)description);
+		free((void *)product);
+		free((void *)serial);
+		return probe_list;
+	}
+	/*
+	 * At this point we should have a product string that's in one of the following forms:
+	 * Recent: Black Magic Probe v1.10.0-1273-g2b1ce9aee
+	 *       : Black Magic Probe (ST-Link v2) v1.10.0-1273-g2b1ce9aee
+	 *   Old : Black Magic Probe
+	 * From this we want to extract two main things: version (if available), and probe type
+	 */
+
+	/* Now try to determine if the probe is a BMP or one of the alternate platforms */
+	const char *const opening_paren = strchr(description + BMP_PRODUCT_STRING_LENGTH, '(');
+	/* If there's no opening `(` in the string, it's native */
+	if (!opening_paren) {
+		type = strdup("Native");
+		/*
+		 * Scan from the end of the string, if there are some remaining characters after the product string proper,
+		 * and look for the last space - everything right of that must be the version string.
+		 */
+		if (description_len > BMP_PRODUCT_STRING_LENGTH) {
+			const char *version_begin = strrchr(description, ' ');
+			/* Thankfully, this can't fail, so just grab the version string from what we got */
+			version = strdup(version_begin + 1U);
+		} else
+			version = strdup("Unknown");
+	} else {
+		/* Otherwise, we've now got to find the closing `)` and extract the substring created */
+		const char *const closing_paren = strchr(opening_paren, ')');
+		if (!closing_paren) {
+			DEBUG_ERROR("Production description for device with serial %s is invalid, founding opening '(' but no "
+						"closing ')'\n",
+				serial);
+			free((void *)description);
+			free((void *)product);
+			free((void *)serial);
+			return probe_list;
+		}
+		/* Grab just the substring inside the parens as the type value */
+		type = strndup(opening_paren + 1U, (closing_paren - opening_paren) - 1U);
+		/* Going forward a couple of characters, making sure we find a space, take the remainder as the version string */
+		const char *version_begin = strchr(closing_paren, ' ');
+		/* Check if that failed, and if it didn't, grab what we got as the version string */
+		if (version_begin)
+			version = strdup(version_begin + 1U);
+		else
+			version = strdup("Unknown");
+	}
+	free((void *)description);
+
+	if (!version || !type) {
+		DEBUG_ERROR("Failed to construct version or type string");
+		free((void *)serial);
+		free((void *)version);
+		free((void *)type);
+		free((void *)product);
+		return probe_list;
+	}
+
+	/* Finish up by adding the new probe to the list */
+	return probe_info_add_by_serial(probe_list, PROBE_TYPE_BMP, type, product, serial, version);
+}
+
+static const probe_info_s *scan_for_devices(void)
+{
+	HKEY driver_handle = open_hklm_registry_path("SYSTEM\\CurrentControlSet\\Services\\usbccgp\\Enum", KEY_READ);
+	/* Check if we failed to open the registry key for enumeration */
+	if (driver_handle == INVALID_HANDLE_VALUE) {
+		DEBUG_INFO("No composite devices have been enumerated on this system since boot\n");
+		return NULL;
+	}
+	/*
+	 * Now we've got a key to work with, grab the "Count" value from the USBCCGP driver so we know
+	 * how many composite devices exist at this moment on the user's system
+	 */
+	uint32_t device_count = 0U;
+	if (!read_value_u32_from_path(driver_handle, "Count", &device_count)) {
+		DEBUG_ERROR("Failed to determine how many USB devices are attached to your computer\n");
+		RegCloseKey(driver_handle);
+		return NULL;
+	}
+	if (device_count == 0U) {
+		DEBUG_INFO("No composite devices currently plugged in");
+		RegCloseKey(driver_handle);
+		return NULL;
+	}
+
+	/* Before looping through all the composite devices, make a string of the expected prefix to look for */
+	const char *const bmd_instance_prefix = format_string("USB\\VID_%04X&PID_%04X\\", VENDOR_ID_BMP, PRODUCT_ID_BMP);
+	/* Check if string formatting failed for some reason */
+	if (!bmd_instance_prefix)
+		return NULL;
+
+	probe_info_s *probe_list = NULL;
+	/* Loop through each of the devices which are named by number and extract serial numbers */
+	for (uint32_t device_index = 0U; device_index < device_count; ++device_index) {
+		/* Turn the index into a string */
+		const char *const value_name = format_string("%" PRIu32, device_index);
+		if (!value_name) {
+			free((void *)bmd_instance_prefix);
+			RegCloseKey(driver_handle);
+			return NULL;
+		}
+		/* Now read the registry value to get an instance ID */
+		size_t instance_id_len = 0U;
+		const char *const instance_id = read_value_str_from_path(driver_handle, value_name, &instance_id_len);
+		/* Free the index string before error checking or doing anything else */
+		free((void *)value_name);
+		/* Check that the value read is valid and that it begins with the expected prefix for a BMD probe */
+		if (!instance_id || !begins_with(instance_id, instance_id_len, bmd_instance_prefix)) {
+			free((void *)instance_id);
+			continue;
+		}
+		/* If we got a valid prefix, go figure out what the device is exactly and make a probe_info_s entry for it */
+		probe_info_s *probe_info = discover_device_entry(instance_id, probe_list);
+		/* If the operation would have succeeded but probe_info_add_by_serial fails, we exhausted memory. */
+		if (!probe_info) {
+			free((void *)instance_id);
+			probe_info_list_free(probe_list);
+			probe_list = NULL;
+			break;
+		}
+		/* If the operation returned the probe_list unchanged, it failed to discover the device */
+		if (probe_info == probe_list)
+			DEBUG_ERROR(
+				"Error discovering potential probe with serial \"%s\"\n", instance_id + BMD_INSTANCE_PREFIX_LENGTH);
+		free((void *)instance_id);
+		probe_list = probe_info;
+	}
+	free((void *)bmd_instance_prefix);
+	RegCloseKey(driver_handle);
+	return probe_info_correct_order(probe_list);
+}
 #else
-/* Old ID: Black_Sphere_Technologies_Black_Magic_Probe_BFE4D6EC-if00
+/*
+ * Old ID: Black_Sphere_Technologies_Black_Magic_Probe_BFE4D6EC-if00
  * Recent: Black_Sphere_Technologies_Black_Magic_Probe_v1.7.1-212-g212292ab_7BAE7AB8-if00
  * usb-Black_Sphere_Technologies_Black_Magic_Probe__SWLINK__v1.7.1-155-gf55ad67b-dirty_DECB8811-if00
  */
@@ -169,7 +383,6 @@ print_probes_info:
 #define BMP_IDSTRING_BLACKMAGIC  "usb-Black_Magic_Debug_Black_Magic_Probe"
 #define BMP_IDSTRING_1BITSQUARED "usb-1BitSquared_Black_Magic_Probe"
 #define DEVICE_BY_ID             "/dev/serial/by-id"
-#define BMP_PRODUCT_STRING       "Black Magic Probe"
 
 typedef struct dirent dirent_s;
 
@@ -207,7 +420,7 @@ char *extract_serial(const char *const device, const size_t length)
 	return result;
 }
 
-static probe_info_s *parse_device_node(const char *name, probe_info_s *probe_list)
+static probe_info_s *parse_device_node(const char *name, probe_info_s *const probe_list)
 {
 	/* Starting with a string such as 'usb-Black_Magic_Debug_Black_Magic_Probe_v1.8.0-650-g829308db_8BB20695-if00' */
 	const size_t name_len = strlen(name) + 1U;
@@ -283,7 +496,7 @@ static probe_info_s *parse_device_node(const char *name, probe_info_s *probe_lis
 	}
 
 	if (!version || !type) {
-		DEBUG_ERROR("Failed to construct version of type string");
+		DEBUG_ERROR("Failed to construct version or type string");
 		free(serial);
 		free(version);
 		free(type);
@@ -321,16 +534,18 @@ static const probe_info_s *scan_for_devices(void)
 	closedir(dir);
 	return probe_info_correct_order(probe_list);
 }
+#endif
 
-int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
+#ifndef __APPLE__
+bool find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
 {
 	if (cl_opts->opt_device)
-		return 1;
+		return false;
 	/* Scan for all possible probes on the system */
 	const probe_info_s *const probe_list = scan_for_devices();
 	if (!probe_list) {
-		DEBUG_ERROR("No BMP probe found\n");
-		return -1;
+		DEBUG_ERROR("No Black Magic Probes found\n");
+		return false;
 	}
 	/* Count up how many were found and filter the list for a match to the program options request */
 	const size_t probes = probe_info_count(probe_list);
@@ -349,12 +564,12 @@ int find_debuggers(bmda_cli_options_s *cl_opts, bmda_probe_s *info)
 			DEBUG_WARN(
 				"%2zu: %s, Black Magic Debug, %s, %s\n", position, probe->serial, probe->manufacturer, probe->version);
 		probe_info_list_free(probe_list);
-		return 1; // false;
+		return false;
 	}
 
 	/* We found a matching probe, populate bmda_probe_s and signal success */
 	probe_info_to_bmda_probe(probe, info);
 	probe_info_list_free(probe_list);
-	return 0; // true;
+	return true;
 }
 #endif

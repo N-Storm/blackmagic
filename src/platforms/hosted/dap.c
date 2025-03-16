@@ -1,6 +1,7 @@
 /*
- * Copyright (c) 2013-2015, Alex Taradov <alex@taradov.com>
- * Copyright (C) 2023 1BitSquared <info@1bitsquared.com>
+ * Copyright (C) 2013-2015 Alex Taradov <alex@taradov.com>
+ * Copyright (C) 2020-2021 Uwe Bonnes <bon@elektron.ikp.physik.tu-darmstadt.de>
+ * Copyright (C) 2023-2024 1BitSquared <info@1bitsquared.com>
  * Modified by Rachel Mant <git@dragonmux.network>
  * All rights reserved.
  *
@@ -28,13 +29,10 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/* Modified for Blackmagic Probe
- * Copyright (c) 2020-21 Uwe Bonnes bon@elektron.ikp.physik.tu-darmstadt.de
- */
-
 #include <string.h>
 #include "general.h"
 #include "exception.h"
+#include "cmsis_dap.h"
 #include "dap.h"
 #include "dap_command.h"
 #include "jtag_scan.h"
@@ -90,6 +88,7 @@
 static bool dap_transfer_configure(uint8_t idle_cycles, uint16_t wait_retries, uint16_t match_retries);
 
 static uint32_t dap_current_clock_freq;
+static bool dap_nrst_state = false;
 
 bool dap_connect(void)
 {
@@ -215,7 +214,12 @@ size_t dap_info(const dap_info_e requested_info, void *const buffer, const size_
 	return result_length;
 }
 
-bool dap_set_reset_state(const bool nrst_state)
+bool dap_nrst_get_val(void)
+{
+	return dap_nrst_state;
+}
+
+bool dap_nrst_set_val(const bool nrst_state)
 {
 	/* Setup the request for the pin state change request */
 	dap_swj_pins_request_s request = {
@@ -232,6 +236,8 @@ bool dap_set_reset_state(const bool nrst_state)
 		DEBUG_PROBE("%s failed\n", __func__);
 		return false;
 	}
+	/* Extract the current pin state for the device, de-inverting it */
+	dap_nrst_state = !(response & DAP_SWJ_nRST);
 	return response == request.pin_values;
 }
 
@@ -265,13 +271,12 @@ void dap_write_reg(adiv5_debug_port_s *target_dp, const uint8_t reg, const uint3
 bool dap_mem_read_block(
 	adiv5_access_port_s *const target_ap, void *dest, target_addr64_t src, const size_t len, const align_e align)
 {
+	/* Try to read the 32-bit blocks requested */
 	const size_t blocks = len >> MIN(align, 2U);
-	uint32_t data[256];
-	if (!perform_dap_transfer_block_read(target_ap->dp, SWD_AP_DRW, blocks, data)) {
-		DEBUG_ERROR("dap_read_block failed\n");
-		return false;
-	}
+	uint32_t data[127U] = {0U};
+	const bool result = perform_dap_transfer_block_read(target_ap->dp, SWD_AP_DRW, blocks, data);
 
+	/* Unpack the data from those blocks */
 	if (align > ALIGN_16BIT)
 		memcpy(dest, data, len);
 	else {
@@ -280,15 +285,20 @@ bool dap_mem_read_block(
 			src += 1U << align;
 		}
 	}
-	return true;
+
+	/* Report if it actually failed and then propagate the failure up accordingly */
+	if (!result)
+		DEBUG_ERROR("dap_read_block failed\n");
+	return result;
 }
 
 bool dap_mem_write_block(
 	adiv5_access_port_s *const target_ap, target_addr64_t dest, const void *src, const size_t len, const align_e align)
 {
-	const size_t blocks = len >> MAX(align, 2U);
-	uint32_t data[256];
+	const size_t blocks = len >> MIN(align, 2U);
+	uint32_t data[126U];
 
+	/* Pack the data to send into 32-bit blocks */
 	if (align > ALIGN_16BIT)
 		memcpy(data, src, len);
 	else {
@@ -298,7 +308,9 @@ bool dap_mem_write_block(
 		}
 	}
 
+	/* Try to write the blocks to the target's memory */
 	const bool result = perform_dap_transfer_block_write(target_ap->dp, SWD_AP_DRW, blocks, data);
+	/* Report if it actually failed and then propagate the failure up accordingly */
 	if (!result)
 		DEBUG_ERROR("dap_write_block failed\n");
 	return result;
@@ -340,21 +352,14 @@ static size_t dap_adiv5_mem_access_build(const adiv5_access_port_s *const target
 	}
 }
 
-void dap_adiv5_mem_access_setup(adiv5_access_port_s *const target_ap, const target_addr64_t addr, const align_e align)
+bool dap_adiv5_mem_access_setup(adiv5_access_port_s *const target_ap, const target_addr64_t addr, const align_e align)
 {
 	/* Start by setting up the transfer and attempting it */
 	dap_transfer_request_s requests[4];
 	const size_t requests_count = dap_adiv5_mem_access_build(target_ap, requests, addr, align);
 	adiv5_debug_port_s *const target_dp = target_ap->dp;
-	const bool result = perform_dap_transfer_recoverable(target_dp, requests, requests_count, NULL, 0U);
-	/* If it didn't go well, say something and abort */
-	if (!result) {
-		if (target_dp->fault != DAP_TRANSFER_NO_RESPONSE)
-			DEBUG_ERROR("Transport error (%u), aborting\n", target_dp->fault);
-		else
-			DEBUG_ERROR("Transaction unrecoverably failed\n");
-		exit(-1);
-	}
+	/* The result of this call is then fed up the stack for proper handling */
+	return perform_dap_transfer_recoverable(target_dp, requests, requests_count, NULL, 0U);
 }
 
 static size_t dap_adiv6_mem_access_build(const adiv6_access_port_s *const target_ap,
@@ -398,21 +403,14 @@ static size_t dap_adiv6_mem_access_build(const adiv6_access_port_s *const target
 	}
 }
 
-void dap_adiv6_mem_access_setup(adiv6_access_port_s *const target_ap, const target_addr64_t addr, const align_e align)
+bool dap_adiv6_mem_access_setup(adiv6_access_port_s *const target_ap, const target_addr64_t addr, const align_e align)
 {
 	/* Start by setting up the transfer and attempting it */
 	dap_transfer_request_s requests[6];
 	const size_t requests_count = dap_adiv6_mem_access_build(target_ap, requests, addr, align);
 	adiv5_debug_port_s *const target_dp = target_ap->base.dp;
-	const bool result = perform_dap_transfer_recoverable(target_dp, requests, requests_count, NULL, 0U);
-	/* If it didn't go well, say something and abort */
-	if (!result) {
-		if (target_dp->fault != DAP_TRANSFER_NO_RESPONSE)
-			DEBUG_ERROR("Transport error (%u), aborting\n", target_dp->fault);
-		else
-			DEBUG_ERROR("Transaction unrecoverably failed\n");
-		exit(-1);
-	}
+	/* The result of this call is then fed up the stack for proper handling */
+	return perform_dap_transfer_recoverable(target_dp, requests, requests_count, NULL, 0U);
 }
 
 uint32_t dap_adiv5_ap_read(adiv5_access_port_s *const target_ap, const uint16_t addr)

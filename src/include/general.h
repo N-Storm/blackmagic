@@ -34,20 +34,20 @@
 #endif // _MSC_VER <= 1932
 #endif
 
-#if !defined(BMD_IS_STDC) && !defined(BMD_MSVC_PRE_172)
+#if !defined(BMD_IS_STDC) && defined(BMD_MSVC_PRE_172)
 #error "Black Magic Debug must be built in a standards compliant C mode"
 #endif
 
 #ifndef _GNU_SOURCE
-// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp,readability-identifier-naming)
 #define _GNU_SOURCE
 #endif
 #ifndef _DEFAULT_SOURCE
-// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp,readability-identifier-naming)
 #define _DEFAULT_SOURCE
 #endif
 #if !defined(__USE_MINGW_ANSI_STDIO)
-// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp,readability-identifier-naming)
 #define __USE_MINGW_ANSI_STDIO 1
 #endif
 #if defined(_WIN32) || defined(__CYGWIN__)
@@ -77,7 +77,7 @@
 
 #define FREQ_FIXED 0xffffffffU
 
-#if PC_HOSTED == 0
+#if CONFIG_BMDA == 0
 /*
  * XXX: This is not really the proper place for all this as this is too intrusive into
  * the rest of the code base. The correct way to do this would be to define a debug
@@ -166,22 +166,12 @@ void debug_serial_send_stdout(const uint8_t *data, size_t len);
 #ifdef _MSC_VER
 #define strcasecmp  _stricmp
 #define strncasecmp _strnicmp
-
-// FIXME: BMDA still uses this function in gdb_packet.c
-// It's defined here as an export from utils.c would pollute the ABI of libbmd
-static inline int vasprintf(char **strp, const char *const fmt, va_list ap)
-{
-	const int actual_size = vsnprintf(NULL, 0, fmt, ap);
-	if (actual_size < 0)
-		return -1;
-
-	*strp = malloc(actual_size + 1);
-	if (!*strp)
-		return -1;
-
-	return vsnprintf(*strp, actual_size + 1, fmt, ap);
-}
-
 #endif /* _MSC_VER */
+
+#ifndef PLATFORM_IDENT_DYNAMIC
+#define BOARD_IDENT "Black Magic Probe " PLATFORM_IDENT "" FIRMWARE_VERSION
+#else
+#define BOARD_IDENT "Black Magic Probe (%s) " FIRMWARE_VERSION
+#endif
 
 #endif /* INCLUDE_GENERAL_H */

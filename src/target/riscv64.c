@@ -49,9 +49,7 @@ static void riscv64_mem_read(target_s *target, void *dest, target_addr64_t src, 
 bool riscv64_probe(target_s *const target)
 {
 	/* Finish setting up the target structure with generic rv64 functions */
-	target->core = "rv64";
-	/* Provide the length of a suitable registers structure */
-	target->regs_size = sizeof(riscv64_regs_s);
+	target->regs_size = sizeof(riscv64_regs_s); /* Provide the length of a suitable registers structure */
 	target->regs_read = riscv64_regs_read;
 	target->regs_write = riscv64_regs_write;
 	target->mem_read = riscv64_mem_read;
@@ -78,7 +76,7 @@ static void riscv64_regs_write(target_s *const target, const void *const data)
 {
 	/* Grab the hart structure and figure out how many registers need reading out */
 	riscv_hart_s *const hart = riscv_hart_struct(target);
-	riscv64_regs_s *const regs = (riscv64_regs_s *)data;
+	const riscv64_regs_s *const regs = (const riscv64_regs_s *)data;
 	const size_t gprs_count = hart->extensions & RV_ISA_EXT_EMBEDDED ? 16U : 32U;
 	/* Loop through writing out the GPRs, except for the first which is always 0 */
 	for (size_t gpr = 1; gpr < gprs_count; ++gpr) {
@@ -116,7 +114,7 @@ static void riscv64_mem_read(target_s *const target, void *const dest, const tar
 	if (!len)
 		return;
 	riscv_hart_s *const hart = riscv_hart_struct(target);
-	/* Figure out the maxmial width of access to perform, up to the bitness of the target */
+	/* Figure out the maximal width of access to perform, up to the bitness of the target */
 	const uint8_t access_width = riscv_mem_access_width(hart, src, len);
 	const uint8_t access_length = 1U << access_width;
 	/* Build the access command */

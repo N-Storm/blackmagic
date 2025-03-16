@@ -35,37 +35,37 @@
 #include "target.h"
 #include "adiv5.h"
 #include "adiv6.h"
-#if defined(ENABLE_RISCV_ACCEL) && ENABLE_RISCV_ACCEL == 1
+#if defined(CONFIG_RISCV_ACCEL) && CONFIG_RISCV_ACCEL == 1
 #include "riscv_debug.h"
 #endif
 #include "version.h"
 #include "exception.h"
 #include "hex_utils.h"
 
-#if PC_HOSTED == 0
+#if CONFIG_BMDA == 0
 static void remote_packet_process_adiv6(const char *packet, size_t packet_len);
 
 /* hex-ify and send a buffer of data */
 static void remote_send_buf(const void *const buffer, const size_t len)
 {
-	char hex[2] = {0};
+	char hex[3] = {0};
 	const uint8_t *const data = (const uint8_t *)buffer;
 	for (size_t offset = 0; offset < len; ++offset) {
 		hexify(hex, data + offset, 1U);
-		gdb_if_putchar(hex[0], 0);
-		gdb_if_putchar(hex[1], 0);
+		gdb_if_putchar(hex[0], false);
+		gdb_if_putchar(hex[1], false);
 	}
 }
 
 /* Send a response with some data following */
 static void remote_respond_buf(const char response_code, const void *const buffer, const size_t len)
 {
-	gdb_if_putchar(REMOTE_RESP, 0);
-	gdb_if_putchar(response_code, 0);
+	gdb_if_putchar(REMOTE_RESP, false);
+	gdb_if_putchar(response_code, false);
 
 	remote_send_buf(buffer, len);
 
-	gdb_if_putchar(REMOTE_EOM, 1);
+	gdb_if_putchar(REMOTE_EOM, true);
 }
 
 /* Send a response with a simple result code parameter */
@@ -98,18 +98,18 @@ static void remote_respond(const char response_code, uint64_t param)
 /* Send a response with a string following */
 static void remote_respond_string(const char response_code, const char *const str)
 {
-	gdb_if_putchar(REMOTE_RESP, 0);
-	gdb_if_putchar(response_code, 0);
+	gdb_if_putchar(REMOTE_RESP, false);
+	gdb_if_putchar(response_code, false);
 	const size_t str_length = strlen(str);
 	for (size_t idx = 0; idx < str_length; ++idx) {
 		const char chr = str[idx];
 		/* Replace problematic/illegal characters with a space to not disturb the protocol */
 		if (chr == '$' || chr == REMOTE_SOM || chr == REMOTE_EOM)
-			gdb_if_putchar(' ', 0);
+			gdb_if_putchar(' ', false);
 		else
-			gdb_if_putchar(chr, 0);
+			gdb_if_putchar(chr, false);
 	}
-	gdb_if_putchar(REMOTE_EOM, 1);
+	gdb_if_putchar(REMOTE_EOM, true);
 }
 
 /*
@@ -255,10 +255,6 @@ static void remote_packet_process_jtag(const char *const packet, const size_t pa
 	}
 }
 
-#if !defined(BOARD_IDENT) && defined(BOARD_IDENT)
-#define PLATFORM_IDENT BOARD_IDENT
-#endif
-
 static void remote_packet_process_general(char *packet, const size_t packet_len)
 {
 	(void)packet_len;
@@ -274,12 +270,12 @@ static void remote_packet_process_general(char *packet, const size_t packet_len)
 		remote_respond(REMOTE_RESP_OK, platform_nrst_get_val());
 		break;
 	case REMOTE_FREQ_SET:
-		platform_max_frequency_set(hex_string_to_num(8, packet + 2));
+		platform_max_frequency_set(hex_string_to_num(8U, packet + 2U));
 		remote_respond(REMOTE_RESP_OK, 0);
 		break;
 	case REMOTE_FREQ_GET: {
 		const uint32_t freq = platform_max_frequency_get();
-		remote_respond_buf(REMOTE_RESP_OK, (uint8_t *)&freq, 4);
+		remote_respond_buf(REMOTE_RESP_OK, (const uint8_t *)&freq, 4U);
 		break;
 	}
 	case REMOTE_PWR_SET:
@@ -292,7 +288,7 @@ static void remote_packet_process_general(char *packet, const size_t packet_len)
 			remote_respond(REMOTE_RESP_ERR, 0);
 		} else {
 			const bool result = platform_target_set_power(packet[2] == '1');
-			remote_respond(result ? REMOTE_RESP_OK : REMOTE_RESP_ERR, 0);
+			remote_respond(result ? REMOTE_RESP_OK : REMOTE_RESP_ERR, 0U);
 		}
 #else
 		remote_respond(REMOTE_RESP_NOTSUP, 0);
@@ -309,7 +305,12 @@ static void remote_packet_process_general(char *packet, const size_t packet_len)
 #if ENABLE_DEBUG == 1 && defined(PLATFORM_HAS_DEBUG)
 		debug_bmp = true;
 #endif
-		remote_respond_string(REMOTE_RESP_OK, PLATFORM_IDENT "" FIRMWARE_VERSION);
+#ifndef PLATFORM_IDENT_DYNAMIC
+		remote_respond_string(REMOTE_RESP_OK, BOARD_IDENT);
+#else
+		snprintf(packet, GDB_PACKET_BUFFER_SIZE, BOARD_IDENT, platform_ident());
+		remote_respond_string(REMOTE_RESP_OK, packet);
+#endif
 		break;
 	case REMOTE_TARGET_CLK_OE:
 		platform_target_clk_output_enable(packet[2] != '0');
@@ -353,7 +354,7 @@ static void remote_packet_process_high_level(const char *packet, const size_t pa
 		/* Build a response value that depends on what things are built into the firmare */
 		remote_respond(REMOTE_RESP_OK,
 			REMOTE_ACCEL_ADIV5 | REMOTE_ACCEL_ADIV6
-#if defined(ENABLE_RISCV_ACCEL) && ENABLE_RISCV_ACCEL == 1
+#if defined(CONFIG_RISCV_ACCEL) && CONFIG_RISCV_ACCEL == 1
 				| REMOTE_ACCEL_RISCV
 #endif
 		);
@@ -383,6 +384,37 @@ static void remote_adiv5_respond(const void *const data, const size_t length)
 
 static void remote_packet_process_adiv5(const char *const packet, const size_t packet_len)
 {
+	/* Check there's at least an ADI command byte */
+	if (packet_len < 2U) {
+		remote_respond(REMOTE_RESP_ERR, REMOTE_ERROR_WRONGLEN);
+		return;
+	}
+
+	/* Check if this is a DP version packet and handle it if it is */
+	if (packet[1] == REMOTE_DP_VERSION) {
+		/* Check there are enough bytes for the request */
+		if (packet_len == 4U) {
+			/* Extract the new version information into the DP */
+			remote_dp.version = hex_string_to_num(2U, packet + 2U);
+			remote_respond(REMOTE_RESP_OK, 0);
+		} else
+			/* There weren't enough bytes, so tell the host and get out of here */
+			remote_respond(REMOTE_RESP_ERR, REMOTE_ERROR_WRONGLEN);
+		return;
+	}
+	/* Check if this is a DP targetsel packet and handle it if it is */
+	if (packet[1] == REMOTE_DP_TARGETSEL) {
+		/* Check if there are enough bytes for the request */
+		if (packet_len == 10U) {
+			/* Extract the new targetsel information into the DP */
+			remote_dp.targetsel = hex_string_to_num(8U, packet + 2U);
+			remote_respond(REMOTE_RESP_OK, 0);
+		} else
+			/* There weren't enough bytes, so tell the host and get out of here */
+			remote_respond(REMOTE_RESP_ERR, REMOTE_ERROR_WRONGLEN);
+		return;
+	}
+
 	/* Our shortest ADIv5 packet is 8 bytes long, check that we have at least that */
 	if (packet_len < 8U) {
 		remote_respond(REMOTE_RESP_PARERR, 0);
@@ -596,7 +628,7 @@ static void remote_packet_process_adiv6(const char *const packet, const size_t p
 	SET_IDLE_STATE(1);
 }
 
-#if defined(ENABLE_RISCV_ACCEL) && ENABLE_RISCV_ACCEL == 1
+#if defined(CONFIG_RISCV_ACCEL) && CONFIG_RISCV_ACCEL == 1
 /*
  * This faked RISC-V DMI structure holds the currently used low-level implementation functions and basic DMI
  * state for remote protocol requests made. This is for use by remote_packet_process_riscv() so it can do the right
@@ -813,6 +845,11 @@ void remote_packet_process_spi(const char *const packet, const size_t packet_len
 
 void remote_packet_process(char *const packet, const size_t packet_length)
 {
+	/* Check there's at least a request byte */
+	if (packet_length < 1U) {
+		remote_respond(REMOTE_RESP_ERR, REMOTE_ERROR_WRONGLEN);
+		return;
+	}
 	switch (packet[0]) {
 	case REMOTE_SWDP_PACKET:
 		remote_packet_process_swd(packet, packet_length);
@@ -843,7 +880,7 @@ void remote_packet_process(char *const packet, const size_t packet_length)
 		break;
 	}
 
-#if defined(ENABLE_RISCV_ACCEL) && ENABLE_RISCV_ACCEL == 1
+#if defined(CONFIG_RISCV_ACCEL) && CONFIG_RISCV_ACCEL == 1
 	case REMOTE_RISCV_PACKET:
 		remote_packet_process_riscv(packet, packet_length);
 		break;

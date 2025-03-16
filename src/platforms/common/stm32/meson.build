@@ -31,10 +31,13 @@
 platform_stm32_includes = include_directories('.')
 
 platform_stm32_sources = files(
-	'gdb_if.c',
 	'serialno.c',
 	'timing_stm32.c',
 )
+
+if probe != 'ctxlink'
+	platform_stm32_sources += files('gdb_if.c')
+endif
 
 platform_stm32_swo = declare_dependency(sources: files(
 	'swo.c',
@@ -56,7 +59,7 @@ platform_stm32_dfu_sources = files(
 platform_stm32_args = [
 	'-mthumb',
 	'-nostartfiles',
-	'-DPC_HOSTED=0',
+	'-DCONFIG_BMDA=0',
 ]
 
 platform_stm32_link_args = [
@@ -64,7 +67,7 @@ platform_stm32_link_args = [
 	'-lc',
 	'-nostartfiles',
 	'--specs=nano.specs',
-	get_option('debug_output') ? '--specs=rdimon.specs' : '--specs=nosys.specs',
+	'--specs=nosys.specs',
 	'-Wl,-gc-sections',
 ]
 

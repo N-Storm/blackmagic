@@ -94,48 +94,50 @@ extern bool debug_bmp;
 /*
  * Important pin mappings for STM32 implementation:
  *   * JTAG/SWD
- *     * PB6 or PB5: TDI
- *     * PB7 or PB6: TDO/SWO
- *     * PB8 or PB7: TCK/SWCLK
- *     * PB9 or PB8: TMS/SWDIO
- *     * PA6 or PB3: TRST
- *     * PA5 or PB4: nRST
+ *     * PB6 or PB5 or PA15: TDI
+ *     * PB7 or PB6 or PB3: TDO/SWO
+ *     * PB8 or PB7 or PA14: TCK/SWCLK
+ *     * PB9 or PB8 or PA13: TMS/SWDIO
+ *     * PA6 or PB3 or PB4: TRST
+ *     * PA5 or PB4 or PA5: nRST
  *   * USB USART
  *     * PA2: USART TX
  *     * PA3: USART RX
  *   * +3V3
- *     * PA1 or PB9: power pin
+ *     * PA1 or PB9 or PA1: power pin
  *   * Force DFU mode button:
  *     * PA0: user button KEY
  */
 
 /* Hardware definitions... */
 /* Build the code using `make PROBE_HOST=blackpill-f4x1cx ALTERNATIVE_PINOUT=1` to select the second pinout. */
-#define TDI_PORT GPIOB
-#define TDI_PIN  PINOUT_SWITCH(GPIO6, GPIO5)
+/* `ALTERNATIVE_PINOUT=2` results in self SWJ-DP unmapped, like `swlink` */
+#define TDI_PORT PINOUT_SWITCH(GPIOB, GPIOB, GPIOA)
+#define TDI_PIN  PINOUT_SWITCH(GPIO6, GPIO5, GPIO15)
 
 #define TDO_PORT GPIOB
-#define TDO_PIN  PINOUT_SWITCH(GPIO7, GPIO6)
+#define TDO_PIN  PINOUT_SWITCH(GPIO7, GPIO6, GPIO3)
 
-#define TCK_PORT   GPIOB
-#define TCK_PIN    PINOUT_SWITCH(GPIO8, GPIO7)
+#define TCK_PORT   PINOUT_SWITCH(GPIOB, GPIOB, GPIOA)
+#define TCK_PIN    PINOUT_SWITCH(GPIO8, GPIO7, GPIO14)
 #define SWCLK_PORT TCK_PORT
 #define SWCLK_PIN  TCK_PIN
 
-#define TMS_PORT   GPIOB
-#define TMS_PIN    PINOUT_SWITCH(GPIO9, GPIO8)
+#define TMS_PORT   PINOUT_SWITCH(GPIOB, GPIOB, GPIOA)
+#define TMS_PIN    PINOUT_SWITCH(GPIO9, GPIO8, GPIO13)
 #define SWDIO_PORT TMS_PORT
 #define SWDIO_PIN  TMS_PIN
 
-#define SWDIO_MODE_REG_MULT_PB9 (1U << (9U << 1U))
-#define SWDIO_MODE_REG_MULT_PB8 (1U << (8U << 1U))
+#define SWDIO_MODE_REG_MULT_PB9  (1U << (9U << 1U))
+#define SWDIO_MODE_REG_MULT_PB8  (1U << (8U << 1U))
+#define SWDIO_MODE_REG_MULT_PA13 (1U << (13U << 1U))
 /* Update when adding more alternative pinouts */
-#define SWDIO_MODE_REG_MULT PINOUT_SWITCH(SWDIO_MODE_REG_MULT_PB9, SWDIO_MODE_REG_MULT_PB8)
+#define SWDIO_MODE_REG_MULT PINOUT_SWITCH(SWDIO_MODE_REG_MULT_PB9, SWDIO_MODE_REG_MULT_PB8, SWDIO_MODE_REG_MULT_PA13)
 #define SWDIO_MODE_REG      GPIO_MODER(TMS_PORT)
 
 #define TMS_SET_MODE()                                                    \
 	gpio_mode_setup(TMS_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, TMS_PIN); \
-	gpio_set_output_options(TMS_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, TMS_PIN);
+	gpio_set_output_options(TMS_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_25MHZ, TMS_PIN);
 
 /* Perform SWDIO bus turnaround faster than a gpio_mode_setup() call */
 #define SWDIO_MODE_FLOAT()                       \
@@ -152,18 +154,18 @@ extern bool debug_bmp;
 		SWDIO_MODE_REG = mode_reg;              \
 	} while (0)
 
-#define TRST_PORT PINOUT_SWITCH(GPIOA, GPIOB)
-#define TRST_PIN  PINOUT_SWITCH(GPIO6, GPIO3)
+#define TRST_PORT PINOUT_SWITCH(GPIOA, GPIOB, GPIOB)
+#define TRST_PIN  PINOUT_SWITCH(GPIO6, GPIO3, GPIO4)
 
-#define NRST_PORT PINOUT_SWITCH(GPIOA, GPIOB)
-#define NRST_PIN  PINOUT_SWITCH(GPIO5, GPIO4)
+#define NRST_PORT PINOUT_SWITCH(GPIOA, GPIOB, GPIOA)
+#define NRST_PIN  PINOUT_SWITCH(GPIO5, GPIO4, GPIO5)
 
 /* SWO comes in on the same pin as TDO */
 #define SWO_PORT GPIOB
-#define SWO_PIN  PINOUT_SWITCH(GPIO7, GPIO6)
+#define SWO_PIN  PINOUT_SWITCH(GPIO7, GPIO6, GPIO3)
 
-#define PWR_BR_PORT PINOUT_SWITCH(GPIOA, GPIOB)
-#define PWR_BR_PIN  PINOUT_SWITCH(GPIO1, GPIO9)
+#define PWR_BR_PORT PINOUT_SWITCH(GPIOA, GPIOB, GPIOA)
+#define PWR_BR_PIN  PINOUT_SWITCH(GPIO1, GPIO9, GPIO1)
 
 #define USER_BUTTON_KEY_PORT GPIOA
 #define USER_BUTTON_KEY_PIN  GPIO0
@@ -174,7 +176,7 @@ extern bool debug_bmp;
 #define LED_BOOTLOADER GPIO15
 
 #define LED_PORT_UART GPIOA
-#define LED_UART      PINOUT_SWITCH(GPIO4, GPIO1)
+#define LED_UART      PINOUT_SWITCH(GPIO4, GPIO1, GPIO4)
 
 /* SPI2: PB12/13/14/15 to external chips */
 #define EXT_SPI         SPI2
@@ -289,29 +291,35 @@ extern bool debug_bmp;
 #define IRQ_PRI_SWO_TIM      (0U << 4U)
 #define IRQ_PRI_SWO_DMA      (0U << 4U)
 
-/* Use TIM4 Input 2 (from PB7/TDO) or Input 1 (from PB6/TDO), AF2, triggered on rising edge */
-#define SWO_TIM             TIM4
-#define SWO_TIM_CLK_EN()    rcc_periph_clock_enable(RCC_TIM4)
-#define SWO_TIM_IRQ         NVIC_TIM4_IRQ
-#define SWO_TIM_ISR(x)      tim4_isr(x)
-#define SWO_IC_IN           PINOUT_SWITCH(TIM_IC_IN_TI2, TIM_IC_IN_TI1)
-#define SWO_IC_RISING       PINOUT_SWITCH(TIM_IC2, TIM_IC1)
-#define SWO_CC_RISING       PINOUT_SWITCH(TIM4_CCR2, TIM4_CCR1)
-#define SWO_ITR_RISING      PINOUT_SWITCH(TIM_DIER_CC2IE, TIM_DIER_CC1IE)
-#define SWO_STATUS_RISING   PINOUT_SWITCH(TIM_SR_CC2IF, TIM_SR_CC1IF)
-#define SWO_IC_FALLING      PINOUT_SWITCH(TIM_IC1, TIM_IC2)
-#define SWO_CC_FALLING      PINOUT_SWITCH(TIM4_CCR1, TIM4_CCR2)
-#define SWO_STATUS_FALLING  PINOUT_SWITCH(TIM_SR_CC1IF, TIM_SR_CC2IF)
+/*
+ * Use general-purpose timer input capture triggered on rising edge
+ * TIM4 Input 2 from PB7 AF2, or
+ * TIM4 Input 1 from PB6 AF2, or
+ * TIM2 Input 2 from PB3 AF1
+ */
+#define SWO_TIM_CLK_EN()
+#define SWO_TIM_CLK         PINOUT_SWITCH(RCC_TIM4, RCC_TIM4, RCC_TIM2)
+#define SWO_TIM             PINOUT_SWITCH(TIM4, TIM4, TIM2)
+#define SWO_TIM_IRQ         PINOUT_SWITCH(NVIC_TIM4_IRQ, NVIC_TIM4_IRQ, NVIC_TIM2_IRQ)
+#define SWO_TIM_ISR(x)      PINOUT_SWITCH(tim4_isr(x), tim4_isr(x), tim2_isr(x))
+#define SWO_IC_IN           PINOUT_SWITCH(TIM_IC_IN_TI2, TIM_IC_IN_TI1, TIM_IC_IN_TI2)
+#define SWO_IC_RISING       PINOUT_SWITCH(TIM_IC2, TIM_IC1, TIM_IC2)
+#define SWO_CC_RISING       PINOUT_SWITCH(TIM4_CCR2, TIM4_CCR1, TIM2_CCR2)
+#define SWO_ITR_RISING      PINOUT_SWITCH(TIM_DIER_CC2IE, TIM_DIER_CC1IE, TIM_DIER_CC2IE)
+#define SWO_STATUS_RISING   PINOUT_SWITCH(TIM_SR_CC2IF, TIM_SR_CC1IF, TIM_SR_CC2IF)
+#define SWO_IC_FALLING      PINOUT_SWITCH(TIM_IC1, TIM_IC2, TIM_IC1)
+#define SWO_CC_FALLING      PINOUT_SWITCH(TIM4_CCR1, TIM4_CCR2, TIM2_CCR1)
+#define SWO_STATUS_FALLING  PINOUT_SWITCH(TIM_SR_CC1IF, TIM_SR_CC2IF, TIM_SR_CC1IF)
 #define SWO_STATUS_OVERFLOW (TIM_SR_CC1OF | TIM_SR_CC2OF)
-#define SWO_TRIG_IN         PINOUT_SWITCH(TIM_SMCR_TS_TI2FP2, TIM_SMCR_TS_TI1FP1)
-#define SWO_TIM_PIN_AF      GPIO_AF2
+#define SWO_TRIG_IN         PINOUT_SWITCH(TIM_SMCR_TS_TI2FP2, TIM_SMCR_TS_TI1FP1, TIM_SMCR_TS_TI2FP2)
+#define SWO_TIM_PIN_AF      PINOUT_SWITCH(GPIO_AF2, GPIO_AF2, GPIO_AF1)
 
-/* On F411 use USART1_RX mapped on PB7 for async capture */
+/* On F411 use USART1_RX mapped on PB7/PB6/PB3 for async capture */
 #define SWO_UART        USBUSART1
 #define SWO_UART_CLK    USBUSART1_CLK
 #define SWO_UART_DR     USBUSART1_DR
 #define SWO_UART_PORT   GPIOB
-#define SWO_UART_RX_PIN GPIO7
+#define SWO_UART_RX_PIN PINOUT_SWITCH(GPIO7, GPIO6, GPIO3)
 #define SWO_UART_PIN_AF GPIO_AF7
 
 /* Bind to the same DMA Rx channel */

@@ -44,6 +44,14 @@
 #define ADIV5_SWD_TO_JTAG_SELECT_SEQUENCE 0xe73cU /* 16 bits, LSB (MSB: 0x3ce7) */
 #define ADIV5_JTAG_TO_SWD_SELECT_SEQUENCE 0xe79eU /* 16 bits, LSB (MSB: 0x79e7) */
 
+/* ADIv5 SWD to Dormant State sequence */
+#define ADIV5_SWD_TO_DORMANT_SEQUENCE 0xe3bcU /* 16 bits, LSB (MSB: 0x3dc7) */
+
+/* ADIv5 JTAG to Dormant Sequence */
+#define ADIV5_JTAG_TO_DORMANT_SEQUENCE0 0x1fU       /* 5 bits */
+#define ADIV5_JTAG_TO_DORMANT_SEQUENCE1 0x33bbbbbaU /* 31 bits, LSB  (MSB : 0x2eeeeee6) */
+#define ADIV5_JTAG_TO_DORMANT_SEQUENCE2 0xffU       /* 8 bits  */
+
 /*
  * ADIv5 Selection Alert sequence
  * This sequence is sent MSB first and can be represented as either:
@@ -103,8 +111,39 @@
 #define PIDR6_OFFSET 0xfd8U /* DBGPID6 (Reserved) */
 #define PIDR7_OFFSET 0xfdcU /* DBGPID7 (Reserved) */
 
-#define DEVTYPE_OFFSET 0xfccU /* CoreSight Device Type Register */
-#define DEVARCH_OFFSET 0xfbcU /* CoreSight Device Architecture Register */
+/* CoreSight ROM registers */
+#define CORESIGHT_ROM_PRIDR0      0xc00U
+#define CORESIGHT_ROM_DBGRSTRR    0xc10U
+#define CORESIGHT_ROM_DBGRSTAR    0xc14U
+#define CORESIGHT_ROM_DBGPCR_BASE 0xa00U
+#define CORESIGHT_ROM_DBGPSR_BASE 0xa80U
+#define CORESIGHT_ROM_DEVARCH     0xfbcU
+#define CORESIGHT_ROM_DEVID       0xfc8U
+#define CORESIGHT_ROM_DEVTYPE     0xfccU
+
+#define CORESIGHT_ROM_PRIDR0_VERSION_MASK      (0xfU << 0U)
+#define CORESIGHT_ROM_PRIDR0_VERSION_NOT_IMPL  0x0U
+#define CORESIGHT_ROM_PRIDR0_HAS_DBG_RESET_REQ (1U << 4U)
+#define CORESIGHT_ROM_PRIDR0_HAS_SYS_RESET_REQ (1U << 5U)
+#define CORESIGHT_ROM_DBGPCR_PRESENT           (1U << 0U)
+#define CORESIGHT_ROM_DBGPCR_PWRREQ            (1U << 1U)
+#define CORESIGHT_ROM_DBGPSR_STATUS_ON         (1U << 0)
+#define CORESIGHT_ROM_DBGRST_REQ               (1U << 0U)
+#define CORESIGHT_ROM_DEVID_FORMAT             (0xfU << 0U)
+#define CORESIGHT_ROM_DEVID_FORMAT_32BIT       0U
+#define CORESIGHT_ROM_DEVID_FORMAT_64BIT       1U
+#define CORESIGHT_ROM_DEVID_SYSMEM             (1U << 4U)
+#define CORESIGHT_ROM_DEVID_HAS_POWERREQ       (1U << 5U)
+
+#define CORESIGHT_ROM_ROMENTRY_ENTRY_MASK        (0x3U << 0U)
+#define CORESIGHT_ROM_ROMENTRY_ENTRY_FINAL       0U
+#define CORESIGHT_ROM_ROMENTRY_ENTRY_INVALID     1U
+#define CORESIGHT_ROM_ROMENTRY_ENTRY_NOT_PRESENT 2U
+#define CORESIGHT_ROM_ROMENTRY_ENTRY_PRESENT     3U
+#define CORESIGHT_ROM_ROMENTRY_POWERID_VALID     (1U << 2U)
+#define CORESIGHT_ROM_ROMENTRY_POWERID_SHIFT     4U
+#define CORESIGHT_ROM_ROMENTRY_POWERID_MASK      (0x1fU << CORESIGHT_ROM_ROMENTRY_POWERID_SHIFT)
+#define CORESIGHT_ROM_ROMENTRY_OFFSET_MASK       UINT64_C(0xfffffffffffff000)
 
 /*
  * Component class ID register can be broken down into the following logical
@@ -142,10 +181,10 @@
 #define DEVARCH_ARCHID_ROMTABLE_V0 0x0af7U
 #define DEVARCH_PRESENT            (1U << 20U)
 
-#define SWDP_ACK_OK          0x01U
-#define SWDP_ACK_WAIT        0x02U
-#define SWDP_ACK_FAULT       0x04U
-#define SWDP_ACK_NO_RESPONSE 0x07U
+#define SWD_ACK_OK          0x01U
+#define SWD_ACK_WAIT        0x02U
+#define SWD_ACK_FAULT       0x04U
+#define SWD_ACK_NO_RESPONSE 0x07U
 
 /* Constants to make RnW parameters more clear in code */
 #define ADIV5_LOW_WRITE 0
@@ -165,7 +204,7 @@ struct adiv5_debug_port {
 	uint32_t (*low_access)(adiv5_debug_port_s *dp, uint8_t RnW, uint16_t addr, uint32_t value);
 	void (*abort)(adiv5_debug_port_s *dp, uint32_t abort);
 
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 	void (*ap_regs_read)(adiv5_access_port_s *ap, void *data);
 	uint32_t (*ap_reg_read)(adiv5_access_port_s *ap, uint8_t reg_num);
 	void (*ap_reg_write)(adiv5_access_port_s *ap, uint8_t num, uint32_t value);
@@ -237,6 +276,7 @@ typedef enum arm_arch {
 	aa_cortexm,
 	aa_cortexa,
 	aa_cortexr,
+	aa_rom_table,
 	aa_access_port,
 	aa_end
 } arm_arch_e;

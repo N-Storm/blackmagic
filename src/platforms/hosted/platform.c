@@ -69,9 +69,9 @@ static uint32_t max_frequency = 4000000U;
 
 static bmda_cli_options_s cl_opts;
 
-void gdb_ident(char *p, int count)
+void bmda_display_probe(void)
 {
-	snprintf(p, count, "%s (%s), %s", bmda_probe_info.manufacturer, bmda_probe_info.product, bmda_probe_info.version);
+	gdb_outf("Using a %s (%s), %s\n", bmda_probe_info.product, bmda_probe_info.manufacturer, bmda_probe_info.version);
 }
 
 static void exit_function(void)
@@ -129,7 +129,7 @@ void platform_init(int argc, char **argv)
 		bmda_probe_info.type = PROBE_TYPE_BMP;
 	else if (cl_opts.opt_gpio_map)
 		bmda_probe_info.type = PROBE_TYPE_GPIOD;
-	else if (find_debuggers(&cl_opts, &bmda_probe_info))
+	else if (!find_debuggers(&cl_opts, &bmda_probe_info))
 		exit(1);
 
 	if (cl_opts.opt_list_only)
@@ -150,7 +150,7 @@ void platform_init(int argc, char **argv)
 		break;
 
 	case PROBE_TYPE_CMSIS_DAP:
-		if (!dap_init())
+		if (!dap_init(cl_opts.opt_cmsisdap_allow_fallback))
 			exit(1);
 		break;
 
@@ -441,7 +441,7 @@ const char *platform_target_voltage(void)
 	}
 }
 
-void platform_nrst_set_val(bool assert)
+void platform_nrst_set_val(const bool assert)
 {
 	switch (bmda_probe_info.type) {
 	case PROBE_TYPE_BMP:
@@ -486,6 +486,9 @@ bool platform_nrst_get_val(void)
 
 	case PROBE_TYPE_FTDI:
 		return ftdi_nrst_get_val();
+
+	case PROBE_TYPE_CMSIS_DAP:
+		return dap_nrst_get_val();
 #endif
 
 	default:

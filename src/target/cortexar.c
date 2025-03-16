@@ -393,7 +393,7 @@ static size_t cortexar_reg_read(target_s *target, uint32_t reg, void *data, size
 static size_t cortexar_reg_write(target_s *target, uint32_t reg, const void *data, size_t max);
 
 static void cortexar_reset(target_s *target);
-static target_halt_reason_e cortexar_halt_poll(target_s *target, target_addr_t *watch);
+static target_halt_reason_e cortexar_halt_poll(target_s *target, target_addr64_t *watch);
 static void cortexar_halt_request(target_s *target);
 static void cortexar_halt_resume(target_s *target, bool step);
 static bool cortexar_halt_and_wait(target_s *target);
@@ -792,7 +792,8 @@ static target_s *cortexar_probe(
 	target->halt_resume = cortexar_halt_resume;
 
 	/* Ensure the core is powered up and we can talk to it */
-	cortexar_ensure_core_powered(target);
+	if (!cortexar_ensure_core_powered(target))
+		return NULL;
 
 	/* Try to halt the target core */
 	target_halt_request(target);
@@ -803,7 +804,7 @@ static target_s *cortexar_probe(
 		reason = target_halt_poll(target, NULL);
 	/* If we did not succeed, we must abort at this point. */
 	if (reason == TARGET_HALT_FAULT || reason == TARGET_HALT_ERROR)
-		return false;
+		return NULL;
 
 	cortex_read_cpuid(target);
 	/* The format of the debug identification register is described in DDI0406C §C11.11.15 pg2217 */
@@ -906,7 +907,7 @@ bool cortexa_probe(adiv5_access_port_s *const ap, const target_addr_t base_addre
 		break;
 	}
 
-#if PC_HOSTED == 0
+#if CONFIG_BMDA == 0
 	gdb_outf("Please report unknown device with Designer 0x%x Part ID 0x%x\n", target->designer_code, target->part_id);
 #else
 	DEBUG_WARN(
@@ -921,7 +922,7 @@ bool cortexr_probe(adiv5_access_port_s *const ap, const target_addr_t base_addre
 	if (!target)
 		return false;
 
-#if PC_HOSTED == 0
+#if CONFIG_BMDA == 0
 	gdb_outf("Please report unknown device with Designer 0x%x Part ID 0x%x\n", target->designer_code, target->part_id);
 #else
 	DEBUG_WARN(
@@ -994,7 +995,7 @@ static bool cortexar_check_error(target_s *const target)
 {
 	cortexar_priv_s *const priv = (cortexar_priv_s *)target->priv;
 	const bool fault = priv->core_status & (CORTEXAR_STATUS_DATA_FAULT | CORTEXAR_STATUS_MMU_FAULT);
-	priv->core_status = (uint8_t) ~(CORTEXAR_STATUS_DATA_FAULT | CORTEXAR_STATUS_MMU_FAULT);
+	priv->core_status &= (uint8_t) ~(CORTEXAR_STATUS_DATA_FAULT | CORTEXAR_STATUS_MMU_FAULT);
 	return fault || cortex_check_error(target);
 }
 
@@ -1196,7 +1197,7 @@ static bool cortexar_mem_write_slow(
 		offset += 2U;
 	}
 	/* Use the fast path to write as much as possible before doing a slow path fixup at the end */
-	if (!cortexar_mem_write_fast(target, (uint32_t *)(data + offset), (length - offset) >> 2U))
+	if (!cortexar_mem_write_fast(target, (const uint32_t *)(data + offset), (length - offset) >> 2U))
 		return false;
 	const uint8_t remainder = (length - offset) & 3U;
 	/* If the remainder needs at least 2 more bytes write, do this first */
@@ -1219,10 +1220,15 @@ static bool cortexar_mem_write_slow(
  * This writes memory by jumping from the debug unit bus to the system bus.
  * NB: This requires the core to be halted! Uses instruction launches on
  * the core and requires we're in debug mode to work. Trashes r0.
+ * If core is not halted, temporarily halts target and resumes at the end
+ * of the function.
  */
 static void cortexar_mem_write(
 	target_s *const target, const target_addr64_t dest, const void *const src, const size_t len)
 {
+	/* If system is not halted, halt temporarily within this function. */
+	const bool halted_in_function = cortexar_halt_and_wait(target);
+
 	cortexar_priv_s *const priv = (cortexar_priv_s *)target->priv;
 	DEBUG_PROTO("%s: Writing %zu bytes @0x%" PRIx64 ":", __func__, len, dest);
 #ifndef DEBUG_PROTO_IS_NOOP
@@ -1256,6 +1262,9 @@ static void cortexar_mem_write(
 		cortexar_mem_write_slow(target, dest, (const uint8_t *)src, len);
 	/* Deal with any data faults that occurred */
 	cortexar_mem_handle_fault(target, __func__);
+
+	if (halted_in_function)
+		cortexar_halt_resume(target, false);
 }
 
 static void cortexar_regs_read(target_s *const target, void *const data)
@@ -1396,7 +1405,7 @@ static void cortexar_halt_request(target_s *const target)
 	}
 }
 
-static target_halt_reason_e cortexar_halt_poll(target_s *const target, target_addr_t *const watch)
+static target_halt_reason_e cortexar_halt_poll(target_s *const target, target_addr64_t *const watch)
 {
 	volatile uint32_t dscr = 0;
 	TRY (EXCEPTION_ALL) {
@@ -1504,7 +1513,7 @@ static void cortexar_halt_resume(target_s *const target, const bool step)
 }
 
 /*
- * Halt the core and await halted status. This function should only return true when 
+ * Halt the core and await halted status. This function should only return true when
  * it is, itself, responsible for having halted the target. This allows storing of the
  * returned value to later determine whether the target should be resumed.
  */

@@ -32,10 +32,13 @@ option(
 		'riscv64',
 		'apollo3',
 		'at32f4',
+		'ch32',
 		'ch579',
 		'efm',
+		'gd32',
 		'hc32',
 		'lpc',
+		'mm32',
 		'nrf',
 		'nxp',
 		'puya',
@@ -84,6 +87,12 @@ option(
 	description: 'Use the BMD bootloader (not always applicable)'
 )
 option(
+	'stlink_v2_isol',
+	type: 'boolean',
+	value: false,
+	description: 'Build for the ISOL variant of ST-Link v2'
+)
+option(
 	'stlink_swim_nrst_as_uart',
 	type: 'boolean',
 	value: false,
@@ -98,7 +107,7 @@ option(
 option(
 	'advertise_noackmode',
 	type: 'boolean',
-	value: false,
+	value: true,
 	description: 'Let GDB know that the probe supports and prefers `QStartNoAckMode`'
 )
 option(
@@ -107,6 +116,13 @@ option(
 	choices: ['0', '1', '2', '3'],
 	value: '0',
 	description: 'Alternative pinout for probe (only applicable to blackpill-f4*)'
+)
+option(
+	'shield',
+	type: 'combo',
+	choices: ['0', '1'],
+	value: '0',
+	description: 'Select that blackpill-f4* is used with a shield (only applicable to blackpill-f4*)'
 )
 option(
 	'trace_protocol',

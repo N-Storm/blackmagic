@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2019, Alex Taradov <alex@taradov.com>
- * Copyright (C) 2023 1BitSquared <info@1bitsquared.com>
+ * Copyright (C) 2023-2024 1BitSquared <info@1bitsquared.com>
  * Modified by Rachel Mant <git@dragonmux.network>
  * All rights reserved.
  *
@@ -64,6 +64,7 @@
 #include <hidapi.h>
 #include <wchar.h>
 #include <sys/stat.h>
+#include <assert.h>
 
 #include "bmp_hosted.h"
 #include "dap.h"
@@ -103,9 +104,9 @@ static hid_device *handle = NULL;
 static uint8_t buffer[1025U];
 /*
  * Start by defaulting this to the typical size of `DAP_PACKET_SIZE` for FS USB. This value is pulled from here:
- * https://www.keil.com/pack/doc/CMSIS/DAP/html/group__DAP__Config__Debug__gr.html#gaa28bb1da2661291634c4a8fb3e227404
+ * https://arm-software.github.io/CMSIS-DAP/latest/group__DAP__Config__Debug__gr.html#gaa28bb1da2661291634c4a8fb3e227404
  */
-static size_t packet_size = 64U;
+static size_t dap_packet_size = 64U;
 bool dap_has_swd_sequence = false;
 
 dap_version_s dap_adaptor_version(dap_info_e version_kind);
@@ -157,7 +158,7 @@ static inline bool dap_version_compare_le(const dap_version_s lhs, const dap_ver
  */
 static inline size_t dap_max_transfer_data(size_t command_header_len)
 {
-	const size_t result = packet_size - command_header_len;
+	const size_t result = dap_packet_size - command_header_len;
 
 	/* Allow for an additional byte of payload overhead when sending data in HID Report payloads */
 	if (type == CMSIS_TYPE_HID)
@@ -221,13 +222,13 @@ static bool dap_init_hid(void)
 
 	/*
 	 * Base the report length information for the device on the max packet length from its descriptors.
-	 * Add 1 to account for HIDAPI's need to prefix with a report type byte.
+	 * Add 1 to account for HIDAPI's need to prefix with a report type byte. Limit to at most 512 bytes.
 	 */
-	packet_size = bmda_probe_info.max_packet_length + 1U;
+	dap_packet_size = MIN(bmda_probe_info.max_packet_length + 1U, 512U);
 
 	/* Handle the NXP LPC11U3x CMSIS-DAP v1.0.7 implementation needing a 64 byte report length */
 	if (bmda_probe_info.vid == 0x1fc9U && bmda_probe_info.pid == 0x0132U)
-		packet_size = 64U + 1U;
+		dap_packet_size = 64U + 1U;
 
 	/* Now open the device with HIDAPI so we can talk with it */
 	handle = hid_open(bmda_probe_info.vid, bmda_probe_info.pid, serial[0] ? serial : NULL);
@@ -255,22 +256,35 @@ static bool dap_init_bulk(void)
 		return false;
 	}
 	/* Base the packet size on the one retrieved from the device descriptors */
-	packet_size = bmda_probe_info.max_packet_length;
+	dap_packet_size = bmda_probe_info.max_packet_length;
 	in_ep = bmda_probe_info.in_ep;
 	out_ep = bmda_probe_info.out_ep;
 	return true;
 }
 
 /* LPC845 Breakout Board Rev. 0 reports an invalid response with > 65 bytes */
-bool dap_init(void)
+bool dap_init(bool allow_fallback)
 {
 	/* Initialise the adaptor via a suitable protocol */
-	if (bmda_probe_info.in_ep && bmda_probe_info.out_ep) {
+	if (bmda_probe_info.in_ep && bmda_probe_info.out_ep)
 		type = CMSIS_TYPE_BULK;
-		if (!dap_init_bulk())
-			return false;
-	} else {
+	else
 		type = CMSIS_TYPE_HID;
+
+	/* Windows hosts may not have the winusb driver associated with v2, handle that by degrading to v1 */
+	if (type == CMSIS_TYPE_BULK && !dap_init_bulk()) {
+		if (allow_fallback) {
+			DEBUG_WARN("Could not setup a CMSIS-DAP v2 device in Bulk mode (no drivers?), retrying HID mode\n");
+			type = CMSIS_TYPE_HID;
+		} else {
+			DEBUG_ERROR("Could not setup a CMSIS-DAP device over Bulk interface, failing. Hint: pass %s to retry "
+						"HID interface\n",
+				"--allow-fallback");
+			return false;
+		}
+	}
+
+	if (type == CMSIS_TYPE_HID) {
 		if (!dap_init_hid())
 			return false;
 	}
@@ -296,7 +310,7 @@ bool dap_init(void)
 		/* Report the failure */
 		DEBUG_WARN("Failed to get adaptor packet size, assuming descriptor provided size\n");
 	else
-		packet_size = dap_packet_size + (type == CMSIS_TYPE_HID ? 1U : 0U);
+		dap_packet_size = dap_packet_size + (type == CMSIS_TYPE_HID ? 1U : 0U);
 
 	/* Try to get the device's capabilities */
 	const size_t size = dap_info(DAP_INFO_CAPABILITIES, &dap_caps, sizeof(dap_caps));
@@ -337,6 +351,10 @@ bool dap_init(void)
 		dap_version_compare_le(adaptor_version, (dap_version_s){1, 3, 1}))
 		dap_quirks |= DAP_QUIRK_BAD_SWD_NO_RESP_DATA_PHASE;
 
+	/* ORBTrace needs an extra ZLP read done on full packet reception */
+	if (strcmp(bmda_probe_info.product, "Orbtrace") == 0)
+		dap_quirks |= DAP_QUIRK_NEEDS_EXTRA_ZLP_READ;
+
 	return true;
 }
 
@@ -375,6 +393,19 @@ dap_version_s dap_adaptor_version(const dap_info_e version_kind)
 	/* If that failed, return just the major */
 	if (!end)
 		return version;
+
+	/* Special-case the MCU-Link firmware to correct some version numbering mistakes they've made */
+	if (strncmp(bmda_probe_info.product, "MCU-Link", 8U) == 0) {
+		/* If this is a v1.10+ MCU-Link */
+		if (minor > 9U) {
+			/* Then unpack the version number - CMSIS-DAP v1.1.0 is (wrongly) encoded as v1.10 on these adaptors */
+			version.minor = minor / 10U;
+			version.revision = minor % 10U;
+			/* Now return early as we're now done */
+			return version;
+		}
+	}
+
 	version.minor = minor;
 	/* Check if it's worth trying to convert anything more */
 	if ((size_t)(end - version_str) >= version_length || end[0] != '.')
@@ -389,11 +420,6 @@ dap_version_s dap_adaptor_version(const dap_info_e version_kind)
 	version.revision = revision;
 	/* We got a complete version, discard anything more and return the 3 parts we care about. */
 	return version;
-}
-
-void dap_nrst_set_val(bool assert)
-{
-	dap_set_reset_state(assert);
 }
 
 void dap_dp_abort(adiv5_debug_port_s *const target_dp, const uint32_t abort)
@@ -446,17 +472,17 @@ ssize_t dbg_dap_cmd_hid(const uint8_t *const request_data, const size_t request_
 	const size_t response_length)
 {
 	// Need room to prepend HID Report ID byte
-	if (request_length + 1U > packet_size) {
-		DEBUG_ERROR(
-			"Attempted to make over-long request of %zu bytes, max length is %zu\n", request_length + 1U, packet_size);
+	if (request_length + 1U > dap_packet_size) {
+		DEBUG_ERROR("Attempted to make over-long request of %zu bytes, max length is %zu\n", request_length + 1U,
+			dap_packet_size);
 		exit(-1);
 	}
 
-	memset(buffer + request_length + 1U, 0xff, packet_size - (request_length + 1U));
+	memset(buffer + request_length + 1U, 0xff, dap_packet_size - (request_length + 1U));
 	buffer[0] = 0x00; // Report ID
 	memcpy(buffer + 1, request_data, request_length);
 
-	const int result = hid_write(handle, buffer, packet_size);
+	const int result = hid_write(handle, buffer, dap_packet_size);
 	if (result < 0) {
 		DEBUG_ERROR("CMSIS-DAP write error: %ls\n", hid_error(handle));
 		exit(-1);
@@ -480,8 +506,11 @@ ssize_t dbg_dap_cmd_bulk(const uint8_t *const request_data, const size_t request
 	const size_t response_length)
 {
 	int transferred = 0;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
 	const int request_result = libusb_bulk_transfer(
 		usb_handle, out_ep, (uint8_t *)request_data, (int)request_length, &transferred, TRANSFER_TIMEOUT_MS);
+#pragma GCC diagnostic push
 	if (request_result < 0) {
 		DEBUG_ERROR("CMSIS-DAP write error: %s (%d)\n", libusb_strerror(request_result), request_result);
 		return request_result;
@@ -496,6 +525,14 @@ ssize_t dbg_dap_cmd_bulk(const uint8_t *const request_data, const size_t request
 			return response_result;
 		}
 	} while (response_data[0] != request_data[0]);
+
+	/* If the response requested is the size of the packet size for the adaptor, generate a ZLP read to clean state */
+	if ((dap_quirks & DAP_QUIRK_NEEDS_EXTRA_ZLP_READ) && transferred == (int)dap_packet_size) {
+		uint8_t zlp;
+		int zlp_read = 0;
+		libusb_bulk_transfer(usb_handle, in_ep, &zlp, sizeof(zlp), &zlp_read, TRANSFER_TIMEOUT_MS);
+		assert(zlp_read == 0);
+	}
 	return transferred;
 }
 
@@ -510,16 +547,16 @@ static ssize_t dap_run_cmd_raw(const uint8_t *const request_data, const size_t r
 	/* Provide enough space for up to a HS USB HID payload */
 	uint8_t data[1024];
 	/* Make sure that we're not about to blow this buffer when we request data back */
-	if (sizeof(data) < packet_size) {
+	if (sizeof(data) < dap_packet_size) {
 		DEBUG_ERROR("CMSIS-DAP request would exceed response buffer\n");
 		return -1;
 	}
 
 	ssize_t response = -1;
 	if (type == CMSIS_TYPE_HID)
-		response = dbg_dap_cmd_hid(request_data, request_length, data, packet_size);
+		response = dbg_dap_cmd_hid(request_data, request_length, data, dap_packet_size);
 	else if (type == CMSIS_TYPE_BULK)
-		response = dbg_dap_cmd_bulk(request_data, request_length, data, packet_size);
+		response = dbg_dap_cmd_bulk(request_data, request_length, data, dap_packet_size);
 	if (response < 0)
 		return response;
 	const size_t result = (size_t)response;
@@ -545,6 +582,23 @@ bool dap_run_cmd(const void *const request_data, const size_t request_length, vo
 	return (size_t)result >= response_length;
 }
 
+bool dap_run_transfer(const void *const request_data, const size_t request_length, void *const response_data,
+	const size_t response_length, size_t *const actual_length)
+{
+	/*
+	 * This function works almost exactly the same as dap_run_cmd(), but captures and preserves the resulting
+	 * response length if the result is not an outright failure. It sets the actual response length to 0 when it is.
+	 */
+	const ssize_t result =
+		dap_run_cmd_raw((const uint8_t *)request_data, request_length, (uint8_t *)response_data, response_length) - 1U;
+	if (result < 0) {
+		*actual_length = 0U;
+		return false;
+	}
+	*actual_length = (size_t)result;
+	return *actual_length >= response_length;
+}
+
 static void dap_adiv5_mem_read(adiv5_access_port_s *ap, void *dest, target_addr64_t src, size_t len)
 {
 	if (len == 0U)
@@ -557,11 +611,12 @@ static void dap_adiv5_mem_read(adiv5_access_port_s *ap, void *dest, target_addr6
 		return;
 	}
 	/* Otherwise proceed blockwise */
-	const size_t blocks_per_transfer = dap_max_transfer_data(DAP_CMD_BLOCK_READ_HDR_LEN) >> 2U;
+	const size_t blocks_per_transfer = dap_max_transfer_data(DAP_CMD_BLOCK_READ_HDR_LEN + 1U) >> 2U;
 	uint8_t *const data = (uint8_t *)dest;
 	for (size_t offset = 0; offset < len;) {
 		/* Setup AP_TAR every loop as failing to do so results in it wrapping */
-		dap_adiv5_mem_access_setup(ap, src + offset, align);
+		if (!dap_adiv5_mem_access_setup(ap, src + offset, align))
+			return;
 		/*
 		 * src can start out unaligned to a 1024 byte chunk size,
 		 * so we have to calculate how much is left of the chunk.
@@ -599,7 +654,8 @@ static void dap_adiv5_mem_write(
 	const uint8_t *const data = (const uint8_t *)src;
 	for (size_t offset = 0; offset < len;) {
 		/* Setup AP_TAR every loop as failing to do so results in it wrapping */
-		dap_adiv5_mem_access_setup(ap, dest + offset, align);
+		if (!dap_adiv5_mem_access_setup(ap, dest + offset, align))
+			return;
 		/*
 		 * dest can start out unaligned to a 1024 byte chunk size,
 		 * so we have to calculate how much is left of the chunk.
@@ -638,11 +694,12 @@ static void dap_adiv6_mem_read(
 		return;
 	}
 	/* Otherwise proceed blockwise */
-	const size_t blocks_per_transfer = dap_max_transfer_data(DAP_CMD_BLOCK_READ_HDR_LEN) >> 2U;
+	const size_t blocks_per_transfer = dap_max_transfer_data(DAP_CMD_BLOCK_READ_HDR_LEN + 1U) >> 2U;
 	uint8_t *const data = (uint8_t *)dest;
 	for (size_t offset = 0; offset < len;) {
 		/* Setup AP_TAR every loop as failing to do so results in it wrapping */
-		dap_adiv6_mem_access_setup(ap, src + offset, align);
+		if (!dap_adiv6_mem_access_setup(ap, src + offset, align))
+			return;
 		/*
 		 * src can start out unaligned to a 1024 byte chunk size,
 		 * so we have to calculate how much is left of the chunk.
@@ -681,7 +738,8 @@ static void dap_adiv6_mem_write(
 	const uint8_t *const data = (const uint8_t *)src;
 	for (size_t offset = 0; offset < len;) {
 		/* Setup AP_TAR every loop as failing to do so results in it wrapping */
-		dap_adiv6_mem_access_setup(ap, dest + offset, align);
+		if (!dap_adiv6_mem_access_setup(ap, dest + offset, align))
+			return;
 		/*
 		 * dest can start out unaligned to a 1024 byte chunk size,
 		 * so we have to calculate how much is left of the chunk.

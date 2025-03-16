@@ -39,12 +39,94 @@
 #include "hex_utils.h"
 #include "exception.h"
 
+static bool remote_v4_have_dp_version_command = true;
+static bool remote_v4_have_dp_targetsel_command = true;
+static uint8_t remote_v4_current_dp_version = UINT8_MAX;
+static uint32_t remote_v4_current_dp_targetsel = UINT32_MAX;
+
+static void remote_v4_adiv5_dp_version(adiv5_debug_port_s *const dp)
+{
+	/*
+	 * Check if the probe actually has this command, skip if it does not.
+	 * Likewise check if the DP version has changed since last call.
+	 */
+	if (!remote_v4_have_dp_version_command || remote_v4_current_dp_version == dp->version)
+		return;
+	/* Create the request and send it to the remote */
+	char buffer[REMOTE_MAX_MSG_SIZE];
+	ssize_t length = snprintf(buffer, REMOTE_MAX_MSG_SIZE, REMOTE_DP_VERSION_STR, dp->version);
+	platform_buffer_write(buffer, length);
+	/* Now read back the answer and note any errors */
+	length = platform_buffer_read(buffer, REMOTE_MAX_MSG_SIZE);
+	if (length < 1)
+		DEBUG_ERROR("%s comms error: %zd\n", __func__, length);
+	else if (buffer[0] != REMOTE_RESP_OK) {
+		DEBUG_WARN("Please upgrade your firmware to allow ADIv6 devices to work properly\n");
+		remote_v4_have_dp_version_command = false;
+	} else
+		remote_v4_current_dp_version = dp->version;
+}
+
+static void remote_v4_adiv5_dp_targetsel(adiv5_debug_port_s *const dp)
+{
+	/*
+	 * Check if the probe actually has this command, skip if it does not.
+	 * Likewise check if the DP version has changed since last call.
+	 */
+	if (!remote_v4_have_dp_targetsel_command || dp->version < 2U || remote_v4_current_dp_targetsel == dp->targetsel)
+		return;
+	/* Create the request and send it to the remote */
+	char buffer[REMOTE_MAX_MSG_SIZE];
+	ssize_t length = snprintf(buffer, REMOTE_MAX_MSG_SIZE, REMOTE_DP_TARGETSEL_STR, dp->targetsel);
+	platform_buffer_write(buffer, length);
+	/* Now read back the answer and note any errors */
+	length = platform_buffer_read(buffer, REMOTE_MAX_MSG_SIZE);
+	if (length < 1)
+		DEBUG_ERROR("%s comms error: %zd\n", __func__, length);
+	else if (buffer[0] != REMOTE_RESP_OK) {
+		DEBUG_WARN("Please upgrade your firmware to allow certain multi-drop SWD devices to work properly\n");
+		remote_v4_have_dp_targetsel_command = false;
+	} else
+		remote_v4_current_dp_targetsel = dp->targetsel;
+}
+
+uint32_t remote_v4_adiv5_raw_access(
+	adiv5_debug_port_s *const dp, const uint8_t rnw, const uint16_t addr, const uint32_t request_value)
+{
+	remote_v4_adiv5_dp_version(dp);
+	remote_v4_adiv5_dp_targetsel(dp);
+	return remote_v3_adiv5_raw_access(dp, rnw, addr, request_value);
+}
+
+uint32_t remote_v4_adiv5_dp_read(adiv5_debug_port_s *const dp, const uint16_t addr)
+{
+	remote_v4_adiv5_dp_version(dp);
+	remote_v4_adiv5_dp_targetsel(dp);
+	return remote_v3_adiv5_dp_read(dp, addr);
+}
+
+uint32_t remote_v4_adiv5_ap_read(adiv5_access_port_s *const ap, const uint16_t addr)
+{
+	remote_v4_adiv5_dp_version(ap->dp);
+	remote_v4_adiv5_dp_targetsel(ap->dp);
+	return remote_v3_adiv5_ap_read(ap, addr);
+}
+
+void remote_v4_adiv5_ap_write(adiv5_access_port_s *const ap, const uint16_t addr, const uint32_t value)
+{
+	remote_v4_adiv5_dp_version(ap->dp);
+	remote_v4_adiv5_dp_targetsel(ap->dp);
+	remote_v3_adiv5_ap_write(ap, addr, value);
+}
+
 void remote_v4_adiv5_mem_read_bytes(
 	adiv5_access_port_s *const ap, void *const dest, const target_addr64_t src, const size_t read_length)
 {
 	/* Check if we have anything to do */
 	if (!read_length)
 		return;
+	remote_v4_adiv5_dp_version(ap->dp);
+	remote_v4_adiv5_dp_targetsel(ap->dp);
 	char *const data = (char *)dest;
 	DEBUG_PROBE("%s: @%08" PRIx64 "+%zx\n", __func__, src, read_length);
 	char buffer[REMOTE_MAX_MSG_SIZE];
@@ -79,6 +161,8 @@ void remote_v4_adiv5_mem_write_bytes(adiv5_access_port_s *const ap, const target
 	/* Check if we have anything to do */
 	if (!write_length)
 		return;
+	remote_v4_adiv5_dp_version(ap->dp);
+	remote_v4_adiv5_dp_targetsel(ap->dp);
 	const char *data = (const char *)src;
 	DEBUG_PROBE("%s: @%08" PRIx64 "+%zx alignment %u\n", __func__, dest, write_length, align);
 	/* + 1 for terminating NUL character */

@@ -48,7 +48,8 @@ bool riscv64_probe(target_s *target);
 bool efm32_aap_probe(adiv5_access_port_s *ap);
 bool kinetis_mdm_probe(adiv5_access_port_s *ap);
 bool lpc55_dmap_probe(adiv5_access_port_s *ap);
-bool nrf51_mdm_probe(adiv5_access_port_s *ap);
+bool nrf51_ctrl_ap_probe(adiv5_access_port_s *ap);
+bool nrf54l_ctrl_ap_probe(adiv5_access_port_s *ap);
 bool rp2040_rescue_probe(adiv5_access_port_s *ap);
 
 bool at32f40x_probe(target_s *target); // STM32 clones from Artery
@@ -76,7 +77,9 @@ bool mm32l0xx_probe(target_s *target);
 bool mm32f3xx_probe(target_s *target);
 bool msp432e4_probe(target_s *target);
 bool msp432p4_probe(target_s *target);
+bool mspm0_probe(target_s *target);
 bool nrf51_probe(target_s *target);
+bool nrf54l_probe(target_s *target);
 bool nrf91_probe(target_s *target);
 bool puya_probe(target_s *target);
 bool renesas_ra_probe(target_s *target);

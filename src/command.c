@@ -36,7 +36,7 @@
 #include "version.h"
 #include "jtagtap.h"
 
-#if PC_HOSTED == 0
+#if CONFIG_BMDA == 0
 #include "jtag_scan.h"
 #endif
 
@@ -51,34 +51,40 @@
 #include "usb.h"
 #endif
 
-static bool cmd_version(target_s *t, int argc, const char **argv);
-static bool cmd_help(target_s *t, int argc, const char **argv);
+static bool cmd_version(target_s *target, int argc, const char **argv);
+static bool cmd_help(target_s *target, int argc, const char **argv);
 
 static bool cmd_jtag_scan(target_s *target, int argc, const char **argv);
 static bool cmd_swd_scan(target_s *target, int argc, const char **argv);
-static bool cmd_auto_scan(target_s *t, int argc, const char **argv);
-static bool cmd_frequency(target_s *t, int argc, const char **argv);
-static bool cmd_targets(target_s *t, int argc, const char **argv);
-static bool cmd_morse(target_s *t, int argc, const char **argv);
-static bool cmd_halt_timeout(target_s *t, int argc, const char **argv);
-static bool cmd_connect_reset(target_s *t, int argc, const char **argv);
-static bool cmd_reset(target_s *t, int argc, const char **argv);
-static bool cmd_tdi_low_reset(target_s *t, int argc, const char **argv);
+static bool cmd_auto_scan(target_s *target, int argc, const char **argv);
+static bool cmd_frequency(target_s *target, int argc, const char **argv);
+static bool cmd_targets(target_s *target, int argc, const char **argv);
+static bool cmd_morse(target_s *target, int argc, const char **argv);
+static bool cmd_halt_timeout(target_s *target, int argc, const char **argv);
+static bool cmd_connect_reset(target_s *target, int argc, const char **argv);
+static bool cmd_reset(target_s *target, int argc, const char **argv);
+static bool cmd_tdi_low_reset(target_s *target, int argc, const char **argv);
 #ifdef PLATFORM_HAS_POWER_SWITCH
-static bool cmd_target_power(target_s *t, int argc, const char **argv);
+static bool cmd_target_power(target_s *target, int argc, const char **argv);
+#endif
+#ifdef PLATFORM_HAS_BATTERY
+static bool cmd_target_battery(target_s *t, int argc, const char **argv);
+#endif
+#ifdef PLATFORM_HAS_WIFI
+static bool cmd_wifi(target_s *t, int argc, const char **argv);
 #endif
 #ifdef PLATFORM_HAS_TRACESWO
-static bool cmd_swo(target_s *t, int argc, const char **argv);
+static bool cmd_swo(target_s *target, int argc, const char **argv);
 #endif
-static bool cmd_heapinfo(target_s *t, int argc, const char **argv);
+static bool cmd_heapinfo(target_s *target, int argc, const char **argv);
 #ifdef ENABLE_RTT
-static bool cmd_rtt(target_s *t, int argc, const char **argv);
+static bool cmd_rtt(target_s *target, int argc, const char **argv);
 #endif
-#if defined(PLATFORM_HAS_DEBUG) && PC_HOSTED == 0
-static bool cmd_debug_bmp(target_s *t, int argc, const char **argv);
+#if defined(PLATFORM_HAS_DEBUG) && CONFIG_BMDA == 0
+static bool cmd_debug_bmp(target_s *target, int argc, const char **argv);
 #endif
-#if PC_HOSTED == 1
-static bool cmd_shutdown_bmda(target_s *t, int argc, const char **argv);
+#if CONFIG_BMDA == 1
+static bool cmd_shutdown_bmda(target_s *target, int argc, const char **argv);
 #endif
 
 #ifdef _MSC_VER
@@ -103,6 +109,12 @@ const command_s cmd_list[] = {
 #ifdef PLATFORM_HAS_POWER_SWITCH
 	{"tpwr", cmd_target_power, "Supplies power to the target: [enable|disable]"},
 #endif
+#ifdef PLATFORM_HAS_BATTERY
+	{"battery", cmd_target_battery, "Reads the battery state"},
+#endif
+#ifdef PLATFORM_HAS_WIFI
+	{"wifi", cmd_wifi, "Show/Set Wi-Fi connection [AP name,passphrase]"},
+#endif
 #ifdef ENABLE_RTT
 	{"rtt", cmd_rtt,
 		"[enable|disable|status|channel [0..15 ...]|ident [STR]|cblock|ram [RAM_START RAM_END]|poll [MAXMS MINMS "
@@ -119,10 +131,10 @@ const command_s cmd_list[] = {
 	{"traceswo", cmd_swo, "Deprecated: use swo instead"},
 #endif
 	{"heapinfo", cmd_heapinfo, "Set semihosting heapinfo: HEAP_BASE HEAP_LIMIT STACK_BASE STACK_LIMIT"},
-#if defined(PLATFORM_HAS_DEBUG) && PC_HOSTED == 0
+#if defined(PLATFORM_HAS_DEBUG) && CONFIG_BMDA == 0
 	{"debug_bmp", cmd_debug_bmp, "Output BMP \"debug\" strings to the second vcom: [enable|disable]"},
 #endif
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 	{"shutdown_bmda", cmd_shutdown_bmda, "Tell the BMDA server to shut down when the GDB connection closes"},
 #endif
 	{NULL, NULL, NULL},
@@ -133,12 +145,12 @@ extern const command_s platform_cmd_list[];
 #endif
 
 bool connect_assert_nrst;
-#if defined(PLATFORM_HAS_DEBUG) && PC_HOSTED == 0
+#if defined(PLATFORM_HAS_DEBUG) && CONFIG_BMDA == 0
 bool debug_bmp;
 #endif
 unsigned cortexm_wait_timeout = 2000; /* Timeout to wait for Cortex to react on halt command. */
 
-int command_process(target_s *const t, char *const cmd_buffer)
+int command_process(target_s *const target, char *const cmd_buffer)
 {
 	/* Initial estimate for argc */
 	size_t argc = 1;
@@ -165,50 +177,49 @@ int command_process(target_s *const t, char *const cmd_buffer)
 		 * So 'mon ver' will match 'monitor version'
 		 */
 		if ((argc == 0) || !strncmp(argv[0], cmd->cmd, strlen(argv[0])))
-			return !cmd->handler(t, argc, argv);
+			return !cmd->handler(target, argc, argv);
 	}
 
 #ifdef PLATFORM_HAS_CUSTOM_COMMANDS
 	for (const command_s *cmd = platform_cmd_list; cmd->cmd; ++cmd) {
 		if (!strncmp(argv[0], cmd->cmd, strlen(argv[0])))
-			return !cmd->handler(t, argc, argv);
+			return !cmd->handler(target, argc, argv);
 	}
 #endif
 
-	if (!t)
+	if (!target)
 		return -1;
-	return target_command(t, argc, argv);
+	return target_command(target, argc, argv);
 }
 
-#define BOARD_IDENT "Black Magic Probe " PLATFORM_IDENT "" FIRMWARE_VERSION
-
-bool cmd_version(target_s *t, int argc, const char **argv)
+bool cmd_version(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	(void)argc;
 	(void)argv;
-#if PC_HOSTED == 1
-	char ident[256];
-	gdb_ident(ident, sizeof(ident));
-	DEBUG_WARN("%s\n", ident);
-	DEBUG_WARN("Copyright (C) 2010-2023 Black Magic Debug Project\n");
-	DEBUG_WARN("License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\n\n");
+#if CONFIG_BMDA == 1
+	gdb_out("Black Magic Debug App " FIRMWARE_VERSION "\n");
+	bmda_display_probe();
 #else
+#ifndef PLATFORM_IDENT_DYNAMIC
 	gdb_out(BOARD_IDENT);
-	gdb_outf(", Hardware Version %d\n", platform_hwversion());
-	gdb_out("Copyright (C) 2010-2023 Black Magic Debug Project\n");
-	gdb_out("License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\n\n");
+#else
+	gdb_outf(BOARD_IDENT, platform_ident());
 #endif
+	gdb_outf(", Hardware Version %d\n", platform_hwversion());
+#endif
+	gdb_out("Copyright (C) 2010-2024 Black Magic Debug Project\n");
+	gdb_out("License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\n\n");
 
 	return true;
 }
 
-bool cmd_help(target_s *t, int argc, const char **argv)
+bool cmd_help(target_s *target, int argc, const char **argv)
 {
 	(void)argc;
 	(void)argv;
 
-	if (!t || t->tc->destroy_callback) {
+	if (!target || target->tc->destroy_callback) {
 		gdb_out("General commands:\n");
 		for (const command_s *cmd = cmd_list; cmd->cmd; cmd++)
 			gdb_outf("\t%s -- %s\n", cmd->cmd, cmd->help);
@@ -217,11 +228,11 @@ bool cmd_help(target_s *t, int argc, const char **argv)
 		for (const command_s *cmd = platform_cmd_list; cmd->cmd; ++cmd)
 			gdb_outf("\t%s -- %s\n", cmd->cmd, cmd->help);
 #endif
-		if (!t)
+		if (!target)
 			return true;
 	}
 
-	target_command_help(t);
+	target_command_help(target);
 	return true;
 }
 
@@ -238,7 +249,7 @@ static bool cmd_jtag_scan(target_s *target, int argc, const char **argv)
 
 	bool scan_result = false;
 	TRY (EXCEPTION_ALL) {
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 		scan_result = bmda_jtag_scan();
 #else
 		scan_result = jtag_scan();
@@ -250,6 +261,8 @@ static bool cmd_jtag_scan(target_s *target, int argc, const char **argv)
 		break;
 	case EXCEPTION_ERROR:
 		gdb_outf("Exception: %s\n", exception_frame.msg);
+		break;
+	default:
 		break;
 	}
 
@@ -279,7 +292,7 @@ bool cmd_swd_scan(target_s *target, int argc, const char **argv)
 
 	bool scan_result = false;
 	TRY (EXCEPTION_ALL) {
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 		scan_result = bmda_swd_scan(targetid);
 #else
 		scan_result = adiv5_swd_scan(targetid);
@@ -291,6 +304,8 @@ bool cmd_swd_scan(target_s *target, int argc, const char **argv)
 		break;
 	case EXCEPTION_ERROR:
 		gdb_outf("Exception: %s\n", exception_frame.msg);
+		break;
+	default:
 		break;
 	}
 
@@ -307,9 +322,9 @@ bool cmd_swd_scan(target_s *target, int argc, const char **argv)
 	return true;
 }
 
-bool cmd_auto_scan(target_s *t, int argc, const char **argv)
+bool cmd_auto_scan(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	(void)argc;
 	(void)argv;
 
@@ -320,7 +335,7 @@ bool cmd_auto_scan(target_s *t, int argc, const char **argv)
 
 	bool scan_result = false;
 	TRY (EXCEPTION_ALL) {
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 		scan_result = bmda_jtag_scan();
 #else
 		scan_result = jtag_scan();
@@ -328,7 +343,7 @@ bool cmd_auto_scan(target_s *t, int argc, const char **argv)
 		if (!scan_result) {
 			gdb_out("JTAG scan found no devices, trying SWD!\n");
 
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 			scan_result = bmda_swd_scan(0);
 #else
 			scan_result = adiv5_swd_scan(0);
@@ -343,6 +358,8 @@ bool cmd_auto_scan(target_s *t, int argc, const char **argv)
 		break;
 	case EXCEPTION_ERROR:
 		gdb_outf("Exception: %s\n", exception_frame.msg);
+		break;
+	default:
 		break;
 	}
 
@@ -359,9 +376,9 @@ bool cmd_auto_scan(target_s *t, int argc, const char **argv)
 	return true;
 }
 
-bool cmd_frequency(target_s *t, int argc, const char **argv)
+bool cmd_frequency(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	if (argc == 2) {
 		char *multiplier = NULL;
 		uint32_t frequency = strtoul(argv[1], &multiplier, 10);
@@ -375,6 +392,8 @@ bool cmd_frequency(target_s *t, int argc, const char **argv)
 			break;
 		case 'M':
 			frequency *= 1000U * 1000U;
+			break;
+		default:
 			break;
 		}
 		platform_max_frequency_set(frequency);
@@ -414,9 +433,9 @@ bool cmd_targets(target_s *target, int argc, const char **argv)
 	return true;
 }
 
-bool cmd_morse(target_s *t, int argc, const char **argv)
+bool cmd_morse(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	(void)argc;
 	(void)argv;
 	if (morse_msg) {
@@ -441,9 +460,9 @@ bool parse_enable_or_disable(const char *value, bool *out)
 	return true;
 }
 
-static bool cmd_connect_reset(target_s *t, int argc, const char **argv)
+static bool cmd_connect_reset(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	bool print_status = false;
 	if (argc == 1)
 		print_status = true;
@@ -459,18 +478,18 @@ static bool cmd_connect_reset(target_s *t, int argc, const char **argv)
 	return true;
 }
 
-static bool cmd_halt_timeout(target_s *t, int argc, const char **argv)
+static bool cmd_halt_timeout(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	if (argc > 1)
 		cortexm_wait_timeout = strtoul(argv[1], NULL, 0);
 	gdb_outf("Cortex-M timeout to wait for device halts: %u\n", cortexm_wait_timeout);
 	return true;
 }
 
-static bool cmd_reset(target_s *t, int argc, const char **argv)
+static bool cmd_reset(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	uint32_t pulse_len_ms = 0;
 	if (argc > 1)
 		pulse_len_ms = strtoul(argv[1], NULL, 0);
@@ -481,20 +500,22 @@ static bool cmd_reset(target_s *t, int argc, const char **argv)
 	return true;
 }
 
-static bool cmd_tdi_low_reset(target_s *t, int argc, const char **argv)
+static bool cmd_tdi_low_reset(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	(void)argc;
 	(void)argv;
+	if (!jtag_proc.jtagtap_next)
+		return false;
 	jtag_proc.jtagtap_next(true, false);
 	cmd_reset(NULL, 0, NULL);
 	return true;
 }
 
 #ifdef PLATFORM_HAS_POWER_SWITCH
-static bool cmd_target_power(target_s *t, int argc, const char **argv)
+static bool cmd_target_power(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	if (argc == 1)
 		gdb_outf("Target Power: %s\n", platform_target_get_power() ? "enabled" : "disabled");
 	else if (argc == 2) {
@@ -516,15 +537,33 @@ static bool cmd_target_power(target_s *t, int argc, const char **argv)
 }
 #endif
 
+#ifdef PLATFORM_HAS_BATTERY
+static bool cmd_target_battery(target_s *t, int argc, const char **argv)
+{
+	(void)t;
+	(void)argc;
+	(void)argv;
+	gdb_out(platform_battery_voltage());
+	return true;
+}
+#endif
+#ifdef PLATFORM_HAS_WIFI
+static bool cmd_wifi(target_s *t, int argc, const char **argv)
+{
+	(void)t;
+	gdb_out(platform_wifi_state(argc, argv));
+	return true;
+}
+#endif
+
 #ifdef ENABLE_RTT
 static const char *on_or_off(const bool value)
 {
 	return value ? "on" : "off";
 }
 
-static bool cmd_rtt(target_s *t, int argc, const char **argv)
+static bool cmd_rtt(target_s *target, int argc, const char **argv)
 {
-	(void)t;
 	const size_t command_len = argc > 1 ? strlen(argv[1]) : 0;
 	if (argc == 1 || (argc == 2 && strncmp(argv[1], "enabled", command_len) == 0)) {
 		rtt_enabled = true;
@@ -539,7 +578,7 @@ static bool cmd_rtt(target_s *t, int argc, const char **argv)
 			gdb_out("off");
 		else
 			gdb_outf("\"%s\"", rtt_ident);
-		gdb_outf(" halt: %s", on_or_off(target_mem_access_needs_halt(t)));
+		gdb_outf(" halt: %s", on_or_off(target_mem_access_needs_halt(target)));
 		gdb_out(" channels: ");
 		if (rtt_auto_channel)
 			gdb_out("auto ");
@@ -687,9 +726,9 @@ static bool cmd_swo_disable(void)
 	return true;
 }
 
-static bool cmd_swo(target_s *t, int argc, const char **argv)
+static bool cmd_swo(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	bool enable_swo = false;
 	if (argc >= 2 && !parse_enable_or_disable(argv[1], &enable_swo)) {
 		gdb_out("Usage: traceswo <enable|disable> [2000000] [decode [0 1 3 31]]\n");
@@ -702,10 +741,10 @@ static bool cmd_swo(target_s *t, int argc, const char **argv)
 }
 #endif
 
-#if defined(PLATFORM_HAS_DEBUG) && PC_HOSTED == 0
-static bool cmd_debug_bmp(target_s *t, int argc, const char **argv)
+#if defined(PLATFORM_HAS_DEBUG) && CONFIG_BMDA == 0
+static bool cmd_debug_bmp(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	if (argc == 2 && !parse_enable_or_disable(argv[1], &debug_bmp))
 		return false;
 	if (argc > 2) {
@@ -718,10 +757,10 @@ static bool cmd_debug_bmp(target_s *t, int argc, const char **argv)
 }
 #endif
 
-#if PC_HOSTED == 1
-static bool cmd_shutdown_bmda(target_s *t, int argc, const char **argv)
+#if CONFIG_BMDA == 1
+static bool cmd_shutdown_bmda(target_s *target, int argc, const char **argv)
 {
-	(void)t;
+	(void)target;
 	(void)argc;
 	(void)argv;
 	shutdown_bmda = true;
@@ -737,9 +776,9 @@ static bool cmd_shutdown_bmda(target_s *t, int argc, const char **argv)
  * - If the target system crashes, increase heap or stack
  * See newlib/libc/sys/arm/crt0.S "Issue Angel SWI to read stack info"
  */
-static bool cmd_heapinfo(target_s *t, int argc, const char **argv)
+static bool cmd_heapinfo(target_s *target, int argc, const char **argv)
 {
-	if (t == NULL)
+	if (target == NULL)
 		gdb_out("not attached\n");
 	else if (argc == 5) {
 		target_addr_t heap_base = strtoul(argv[1], NULL, 16);
@@ -749,7 +788,7 @@ static bool cmd_heapinfo(target_s *t, int argc, const char **argv)
 		gdb_outf("heap_base: %08" PRIx32 " heap_limit: %08" PRIx32 " stack_base: %08" PRIx32 " stack_limit: "
 				 "%08" PRIx32 "\n",
 			heap_base, heap_limit, stack_base, stack_limit);
-		target_set_heapinfo(t, heap_base, heap_limit, stack_base, stack_limit);
+		target_set_heapinfo(target, heap_base, heap_limit, stack_base, stack_limit);
 	} else
 		gdb_outf("%s\n", "Set semihosting heapinfo: HEAP_BASE HEAP_LIMIT STACK_BASE STACK_LIMIT");
 	return true;

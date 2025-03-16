@@ -105,7 +105,7 @@ uint32_t swo_uart_get_baudrate(void)
 #define FIFO_SIZE 256U
 
 /* RX Fifo buffer */
-static volatile uint8_t buf_rx[FIFO_SIZE];
+static uint8_t buf_rx[FIFO_SIZE];
 /* Fifo in pointer, writes assumed to be atomic, should be only incremented within RX ISR */
 static volatile uint32_t buf_rx_in = 0;
 /* Fifo out pointer, writes assumed to be atomic, should be only incremented outside RX ISR */
@@ -126,7 +126,7 @@ void trace_buf_push(void)
 	if (len > 64U)
 		len = 64;
 
-	if (usbd_ep_write_packet(usbdev, USB_REQ_TYPE_IN | SWO_ENDPOINT, (uint8_t *)&buf_rx[buf_rx_out], len) == len) {
+	if (usbd_ep_write_packet(usbdev, SWO_ENDPOINT, (uint8_t *)&buf_rx[buf_rx_out], len) == len) {
 		buf_rx_out += len;
 		buf_rx_out %= FIFO_SIZE;
 	}

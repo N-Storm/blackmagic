@@ -35,8 +35,12 @@
 typedef SOCKET socket_t;
 #define PRI_SOCKET "zu"
 #ifndef __CYGWIN__
+#ifdef _WIN64
 typedef signed long long ssize_t;
-#endif
+#else
+typedef signed int ssize_t;
+#endif /* _WIN64 */
+#endif /* __CYGWIN__ */
 #else
 #include <sys/socket.h>
 #include <netdb.h>
@@ -136,7 +140,7 @@ static sockaddr_storage_s sockaddr_prepare(const uint16_t port)
 	addrinfo_s *results = NULL;
 	int res = getaddrinfo(NULL, "0", &hints, &results);
 	if (res || !results) {
-		DEBUG_WARN("getaddrinfo returned %d (errno = %d), results is %p\n", res, errno, results);
+		DEBUG_WARN("getaddrinfo returned %d (errno = %d), results is %p\n", res, errno, (void *)results);
 		return (sockaddr_storage_s){AF_UNSPEC};
 	}
 
@@ -258,7 +262,7 @@ int gdb_if_init(void)
 				DEBUG_WARN("Listening on IPv6 only.\n");
 		}
 
-		if (bind(gdb_if_serv, (sockaddr_s *)&addr, family_to_size(addr.ss_family)) == -1) {
+		if (bind(gdb_if_serv, (const sockaddr_s *)&addr, family_to_size(addr.ss_family)) == -1) {
 			handle_error(gdb_if_serv, "binding socket");
 			continue;
 		}
@@ -346,13 +350,32 @@ char gdb_if_getchar_to(uint32_t timeout)
 	return -1;
 }
 
-void gdb_if_putchar(char c, int flush)
+void gdb_if_putchar(const char c, const bool flush)
 {
 	if (gdb_if_conn == INVALID_SOCKET)
 		return;
 	gdb_buffer[gdb_buffer_used++] = c;
-	if (flush || gdb_buffer_used == GDB_BUFFER_LEN) {
-		send(gdb_if_conn, gdb_buffer, gdb_buffer_used, 0);
-		gdb_buffer_used = 0;
+	if (flush || gdb_buffer_used == GDB_BUFFER_LEN)
+		gdb_if_flush(flush);
+}
+
+void gdb_if_flush(const bool force)
+{
+	(void)force;
+
+	/* Flush only if there is data to flush */
+	if (gdb_buffer_used == 0U)
+		return;
+
+	/* Don't bother if the connection is not valid */
+	if (gdb_if_conn == INVALID_SOCKET) {
+		gdb_buffer_used = 0U;
+		return;
 	}
+
+	/* Send the data */
+	send(gdb_if_conn, gdb_buffer, gdb_buffer_used, 0);
+
+	/* Reset the buffer */
+	gdb_buffer_used = 0;
 }

@@ -85,7 +85,7 @@
 #define ADIV5_DP_CTRLSTAT_CDBGRSTREQ   (1U << 26U)
 /* Bits 25:24 - Reserved */
 /* Bits 23:12 - TRNCNT */
-#define ADIV5_DP_CTRLSTAT_TRNCNT(x) ((x & 0xfffU) << 12U)
+#define ADIV5_DP_CTRLSTAT_TRNCNT(x) (((x)&0xfffU) << 12U)
 /* Bits 11:8 - MASKLANE */
 #define ADIV5_DP_CTRLSTAT_MASKLANE
 /* Bits 7:6 - Reserved in JTAG-DP */
@@ -188,10 +188,10 @@
 #define ADIV6_DP_FLAGS_HAS_SYSRESETREQ (1U << 3U)
 
 /* ADIv5 Class 0x1 ROM Table Registers */
-#define ADIV5_ROM_MEMTYPE          0xfccU
-#define ADIV5_ROM_MEMTYPE_SYSMEM   (1U << 0U)
-#define ADIV5_ROM_ROMENTRY_PRESENT (1U << 0U)
-#define ADIV5_ROM_ROMENTRY_OFFSET  UINT32_C(0xfffff000)
+#define ADI_ROM_MEMTYPE          0xfccU
+#define ADI_ROM_MEMTYPE_SYSMEM   (1U << 0U)
+#define ADI_ROM_ROMENTRY_PRESENT (1U << 0U)
+#define ADI_ROM_ROMENTRY_OFFSET  UINT32_C(0xfffff000)
 
 /* JTAG TAP IDCODE */
 #define JTAG_IDCODE_VERSION_OFFSET  28U
@@ -206,11 +206,37 @@
 #define JTAG_IDCODE_DESIGNER_JEP106_CONT_MASK   (0xfU << ADIV5_DP_DESIGNER_JEP106_CONT_OFFSET)
 #define JTAG_IDCODE_DESIGNER_JEP106_CODE_MASK   (0x7fU)
 
-#define JTAG_IDCODE_PARTNO_DPV0 0xba00U
+/*
+ * ARM JTAG PARTNO values from CoreSight SoC-400 TRM (ARM document ID 100536, issue 0302-09)
+ * §4.9.6.3 Identification Code register, IDCODE, Table 4-236 pg273
+ */
+#define JTAG_IDCODE_PARTNO_SOC400_4BIT 0xba00U
+#define JTAG_IDCODE_PARTNO_SOC400_8BIT 0xba03U
+/*
+ * This PARTNO value comes from the LPC43xx parts which have a pair of Cortex-M0's using DPv1 TAPs.
+ * Value lifted from UM10503, §50.9 JTAG TAP Identification, Table 1170, pg1355
+ */
+#define JTAG_IDCODE_PARTNO_SOC400_4BIT_LPC43xx 0xba01U
+
+/*
+ * ARM JTAG PARTNO values from Cortex-M33 TRM (ARM document ID 100230, issue 0100_03)
+ * Appendix A, §A.4.2 Identification Code register, IDCODE, Table A-13 pg130
+ * (for TEALDAP/CM33DAP MINDP SWJ-DP/JTAG-DP)
+ */
+#define JTAG_IDCODE_PARTNO_SOC400_4BIT_CM33 0xba04U
+
+/*
+ * ARM JTAG PARTNO values from CoreSight SoC-600 TRM (ARM document ID 101883, issue 0101-00)
+ * §10.2.2 css600_dp register descriptions, Table 10-2 pg90
+ */
+#define JTAG_IDCODE_PARTNO_SOC600_4BIT 0xba06U
+#define JTAG_IDCODE_PARTNO_SOC600_8BIT 0xba07U
 
 /* Constants for the DP's quirks field */
 #define ADIV5_DP_QUIRK_MINDP    (1U << 0U) /* DP is a minimal DP implementation */
 #define ADIV5_DP_QUIRK_DUPED_AP (1U << 1U) /* DP has only 1 AP but the address decoding is bugged */
+/* This is not a quirk, but this field is a good place to store the underlying protocol */
+#define ADIV5_DP_JTAG (1U << 6U)
 /* This one is not a quirk, but the field's a convinient place to store this */
 #define ADIV5_AP_ACCESS_BANKED (1U << 7U) /* Last AP access was done using the banked interface */
 
@@ -228,7 +254,7 @@ adiv5_access_port_s *adiv5_new_ap(adiv5_debug_port_s *dp, uint8_t apsel);
 void adiv5_ap_ref(adiv5_access_port_s *ap);
 void adiv5_ap_unref(adiv5_access_port_s *ap);
 
-#if PC_HOSTED == 1
+#if CONFIG_BMDA == 1
 /* BMDA interposition functions for DP setup */
 void bmda_adiv5_dp_init(adiv5_debug_port_s *dp);
 void bmda_jtag_dp_init(adiv5_debug_port_s *dp);

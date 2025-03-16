@@ -38,12 +38,11 @@ project(
 		'c_std=c11',
 		'optimization=s',
 		'debug=true',
-		# 'warning_level=3', # TODO: Enable by default when all warnings are fixed
-		'warning_level=2',
+		'warning_level=3',
 		'werror=false',
 		'b_ndebug=if-release',
 	],
-	meson_version: '>= 0.61.0',
+	meson_version: '>= 0.63.0',
 	subproject_dir: 'deps',
 )
 
@@ -94,19 +93,19 @@ extended_warnings = [
 	'-Wbad-function-cast',
 	# '-Wcast-align=strict',
 	'-Wcast-function-type',
-	# '-Wcast-qual',
+	'-Wcast-qual',
 	# '-Wconversion',
 	'-Wdangling-else',
 	'-Wdouble-promotion',
 	'-Wduplicated-branches',
 	'-w24754', # Conversion rules for arithmetic operations in a comparison mean that one branch cannot be executed.
 	'-Wfloat-conversion',
-	# '-Wformat-overflow=2',
+	'-Wformat-overflow=2',
 	# '-Wformat-signedness',
 	'-Wformat-truncation',
 	'-Wformat=2',
 	'-w24774', # ‘<function>’ : format string expected in argument <position> is not a string literal
-	'-w24777', #‘<function>’ : format string ‘<format-string>’ requires an argument of type ‘<type>’, but variadic argument <position> has type ‘<type>’ 
+	'-w24777', #‘<function>’ : format string ‘<format-string>’ requires an argument of type ‘<type>’, but variadic argument <position> has type ‘<type>’
 	'-Wimplicit-fallthrough',
 	'-Wmaybe-uninitialized',
 	'-w24701', # Potentially uninitialized local variable 'name' used
@@ -156,6 +155,17 @@ endif
 probe_host = disabler()
 probe_bootloader = disabler()
 
+# Deal with the print memory usage option before recursing so the Flash stubs don't screw things up
+if is_firmware_build and get_option('print_memory_usage')
+	add_project_link_arguments('-Wl,--print-memory-usage', language: 'c')
+endif
+
+# We need to know the size of a pointer for the machine running the code
+add_project_link_arguments('-DCONFIG_POINTER_SIZE=@0@'.format(cc_host.sizeof('void *')), language: 'c')
+if is_cross_build
+	add_project_link_arguments('-DCONFIG_POINTER_SIZE=@0@'.format(cc_native.sizeof('void *')), language: 'c', native: true)
+endif
+
 subdir('src')
 
 ## Black Magic Firmware (BMF) targets
@@ -170,10 +180,6 @@ if is_firmware_build
 If you did not touch the build system this is not your fault, please report it
 ''',
 	)
-
-	if get_option('print_memory_usage')
-		add_project_link_arguments('-Wl,--print-memory-usage', language: 'c')
-	endif
 
 	# System binary utilities
 	size = find_program('size')
@@ -271,7 +277,7 @@ if meson.is_subproject()
 	libbmd = static_library(
 		'blackmagicdebug',
 		c_args: [
-			'-DPC_HOSTED=1',
+			'-DCONFIG_BMDA=1',
 			'-DHOSTED_BMP_ONLY=1',
 		],
 		dependencies: [libbmd_core],

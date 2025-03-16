@@ -31,6 +31,9 @@ jobs:
           - '12.2.Rel1'
         probe:
           - '96b_carbon'
+          - 'blackpill-f401cc'
+          - 'blackpill-f401ce'
+          - 'blackpill-f411ce'
           - 'bluepill'
           - 'ctxlink'
           - 'f072'
@@ -39,6 +42,10 @@ jobs:
           - 'hydrabus'
           - 'launchpad-icdi'
           - 'native'
+          - 'native-uncommon'
+          - 'native-st-clones'
+          - 'native-riscv'
+          - 'native-remote'
           - 'stlink'
           - 'stlinkv3'
           - 'swlink'
@@ -81,11 +88,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: true
+          fetch-depth: 0
+          fetch-tags: true
 
       # Build the firmware for all platform variants (currently available)
       - name: Build
         run: |
+          git fetch --tags
           meson setup build --cross-file cross-file/${{ matrix.probe }}.ini
           meson compile -C build
           mkdir src/artefacts
@@ -201,10 +210,14 @@ jobs:
       # Checkout the repository and branch to build under the default location
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       # Build BMDA for Linux
       - name: Build Linux BMDA
         run: |
+          git fetch --tags
           meson setup build $BUILD_OPTS
           meson compile -C build
           mkdir src/artefacts
@@ -297,10 +310,14 @@ jobs:
       # Checkout the repository and branch to build under the default location
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       # Build the default BMDA configuration
       - name: Build full BMDA
         run: |
+          git fetch --tags
           meson setup build
           meson compile -C build
           mkdir src/artefacts
@@ -341,8 +358,8 @@ jobs:
     strategy:
       matrix:
         os:
-          - {id: macos-12, name: '12'}
           - {id: macos-13, name: '13'}
+          - {id: macos-14, name: '14'}
       fail-fast: false
 
     # Steps represent a sequence of tasks that will be executed as part of the job
@@ -371,10 +388,14 @@ jobs:
       # Checkout the repository and branch to build under the default location
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       # Build the default BMDA configuration
       - name: Build full BMDA
         run: |
+          git fetch --tags
           meson setup build
           meson compile -C build
           mkdir src/artefacts

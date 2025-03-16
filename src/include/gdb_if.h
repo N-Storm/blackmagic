@@ -21,7 +21,7 @@
 #ifndef INCLUDE_GDB_IF_H
 #define INCLUDE_GDB_IF_H
 
-#if PC_HOSTED == 0 && !defined(NO_LIBOPENCM3)
+#if CONFIG_BMDA == 0 && !defined(NO_LIBOPENCM3)
 #include <libopencm3/usb/usbd.h>
 void gdb_usb_out_cb(usbd_device *dev, uint8_t ep);
 #endif
@@ -31,6 +31,7 @@ char gdb_if_getchar(void);
 char gdb_if_getchar_to(uint32_t timeout);
 
 /* sending gdb_if_putchar(0, true) seems to work as keep alive */
-void gdb_if_putchar(char c, int flush);
+void gdb_if_putchar(char c, bool flush);
+void gdb_if_flush(bool force);
 
 #endif /* INCLUDE_GDB_IF_H */

@@ -26,3 +26,6 @@ src/ftd2xx.dll
 scripts/swolisten
 
 .direnv/
+
+/deps/*
+!/deps/*.wrap
